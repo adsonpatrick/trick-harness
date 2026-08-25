@@ -137,6 +137,7 @@ function validateStringList(value: unknown, path: string): void {
 /**
  * Validate a candidate profile against the contract.
  * @param candidate - the value to check; may be any shape.
+ * @returns nothing; the assertion signature narrows `candidate` in the caller.
  * @throws ProfileValidationError naming the first field that fails.
  */
 export function validateProfile(candidate: unknown): asserts candidate is HarnessProfile {

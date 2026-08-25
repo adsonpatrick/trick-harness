@@ -24,6 +24,9 @@ Registered profiles are deep-frozen copies, so a holder cannot edit live policy 
 
 ```ts
 import { createProfileRegistry } from '@trick-harness/profile'
+import type { HarnessProfile } from '@trick-harness/profile'
+
+declare const pluroraProfile: HarnessProfile
 
 const registry = createProfileRegistry()
 const registration = registry.register(pluroraProfile)
@@ -36,3 +39,10 @@ Inside a Cordis runtime the same registry is available as `ctx.profiles` via the
 ## Invariant companion
 
 `./invariant` re-checks the profiles a runtime holds: it catches a profile mutated in place after registration, and two profiles that are individually valid while colliding on the policy version that route decisions are attributed to.
+
+## Known Limitations and Deferred Work
+
+- **Validation is structural, not semantic** — the registry proves a profile declares every required block and that its independence tiers match the contract. It cannot tell whether a routing rule names a tier some executor can actually serve; that mismatch surfaces at dispatch.
+- **Rule evaluation lives with the consumer** — profiles carry flat `{id, when, use}` tables as declarative data. This package validates and stores them and deliberately does not interpret `when`, so precedence and matching semantics belong to whichever capability reads the table.
+- **A registered profile is frozen, not versioned** — registration deep-clones and freezes the profile, so later edits to the source object are ignored rather than rejected. There is no migration path between `policyVersion` values.
+- **One registry, no composition** — profiles cannot extend or override one another; a variant restates the blocks it needs.

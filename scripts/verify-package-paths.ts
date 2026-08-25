@@ -29,9 +29,16 @@ const PATTERNS = [
   'examples/**/*.ts',
 ]
 
-/** Paths excluded from the scan: built output and vendored upstream source. */
+/**
+ * Paths excluded from the scan: built output, vendored upstream source, and
+ * fork-local proposals. `docs/superpowers/` holds specifications and plans that
+ * name packages a later task will create; the gate exists to catch DRIFT in a
+ * moved real package, and a proposal naming a future sibling of a live package
+ * is not drift.
+ */
 const isExcluded = (p: string): boolean =>
-  isArchivedAgentNotePath(p) || p.includes('/lib/') || p.endsWith('.d.ts') || p.startsWith('vendor/')
+  isArchivedAgentNotePath(p) || p.includes('/lib/') || p.endsWith('.d.ts')
+  || p.startsWith('vendor/') || p.startsWith('docs/superpowers/')
 
 /**
  * Directory names of every real package, `packages/<group>/<pkg>`. A broken

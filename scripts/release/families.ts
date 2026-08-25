@@ -16,6 +16,7 @@ import {
   readClientBuildRecord,
 } from '../client-build-environment.ts'
 import { validateTarballPayload } from '../publication-payload.ts'
+import { isForkLocalPackage } from '../trick-fork.ts'
 
 /**
  * Dependency sections a consumer must publish after, because npm resolves them
@@ -137,6 +138,9 @@ export abstract class ReleaseFamily {
       const normalized = manifestPath.replaceAll('\\', '/')
       const manifest = readManifest(resolve(root, manifestPath))
       const name = requireString(manifest, 'name', normalized)
+      // Fork-local packages share the `packages/<group>/<pkg>` shape but are
+      // private to this fork and belong to no release family.
+      if (isForkLocalPackage(name)) continue
       const version = requireString(manifest, 'version', normalized)
       if (name === WORKSPACE_ROOT_PACKAGE) throw new Error(`${normalized} selected the workspace root`)
       if (!name.startsWith('@deepseek-ai/')) throw new Error(`${normalized} must name an @deepseek-ai package`)

@@ -50,7 +50,7 @@ function validateRegistry(ctx: Context, fail: InvariantFailure): void {
 /** Install validation for the executor providers registered on this runtime. */
 const install: InvariantInstaller = Object.assign((ctx: Context, fail: InvariantFailure) => {
   validateRegistry(ctx, fail)
-  ctx.on('internal/service', () => validateRegistry(ctx, fail), { global: true })
+  ctx.on('internal/service', () => { validateRegistry(ctx, fail) }, { global: true })
 }, { inject: ['executors'] })
 
 /**

@@ -9,6 +9,10 @@
 
 ```mermaid
 flowchart LR
+  pkg_core_executor["core/executor"]
+  svc_executors["ctx.executors<br/>Executor provider registry and capability-checked dispatch"]
+  pkg_core_profile["core/profile"]
+  svc_profiles["ctx.profiles<br/>Validated project profile registry"]
   pkg_attachment["attachment"]
   svc_attachments["ctx.attachments<br/>Durable binary attachment storage"]
   pkg_attachment_local["attachment-local"]
@@ -225,6 +229,8 @@ flowchart LR
   pkg_compaction_tool_result_pruner --> svc_toolResultPruner
   pkg_cordis_host_runner --> svc_cordisInspect
   pkg_cordis_host_runner --> svc_dynamicCordisRunner
+  pkg_core_executor --> svc_executors
+  pkg_core_profile --> svc_profiles
   pkg_credentials --> svc_credentials
   pkg_credentials_local --> svc_credentials
   pkg_directory_picker --> svc_directoryPicker
@@ -427,6 +433,8 @@ flowchart LR
 
 | ctx 键 | 角色 | 所属包 | 实现 | 直接消费方 | 配套插件 | 说明 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `ctx.executors` | `seam` | `core/executor` | - | - | - | 派生仓库专有。运行时负责提供方选择、路由可用性判定与运行生命周期；提供方只是把一个已校验的请求转换成一次产品运行。若提供方未声明支持某条路由，该路由在启动任何进程之前即被拒绝，因此被记录下来的路由绝不会指向一个并未实际运行的模型。 |
+| `ctx.profiles` | `seam` | `core/profile` | - | - | - | 派生仓库专有。这是将可复用机制与项目策略分开的接缝：Profile 以数据形式承载声明式策略表，本注册表只做校验与冻结，不解释其中的规则。 |
 | `ctx.attachments` | `seam` | [`attachment`](../packages/attachment/attachment) | [`attachment-local`](../packages/attachment/attachment-local) | `host-runtime`, [`llm-pi-ai`](../packages/llm/llm-pi-ai) | - | 宿主会在会话事件之前提交已接受的图片；提供方适配器将已授权的持久引用解析为提供方原生内容。 |
 | `ctx.llm` | `seam` | [`llm`](../packages/llm/llm) | [`llm-deepseek`](../packages/llm/llm-deepseek), [`llm-pi-ai`](../packages/llm/llm-pi-ai), [`llm-replay`](../packages/test-support/llm-replay) | [`agent-loop`](../packages/core/agent-loop), [`compaction-basic`](../packages/compaction/compaction-basic) | - | 适配器注册提供方实现；agent loop（智能体循环）与压缩功能调用提供方无关的流服务。 |
 | `ctx.tokenMeter` | `core` | [`token-meter`](../packages/llm/token-meter) | - | [`compaction-basic`](../packages/compaction/compaction-basic) | - | 拥有按会话隔离的回放折叠区；压力消费方共享不可变且带修订版本的测量结果。 |

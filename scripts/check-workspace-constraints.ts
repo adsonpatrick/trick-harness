@@ -10,6 +10,7 @@ import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { hasTypertRemoteNavigation, isForbiddenPublicationFile } from './publication-payload.ts'
 import { collectProjectReferenceFaceViolations } from './project-reference-faces.ts'
+import { isForkLocalPackage as isForkLocalPackageName } from './trick-fork.ts'
 
 const root = resolve(import.meta.dirname, '..')
 // vendor/* is single-level; packages/<group>/<pkg> nests one level deeper
@@ -61,8 +62,6 @@ const releaseMemberDirectory = /^(?:packages\/(?!experimental\/)[^/]+\/[^/]+|app
  * group names, not a new nesting rule.
  */
 const forkLocalPackageDirectory = /^packages\/(?:core|providers|integrations)\/[^/]+$/
-/** npm namespace reserved for private fork-local Trick Harness packages. */
-const forkLocalPackageNamePrefix = '@trick-harness/'
 
 const localArtifactDirs = new Set(['node_modules'])
 const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
@@ -258,7 +257,7 @@ function usesEmittedTreeDefaults(manifest: PackageManifest): boolean {
  * so a path test would misclassify them.
  */
 export function isForkLocalPackage(manifest: PackageManifest): boolean {
-  return manifest.name?.startsWith(forkLocalPackageNamePrefix) === true
+  return isForkLocalPackageName(manifest.name)
 }
 
 /**

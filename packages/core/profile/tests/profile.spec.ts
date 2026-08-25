@@ -35,27 +35,30 @@ function without(key: keyof HarnessProfile): unknown {
   return rest
 }
 
+/** Thunk one validation call so `expect(...).toThrow()` gets a statement body. */
+const check = (candidate: unknown) => (): void => { validateProfile(candidate) }
+
 describe('validateProfile', () => {
   it('accepts a complete profile', () => {
-    expect(() => validateProfile(valid)).not.toThrow()
+    expect(check(valid)).not.toThrow()
   })
 
   it.each(['', '   ', 'Plurora', 'has space', '-leading'])(
     'rejects the invalid profile id %o',
     (id) => {
-      expect(() => validateProfile({ ...valid, id })).toThrow(ProfileValidationError)
+      expect(check({ ...valid, id })).toThrow(ProfileValidationError)
     },
   )
 
   it.each(['', 'v1.0.0', 'plurora-2.0.0', 'plurora-v2.0', 'plurora-vX.Y.Z'])(
     'rejects the invalid policy version %o',
     (policyVersion) => {
-      expect(() => validateProfile({ ...valid, policyVersion })).toThrow(ProfileValidationError)
+      expect(check({ ...valid, policyVersion })).toThrow(ProfileValidationError)
     },
   )
 
   it('accepts the approved Plurora policy version format', () => {
-    expect(() => validateProfile({ ...valid, id: 'plurora', policyVersion: 'plurora-v2.0.0' }))
+    expect(check({ ...valid, id: 'plurora', policyVersion: 'plurora-v2.0.0' }))
       .not.toThrow()
   })
 
@@ -68,44 +71,44 @@ describe('validateProfile', () => {
     'integrationPolicy',
     'trustedComposition',
   ] as const)('rejects a profile missing the %s block', (block) => {
-    expect(() => validateProfile(without(block))).toThrow(ProfileValidationError)
+    expect(check(without(block))).toThrow(ProfileValidationError)
   })
 
   it.each([0, -1, 1.5, Number.NaN])('rejects maxRepairCycles %o', (maxRepairCycles) => {
-    expect(() => validateProfile({
+    expect(check({
       ...valid,
       workflowPolicy: { ...valid.workflowPolicy, maxRepairCycles },
     })).toThrow(ProfileValidationError)
   })
 
   it.each([0, -1, 1.5, Number.NaN])('rejects maxExecutorStarts %o', (maxExecutorStarts) => {
-    expect(() => validateProfile({
+    expect(check({
       ...valid,
       workflowPolicy: { ...valid.workflowPolicy, maxExecutorStarts },
     })).toThrow(ProfileValidationError)
   })
 
   it('rejects an absent trusted-composition exclusion list', () => {
-    expect(() => validateProfile({ ...valid, trustedComposition: {} }))
+    expect(check({ ...valid, trustedComposition: {} }))
       .toThrow(ProfileValidationError)
   })
 
   it('accepts an empty but present exclusion list', () => {
-    expect(() => validateProfile({
+    expect(check({
       ...valid,
       trustedComposition: { excludedPluginIds: [] },
     })).not.toThrow()
   })
 
   it('rejects a routing policy with no rules', () => {
-    expect(() => validateProfile({
+    expect(check({
       ...valid,
       routingPolicy: { rules: [], fallbackRules: [] },
     })).toThrow(ProfileValidationError)
   })
 
   it('rejects duplicate rule ids within one list', () => {
-    expect(() => validateProfile({
+    expect(check({
       ...valid,
       routingPolicy: {
         rules: [
@@ -118,14 +121,14 @@ describe('validateProfile', () => {
   })
 
   it('rejects an independence policy that weakens high-risk review', () => {
-    expect(() => validateProfile({
+    expect(check({
       ...valid,
       independencePolicy: { ...valid.independencePolicy, high: 'fresh-context' },
     })).toThrow(ProfileValidationError)
   })
 
   it('names the offending field in the failure message', () => {
-    expect(() => validateProfile({ ...valid, policyVersion: 'nope' }))
+    expect(check({ ...valid, policyVersion: 'nope' }))
       .toThrow(/policyVersion/)
   })
 })

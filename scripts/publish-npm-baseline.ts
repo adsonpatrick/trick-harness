@@ -19,6 +19,7 @@ import { createInterface } from 'node:readline/promises'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { validateTarballPayload } from './publication-payload.ts'
+import { isForkLocalPackage } from './trick-fork.ts'
 
 const DEFAULT_REGISTRY = 'https://registry.npm.harnessment.com'
 const DEFAULT_OUTPUT_DIRECTORY = '.artifacts/npm-baseline'
@@ -256,6 +257,8 @@ class WorkspacePackageSet {
     for (const manifestPath of manifestPaths) {
       const manifest = readObject(resolve(root, manifestPath))
       const name = expectString(manifest, 'name', manifestPath)
+      // Fork-local packages are private to this fork and never published.
+      if (isForkLocalPackage(name)) continue
       const version = expectString(manifest, 'version', manifestPath)
       const isVendored = manifestPath.startsWith('vendor/')
       // Vendored packages are rescoped too (vendor/README.md), so publication

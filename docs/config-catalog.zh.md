@@ -3351,3 +3351,5 @@ export interface Config {
 - `@deepseek-ai/dsh-typert-generator`（[`packages/typert/generator/src/index.ts`](../packages/typert/generator/src/index.ts)）
 - `@deepseek-ai/dsh-typert-protocol`（[`packages/typert/protocol/src/index.ts`](../packages/typert/protocol/src/index.ts)）
 - `@deepseek-ai/dsh-typert-registry`（[`packages/typert/registry/src/index.ts`](../packages/typert/registry/src/index.ts)）
+- `@trick-harness/executor`（[`packages/core/executor/src/index.ts`](../packages/core/executor/src/index.ts)）
+- `@trick-harness/profile`（[`packages/core/profile/src/index.ts`](../packages/core/profile/src/index.ts)）

@@ -92,7 +92,11 @@ export function collectSourceViolations(file: string, source: string): string[] 
 
   for (const [index, line] of lines.entries()) {
     for (const match of line.matchAll(SPECIFIER_PATTERN)) {
-      const resolved = resolveSpecifier(file, match[1])
+      // The capture group is guaranteed by the pattern, but the compiler cannot
+      // see that under `noUncheckedIndexedAccess`.
+      const specifier = match[1]
+      if (specifier === undefined) continue
+      const resolved = resolveSpecifier(file, specifier)
       if (!reachesProfiles(resolved)) continue
       violations.push({
         line: index + 1,

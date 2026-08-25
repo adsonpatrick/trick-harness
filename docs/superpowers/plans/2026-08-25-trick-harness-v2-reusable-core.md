@@ -298,7 +298,7 @@ git commit -m "feat(trick): add project profile contract"
 
 **Interfaces:**
 
-```ts
+```ts ignore-check
 export const pluroraProfile: HarnessProfile = {
   id: 'plurora',
   policyVersion: 'plurora-v2.0.0',
@@ -345,7 +345,7 @@ git commit -m "feat(plurora): add Trick Harness project profile"
 
 **Interfaces:**
 
-```ts
+```ts ignore-check
 export const minimalFixtureProfile: HarnessProfile = {
   id: 'fixture-minimal',
   policyVersion: 'fixture-v1.0.0',

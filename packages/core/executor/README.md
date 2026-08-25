@@ -24,6 +24,10 @@ The runtime decides which provider a route selects, whether that provider can ho
 
 ```ts
 import { createExecutorRuntime } from '@trick-harness/executor'
+import type { ExecutorProvider } from '@trick-harness/executor'
+
+declare const opencodeProvider: ExecutorProvider
+declare const controller: AbortController
 
 const runtime = createExecutorRuntime()
 runtime.register(opencodeProvider)
@@ -40,3 +44,11 @@ Inside a Cordis runtime the same registry is available as `ctx.executors` via th
 ## Invariant companion
 
 `./invariant` re-checks what registration cannot see afterwards: a descriptor mutated in place, a provider no longer reachable under its own registered name, and unknown permission modes. Either drift would let a durable route fact name something other than what ran.
+
+## Known Limitations and Deferred Work
+
+- **A declared capability is taken on trust** — the runtime refuses a route the provider says it cannot honour, but nothing here detects a provider that declares `modelOverride: true` and then ignores the field. That failure produces a run attributed to a model which never executed it, so each provider package owns a test asserting the override actually reaches the spawned worker.
+- **Termination is the provider's obligation** — the runtime aborts the signal it owns and stops waiting; driving the owned process tree to quiescence belongs to whichever provider spawned it, and this package cannot verify it happened.
+- **`dispose()` does not await in-flight runs** — it aborts every run and returns immediately, so a caller that needs teardown to be quiescent awaits the outstanding `start` promises itself.
+- **No routing, fallback, or budget** — the runtime dispatches exactly the route it is handed. Choosing a route, substituting one on an availability failure, and bounding how many runs a task may start are profile policy decided above this seam.
+- **Results are not persisted** — the bounded result is returned and forgotten; durable event recording belongs to the caller.

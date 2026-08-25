@@ -183,7 +183,7 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
       // The runtime's own controller is chained to the caller's so that
       // disposal can end a run the caller has no reason to cancel.
       const controller = new AbortController()
-      const forward = (): void => controller.abort(request.signal.reason)
+      const forward = (): void => { controller.abort(request.signal.reason) }
       request.signal.addEventListener('abort', forward, { once: true })
       inFlight.add(controller)
       try {

@@ -39,7 +39,7 @@ function validateRegistered(ctx: Context, fail: InvariantFailure): void {
 /** Install validation for the profiles registered on this runtime. */
 const install: InvariantInstaller = Object.assign((ctx: Context, fail: InvariantFailure) => {
   validateRegistered(ctx, fail)
-  ctx.on('internal/service', () => validateRegistered(ctx, fail), { global: true })
+  ctx.on('internal/service', () => { validateRegistered(ctx, fail) }, { global: true })
 }, { inject: ['profiles'] })
 
 /**

@@ -14,6 +14,9 @@ import type {
   ExecutorStartRequest,
 } from '../src/types.ts'
 
+/** Provider `start` signature, so a mock's recorded calls stay a typed tuple. */
+type ProviderStart = (request: ExecutorStartRequest) => Promise<ExecutorResult>
+
 const fullCapabilities: ExecutorCapabilities = {
   modelOverride: true,
   reasoningEffort: true,
@@ -157,7 +160,7 @@ describe('capability validation', () => {
 describe('dispatch and run lifecycle', () => {
   it('hands the request through to the selected provider', async () => {
     const runtime = createExecutorRuntime()
-    const start = vi.fn(async () => ({ status: 'completed', output: 'ok' } as ExecutorResult))
+    const start = vi.fn<ProviderStart>(async () => ({ status: 'completed', output: 'ok' }))
     const other = vi.fn()
     runtime.register(provider('codex', fullCapabilities, start))
     runtime.register(provider('opencode', fullCapabilities, other))
@@ -175,18 +178,18 @@ describe('dispatch and run lifecycle', () => {
     // The runtime must be able to end a run the caller has no reason to cancel,
     // so it owns the signal the provider sees.
     const runtime = createExecutorRuntime()
-    const start = vi.fn(async () => ({ status: 'completed', output: 'ok' } as ExecutorResult))
+    const start = vi.fn<ProviderStart>(async () => ({ status: 'completed', output: 'ok' }))
     runtime.register(provider('codex', fullCapabilities, start))
     const sent = request()
     await runtime.start(sent)
-    expect(start.mock.calls[0]?.[0].signal).not.toBe(sent.signal)
+    expect(start.mock.calls[0]?.[0]?.signal).not.toBe(sent.signal)
   })
 
   it('counts a run as active only while it is in flight', async () => {
     const runtime = createExecutorRuntime()
     let release = (): void => {}
     const pending = new Promise<ExecutorResult>((resolve) => {
-      release = () => resolve({ status: 'completed', output: 'ok' })
+      release = () => { resolve({ status: 'completed', output: 'ok' }) }
     })
     runtime.register(provider('codex', fullCapabilities, () => pending))
     expect(runtime.activeRuns()).toBe(0)
@@ -248,7 +251,7 @@ describe('dispatch and run lifecycle', () => {
     let observed: AbortSignal | undefined
     runtime.register(provider('codex', fullCapabilities, request_ => new Promise((resolve) => {
       observed = request_.signal
-      request_.signal.addEventListener('abort', () => resolve({ status: 'aborted', output: '' }))
+      request_.signal.addEventListener('abort', () => { resolve({ status: 'aborted', output: '' }) })
     })))
     const inFlight = runtime.start(request())
     runtime.dispose()
