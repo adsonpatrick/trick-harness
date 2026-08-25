@@ -62,8 +62,13 @@ const packageNames = realPackageNames()
  * (`{`, `}`, `,`) terminates the match before those chars and is never probed —
  * those are patterns, not real paths. A trailing `.`/`/` (e.g. a sentence-ending
  * period) is trimmed before the existence check.
+ *
+ * The lookbehind keeps the token root-relative. `packages/...` preceded by a
+ * path character is a fragment of something longer — most often an external
+ * URL such as a github.com/<org>/<repo>/blob/<sha>/packages/... link, whose
+ * layout is another repository's business and cannot be drift in this one.
  */
-const PKG_REF = /\bpackages\/[A-Za-z0-9._/-]+/g
+const PKG_REF = /(?<![A-Za-z0-9._/-])packages\/[A-Za-z0-9._/-]+/g
 
 function isDriftedPackageReference(ref: string): boolean {
   if (existsSync(resolve(root, ref))) return false

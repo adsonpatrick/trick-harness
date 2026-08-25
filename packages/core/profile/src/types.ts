@@ -20,7 +20,17 @@ export interface PolicyRuleDefinition {
   readonly id: string
   /** Routing facts this rule matches; an empty object matches everything. */
   readonly when: Readonly<Record<string, string | number | boolean>>
-  /** Decision fields this rule contributes when it matches. */
+  /**
+   * Decision fields this rule contributes when it matches.
+   *
+   * These are the recorded routing decision, not an executor request. Whatever
+   * translates a matched rule into an `ExecutorRoute` supplies only the fields
+   * the selected provider declares support for, and drops the rest as advisory:
+   * a policy may state a reasoning effort for a run that a given product has no
+   * way to express, and that must not make the whole route undispatchable. The
+   * full `use` row is still what gets recorded as the durable route fact, so
+   * the stated intent survives even where a product could not honour it.
+   */
   readonly use: Readonly<Record<string, string | number | boolean>>
 }
 

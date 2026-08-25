@@ -6,6 +6,13 @@
  * literal model id here, so a model generation change is a core registry edit
  * rather than a policy rewrite across every project profile.
  *
+ * `effort` states the reasoning effort this project wants for a run. It is
+ * advisory: a product with no way to express reasoning effort still serves the
+ * route, and the stated effort survives in the durable route fact rather than
+ * making the route undispatchable. OpenCode is exactly that case today — its
+ * SDK carries no reasoning-effort field at all — so these rows say what Plurora
+ * wants without asserting that every executor can deliver it.
+ *
  * @module profiles/plurora/routing-policy
  */
 
