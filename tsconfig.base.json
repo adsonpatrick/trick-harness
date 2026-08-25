@@ -41,6 +41,8 @@
       "@deepseek-ai/dsh-invariants": ["./packages/runtime-diagnostics/invariants/src/index.ts"],
       // Fork-local Trick Harness packages. Private to this fork, never published
       // under the upstream scope; see docs/trick-harness/upstream.md.
+      "@trick-harness/executor": ["./packages/core/executor/src/index.ts"],
+      "@trick-harness/executor/invariant": ["./packages/core/executor/src/invariant.ts"],
       "@trick-harness/profile": ["./packages/core/profile/src/index.ts"],
       "@trick-harness/profile/invariant": ["./packages/core/profile/src/invariant.ts"],
       "@deepseek-ai/dsh-tool-call-timeout-policy": ["./packages/guard/timeout-policy/src"],
