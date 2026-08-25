@@ -92,6 +92,11 @@ const testIncludes = [
   'apps/*/tests/**/*.spec.ts',
   'examples/*/tests/**/*.spec.ts',
   'scripts/**/*.spec.ts',
+  // Fork-local Trick Harness tiers: project profiles and the cross-profile
+  // suites that prove the generic core carries no single-project assumption.
+  'profiles/*/tests/**/*.spec.ts',
+  'profiles/fixtures/*/tests/**/*.spec.ts',
+  'tests/trick-harness/**/*.spec.ts',
 ]
 
 // The instrumented coverage gate sets this env; the exempt heavy suites then
