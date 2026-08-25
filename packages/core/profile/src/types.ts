@@ -23,13 +23,17 @@ export interface PolicyRuleDefinition {
   /**
    * Decision fields this rule contributes when it matches.
    *
-   * These are the recorded routing decision, not an executor request. Whatever
-   * translates a matched rule into an `ExecutorRoute` supplies only the fields
-   * the selected provider declares support for, and drops the rest as advisory:
-   * a policy may state a reasoning effort for a run that a given product has no
-   * way to express, and that must not make the whole route undispatchable. The
-   * full `use` row is still what gets recorded as the durable route fact, so
-   * the stated intent survives even where a product could not honour it.
+   * These are the recorded routing decision, not an executor request. What
+   * translates a matched rule into an `ExecutorRoute` is `dispatchableRoute`
+   * in `@trick-harness/executor`, which supplies only the fields the selected
+   * provider declares support for and reports the rest as dropped: a policy may
+   * state a reasoning effort for a run that a given product has no way to
+   * express, and that must not make the whole route undispatchable. A model is
+   * the one field never dropped — a run attributed to a model that did not run
+   * it is a worse outcome than a refused route — so the runtime refuses that
+   * case instead. The full `use` row is still what gets recorded as the durable
+   * route fact, so the stated intent survives even where a product could not
+   * honour it.
    */
   readonly use: Readonly<Record<string, string | number | boolean>>
 }

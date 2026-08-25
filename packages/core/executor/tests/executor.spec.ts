@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createExecutorRuntime,
+  dispatchableRoute,
   ExecutorCapabilityError,
   ExecutorProviderError,
 } from '../src/index.ts'
@@ -270,5 +271,77 @@ describe('dispatch and run lifecycle', () => {
       status: 'error',
       failure: { availability: false },
     })
+  })
+})
+
+describe('narrowing a policy intent to a dispatchable route', () => {
+  const effortless: ExecutorCapabilities = {
+    modelOverride: true,
+    reasoningEffort: false,
+    permissionModes: ['read-only', 'workspace-write'],
+  }
+
+  it('keeps a reasoning effort the provider honours', () => {
+    const narrowed = dispatchableRoute(provider('codex', fullCapabilities), {
+      executor: 'codex',
+      permissionMode: 'workspace-write',
+      reasoningEffort: 'high',
+    })
+    expect(narrowed.route.reasoningEffort).toBe('high')
+    expect(narrowed.dropped).toEqual([])
+  })
+
+  it('drops a reasoning effort the provider cannot honour, and says so', () => {
+    const narrowed = dispatchableRoute(provider('opencode', effortless), {
+      executor: 'opencode',
+      permissionMode: 'workspace-write',
+      reasoningEffort: 'high',
+    })
+    expect(narrowed.route.reasoningEffort).toBeUndefined()
+    expect(narrowed.dropped).toEqual(['reasoningEffort'])
+  })
+
+  it('makes an advisory effort dispatchable instead of undispatchable', async () => {
+    // The point of the whole helper: a policy that states an effort on every
+    // row must not make an executor without the knob unroutable.
+    const runtime = createExecutorRuntime()
+    runtime.register(provider('opencode', effortless))
+    const { route } = dispatchableRoute(runtime.get('opencode'), {
+      executor: 'opencode',
+      permissionMode: 'read-only',
+      reasoningEffort: 'medium',
+    })
+    await expect(runtime.start({ ...request(), route })).resolves.toMatchObject({
+      status: 'completed',
+    })
+  })
+
+  it('never drops the model, so no run is attributed to a model that did not run it', () => {
+    const narrowed = dispatchableRoute(provider('opencode', {
+      modelOverride: false,
+      reasoningEffort: false,
+      permissionModes: ['read-only'],
+    }), {
+      executor: 'opencode',
+      permissionMode: 'read-only',
+      model: 'anthropic/claude-opus-5',
+    })
+    expect(narrowed.route.model).toBe('anthropic/claude-opus-5')
+    expect(narrowed.dropped).toEqual([])
+  })
+
+  it('leaves a route the runtime must still refuse refusable', async () => {
+    const runtime = createExecutorRuntime()
+    runtime.register(provider('opencode', {
+      modelOverride: false,
+      reasoningEffort: false,
+      permissionModes: ['read-only'],
+    }))
+    const { route } = dispatchableRoute(runtime.get('opencode'), {
+      executor: 'opencode',
+      permissionMode: 'read-only',
+      model: 'anthropic/claude-opus-5',
+    })
+    await expect(runtime.start({ ...request(), route })).rejects.toThrow(ExecutorCapabilityError)
   })
 })

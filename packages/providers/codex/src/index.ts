@@ -153,12 +153,17 @@ export function createCodexProvider(options: CodexProviderOptions): ExecutorProv
       } catch (error) {
         if (aborted()) return { status: 'aborted', output: '' }
         if (error instanceof CodexRouteError) {
+          // Not an availability failure. The executor is reachable and refusing
+          // a route it cannot express, which is a deployment or policy mistake
+          // and is deterministic: a fallback route would spend a second run to
+          // be told the same thing by a different product, and would file the
+          // outage of a healthy executor as the cause.
           return {
             status: 'error',
             output: '',
             failure: {
               category: 'route-unsupported',
-              availability: true,
+              availability: false,
               safeDiagnostic: error.message,
             },
           }

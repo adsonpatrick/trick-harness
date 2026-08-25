@@ -147,6 +147,9 @@ describe('per-run model routing', () => {
     }))
     expect(result.status).toBe('error')
     expect(result.failure?.category).toBe('route-unsupported')
+    // Reachable and refusing: a fallback would pay for a second run to hear the
+    // same refusal from a different product.
+    expect(result.failure?.availability).toBe(false)
     expect(seen.servers).toEqual([])
   })
 })

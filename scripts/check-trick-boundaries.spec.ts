@@ -1,8 +1,10 @@
 /** Reusable-boundary rules keeping project policy out of generic Trick Harness packages. */
 
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   collectSourceViolations,
+  forkLocalPackageGroups,
   isGenericPackageSource,
   PROJECT_POLICY_IDENTIFIERS,
 } from './check-trick-boundaries.ts'
@@ -109,5 +111,57 @@ describe('project-policy identifiers', () => {
       'packages/core/routing/src/engine.ts:1: generic package must not name project-specific identifier "adsonpatrick/neuro-via"',
       'packages/core/routing/src/engine.ts:2: generic package must not name project-specific identifier "neurovia-dev"',
     ])
+  })
+})
+
+describe('the one-way arrow between generic layers', () => {
+  /** The real workspace layout, so the test cannot drift from what ships. */
+  const groups = forkLocalPackageGroups(resolve(import.meta.dirname, '..'))
+
+  it('knows which group each fork-local package lives in', () => {
+    expect(groups.get('@trick-harness/executor')).toBe('packages/core')
+    expect(groups.get('@trick-harness/profile')).toBe('packages/core')
+    expect(groups.get('@trick-harness/provider-codex')).toBe('packages/providers')
+    expect(groups.get('@trick-harness/composition')).toBe('packages/composition')
+  })
+
+  it.each([
+    ['packages/core/executor/src/index.ts', '@trick-harness/provider-codex', 'packages/providers'],
+    ['packages/core/executor/src/index.ts', '@trick-harness/composition', 'packages/composition'],
+    ['packages/providers/codex/src/index.ts', '@trick-harness/composition', 'packages/composition'],
+    ['packages/integrations/x/src/index.ts', '@trick-harness/composition', 'packages/composition'],
+  ])('rejects %s importing %s', (file, specifier, imported) => {
+    const from = file.split('/').slice(0, 2).join('/')
+    expect(collectSourceViolations(file, `import { x } from '${specifier}'`, groups)).toEqual([
+      `${file}:1: ${from} must not import ${imported} (${specifier}): the dependency arrow runs one way`,
+    ])
+  })
+
+  it.each([
+    ['packages/providers/codex/src/index.ts', '@trick-harness/executor'],
+    ['packages/providers/codex/src/config.ts', '@trick-harness/executor'],
+    ['packages/composition/runtime/src/index.ts', '@trick-harness/provider-opencode'],
+    ['packages/composition/runtime/src/index.ts', '@trick-harness/profile'],
+    ['packages/core/executor/src/index.ts', '@trick-harness/profile'],
+  ])('allows %s importing %s', (file, specifier) => {
+    expect(collectSourceViolations(file, `import { x } from '${specifier}'`, groups)).toEqual([])
+  })
+
+  it('applies to a subpath specifier as well as the bare package name', () => {
+    expect(collectSourceViolations(
+      'packages/core/executor/src/index.ts',
+      "import { x } from '@trick-harness/composition/invariant'",
+      groups,
+    )).toEqual([
+      'packages/core/executor/src/index.ts:1: packages/core must not import packages/composition (@trick-harness/composition/invariant): the dependency arrow runs one way',
+    ])
+  })
+
+  it('says nothing about upstream packages, which the fork does not layer', () => {
+    expect(collectSourceViolations(
+      'packages/core/executor/src/index.ts',
+      "import { Context } from '@deepseek-ai/cordis'",
+      groups,
+    )).toEqual([])
   })
 })

@@ -2439,6 +2439,22 @@ describe('scoped one-shot transport', () => {
     expect(spawn).not.toHaveBeenCalled()
   })
 
+  it('refuses a sandbox outside the routable set at runtime, not only at compile time', async () => {
+    // The privilege ceiling has to hold for a value that never met the type:
+    // parsed configuration, a JavaScript caller, an assertion. Full access is
+    // the deployment's decision alone, so it must not be reachable from a route
+    // even when the type system was not there to say so.
+    for (const sandbox of ['danger-full-access', 'DANGER-FULL-ACCESS', '']) {
+      const child = fakeChild()
+      const spawn = vi.fn(() => child.handle)
+      await expect(startCodexTask(
+        { texts: ['do the task'], signal: new AbortController().signal },
+        { ...runSpec(child, { spawn }), routing: { sandbox: sandbox as never } },
+      )).rejects.toThrow('routed sandbox must be one of read-only, workspace-write')
+      expect(spawn).not.toHaveBeenCalled()
+    }
+  })
+
   it('routes without touching the global Codex configuration', async () => {
     const child = fakeChild()
     const spawn = vi.fn((spec: SubprocessSpawnSpec) => {

@@ -11,10 +11,13 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type {
+  ExecutorPermissionMode,
   ExecutorProvider,
   ExecutorRegistration,
   ExecutorResult,
+  ExecutorRoute,
   ExecutorStartRequest,
+  ReasoningEffort,
 } from './types.ts'
 
 export type * from './types.ts'
@@ -122,6 +125,76 @@ function validateRoute(provider: ExecutorProvider, request: ExecutorStartRequest
       provider.name,
       `provider cannot enforce permission mode ${JSON.stringify(permissionMode)}`,
     )
+  }
+}
+
+/**
+ * What a routing policy asked for, before any provider has been consulted.
+ *
+ * Identical in shape to {@link ExecutorRoute} and deliberately a separate type:
+ * a policy states intent, and a route is what an executor was actually asked to
+ * do. Conflating them is how an unhonoured preference becomes an unnoticed lie
+ * in the durable record.
+ */
+export interface ExecutorRouteIntent {
+  /** Registered provider name this run is dispatched to. */
+  readonly executor: string
+  /** Product-native model id, absent when the product default is intended. */
+  readonly model?: string
+  /** Reasoning budget the policy asked for; advisory, see {@link dispatchableRoute}. */
+  readonly reasoningEffort?: ReasoningEffort
+  /** Filesystem authority for this run; always explicit, never defaulted. */
+  readonly permissionMode: ExecutorPermissionMode
+}
+
+/** A route a given provider can honour, plus what the intent lost on the way. */
+export interface DispatchableRoute {
+  /** The route to dispatch. */
+  readonly route: ExecutorRoute
+  /**
+   * Intent fields dropped because the provider does not honour them.
+   *
+   * Never empty-and-forgotten: the caller is expected to record these on the
+   * run's durable route fact, so "this ran without the effort the policy asked
+   * for" stays visible afterwards rather than being inferred from a provider's
+   * capability table months later.
+   */
+  readonly dropped: readonly 'reasoningEffort'[]
+}
+
+/**
+ * Narrow a policy's routing intent to what one provider can actually honour.
+ *
+ * Only `reasoningEffort` is droppable, and the asymmetry with `model` is the
+ * whole point. A reasoning budget is a request about how hard to think: a
+ * product with no field for it still does the work, and a policy that states
+ * one for every row should not make an executor undispatchable for lacking a
+ * knob. A model identifies *who did the work*; dropping it would leave a run
+ * attributed to a model that never ran it, so it is passed through untouched
+ * and the runtime refuses the route — which is the existing behaviour and stays
+ * that way.
+ *
+ * Call this where policy is resolved, not inside a provider: a provider that
+ * decided for itself which parts of a route to ignore would be deciding policy.
+ * @param provider - the provider the intent names.
+ * @param intent - what the routing policy asked for.
+ * @returns the honourable route and the intent fields it had to give up.
+ */
+export function dispatchableRoute(
+  provider: ExecutorProvider,
+  intent: ExecutorRouteIntent,
+): DispatchableRoute {
+  const honoursEffort = intent.reasoningEffort === undefined || provider.capabilities.reasoningEffort
+  return {
+    route: {
+      executor: intent.executor,
+      permissionMode: intent.permissionMode,
+      ...intent.model === undefined ? {} : { model: intent.model },
+      ...honoursEffort && intent.reasoningEffort !== undefined
+        ? { reasoningEffort: intent.reasoningEffort }
+        : {},
+    },
+    dropped: honoursEffort ? Object.freeze([]) : Object.freeze(['reasoningEffort' as const]),
   }
 }
 

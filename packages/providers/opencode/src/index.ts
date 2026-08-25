@@ -76,7 +76,12 @@ function finalText(parts: readonly { type: string; text?: string }[]): string {
  */
 function classify(error: unknown): ExecutorFailure {
   if (error instanceof OpencodeRouteError) {
-    return { category: 'route-unsupported', availability: true, safeDiagnostic: error.message }
+    // Not an availability failure. The executor is reachable and refusing a
+    // route it cannot express, which is a deployment or policy mistake and is
+    // deterministic: a fallback route would spend a second run to be told the
+    // same thing by a different product, and would file the outage of a healthy
+    // executor as the cause.
+    return { category: 'route-unsupported', availability: false, safeDiagnostic: error.message }
   }
   const name = error instanceof Error ? error.name : 'Error'
   return {

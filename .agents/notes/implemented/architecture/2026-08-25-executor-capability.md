@@ -22,6 +22,12 @@ The runtime owns three things and delegates everything else. It owns which provi
 
 **Failures are structured and safe by construction.** `ExecutorFailure` carries a category, an availability flag that drives fallback routing, and a redacted diagnostic. There is deliberately no field for raw stderr or environment. Providers talk to products the user is authenticated against, and this result reaches durable event logs and PR comments.
 
+**`availability` means reachability and nothing else.** The flag spends money: it is what makes a fallback route fire, and a fallback is a second run. A deterministic refusal — a route the provider cannot express, a rejected request, an account a human must fix — is therefore not availability, however much a retry might be wanted. Both providers classify `route-unsupported` as `availability: false` for this reason: the executor is reachable and refusing, so a fallback would pay for a second run to hear the same refusal from a different product and would then file a healthy executor's outage as the cause.
+
+**`dispatchableRoute` is where an advisory field stops being advisory.** A profile's `use` row is a policy decision, not an executor request, and a policy legitimately states a reasoning effort for products that have no field for one — OpenCode's SDK carries none at all. Handing that row to the runtime as written makes every such row undispatchable, which is the opposite of advisory. `dispatchableRoute(provider, intent)` narrows an intent to what one provider declares it honours and returns what it had to drop, so the caller can record "this ran without the effort the policy asked for" on the durable route fact. It is deliberately not a provider concern: a provider that decided for itself which parts of a route to ignore would be deciding policy.
+
+The asymmetry inside it is the substance. Only `reasoningEffort` is droppable. A reasoning budget is a request about how hard to think, and a product without the knob still does the work. A model identifies *who did the work*, so dropping it would produce exactly the false record described above; it is passed through untouched and the runtime refuses the route instead.
+
 **Results are bounded.** `output` is the final result, never the child transcript.
 
 ## Alternatives considered

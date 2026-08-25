@@ -15,6 +15,7 @@ import {
   createHarnessRuntimeBundle,
   routedExecutors,
 } from '@trick-harness/composition'
+import { dispatchableRoute, type ReasoningEffort } from '@trick-harness/executor'
 import type { OpencodeAdapter } from '@trick-harness/provider-opencode'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { pluroraProfile } from '../profile.ts'
@@ -77,6 +78,50 @@ describe('the Plurora deployment composition', () => {
       codex: { spawn: seams.spawn },
       profile: pluroraProfile,
     })).toThrow(BundleCompositionError)
+  })
+
+  it('makes every routing row dispatchable on the executor it names', async () => {
+    // Plurora states an effort on every row, and OpenCode has no field for one.
+    // The profile's documented promise is that this stays advisory rather than
+    // making those rows unroutable, which is only true if the intent is narrowed
+    // through `dispatchableRoute` before dispatch. This is the test that would
+    // fail if a resolver ever passed a `use` row to the runtime as written.
+    const seams = productSeams()
+    const bundle = createHarnessRuntimeBundle({
+      opencode: { adapter: seams.adapter },
+      codex: { spawn: seams.spawn },
+      profile: pluroraProfile,
+    })
+    const { rules, fallbackRules } = pluroraProfile.routingPolicy
+    const dropped: string[] = []
+    for (const rule of [...rules, ...fallbackRules]) {
+      const executor = String(rule.use['executor'])
+      const narrowed = dispatchableRoute(bundle.runtime.get(executor), {
+        executor,
+        permissionMode: 'workspace-write',
+        reasoningEffort: rule.use['effort'] as ReasoningEffort,
+      })
+      // Dispatched for real. The seams throw, so the run fails — but it fails
+      // as `provider-error`, which only happens once the route has already
+      // cleared capability validation. An unnarrowed row would instead reject
+      // with `ExecutorCapabilityError` before any provider was reached.
+      await expect(bundle.runtime.start({
+        cwd: '/workspace',
+        task: 'do the task',
+        route: narrowed.route,
+        signal: new AbortController().signal,
+      })).resolves.toMatchObject({ status: 'error', failure: { category: 'provider-error' } })
+      if (narrowed.dropped.length > 0) dropped.push(rule.id)
+    }
+    // Named rather than counted: the OpenCode rows are exactly the rows whose
+    // stated effort survives only in the durable route fact.
+    expect(dropped).toEqual([
+      'routine-review',
+      'repair',
+      'codex-unavailable-critical',
+      'codex-unavailable',
+    ])
+    bundle.dispose()
   })
 
   it('leaves no provider registered after disposal', () => {

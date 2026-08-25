@@ -196,7 +196,9 @@ describe('declared capabilities', () => {
     }))
     expect(result.status).toBe('error')
     expect(result.failure?.category).toBe('route-unsupported')
-    expect(result.failure?.availability).toBe(true)
+    // Reachable and refusing: a fallback would pay for a second run to hear the
+    // same refusal from a different product.
+    expect(result.failure?.availability).toBe(false)
     expect(spawn).not.toHaveBeenCalled()
   })
 

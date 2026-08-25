@@ -120,8 +120,16 @@ export interface CodexRouting {
 
 /**
  * Reject a routing override the wire schema cannot carry, before any process.
+ *
+ * `sandbox` is checked against {@link CODEX_ROUTED_SANDBOXES} rather than left
+ * to the type alone. The type keeps `danger-full-access` off a route at compile
+ * time for this repository's own callers, but the exported transport is a
+ * runtime boundary: a value arriving from parsed configuration, from JavaScript,
+ * or through an assertion would otherwise reach `thread/start` and hand a run
+ * full filesystem access the deployment never configured. A privilege ceiling
+ * that only holds when the caller was type-checked is not a ceiling.
  * @param routing - the caller-supplied per-run overrides.
- * @throws when a supplied field is present but not a non-empty string.
+ * @throws when a supplied field is present but not a value the wire can carry.
  */
 function assertRouting(routing: CodexRouting): void {
   const fields = [['model', routing.model], ['effort', routing.effort]] as const
@@ -130,6 +138,12 @@ function assertRouting(routing: CodexRouting): void {
     if (value.trim().length === 0) {
       throw new Error(`subagent-codex: routed ${field} must be a non-empty value`)
     }
+  }
+  const { sandbox } = routing
+  if (sandbox !== undefined && !(CODEX_ROUTED_SANDBOXES as readonly string[]).includes(sandbox)) {
+    throw new Error(
+      `subagent-codex: routed sandbox must be one of ${CODEX_ROUTED_SANDBOXES.join(', ')}, got ${JSON.stringify(sandbox)}`,
+    )
   }
 }
 

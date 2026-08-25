@@ -75,7 +75,17 @@ export interface ExecutorCapabilities {
 export interface ExecutorFailure {
   /** Stable machine-readable failure class. */
   readonly category: string
-  /** Whether the executor itself is reachable; drives fallback routing. */
+  /**
+   * Whether the executor's own reachability explains this failure.
+   *
+   * Reachability and nothing else: a quota ceiling, an overloaded server, a
+   * dropped transport. A deterministic refusal is not availability, however
+   * inconvenient — a route the provider cannot express, a rejected request, an
+   * account a human must fix. The distinction has to hold because this field
+   * drives fallback routing, and a fallback spends a second run: taking it for
+   * a refusal that a different executor would also make burns the budget and
+   * records the wrong cause in the durable route fact.
+   */
   readonly availability: boolean
   /** Redacted human-readable diagnostic. */
   readonly safeDiagnostic: string

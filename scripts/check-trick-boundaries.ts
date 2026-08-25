@@ -8,6 +8,10 @@
  * a consuming product. Profiles compose the generic layers freely, so the scan
  * is deliberately one-directional.
  *
+ * The same scan enforces the arrow *between* those groups — `core` <-
+ * `providers`/`integrations` <- `composition` — so a generic package cannot
+ * quietly depend on a layer above it either.
+ *
  * Run: `tsx scripts/check-trick-boundaries.ts`.
  */
 
@@ -24,6 +28,43 @@ const GENERIC_PACKAGE_ROOTS = [
   'packages/integrations',
   'packages/composition',
 ] as const
+
+/**
+ * Which fork-local package scopes each layer may import from.
+ *
+ * The one-way arrow — `core` <- `providers`/`integrations` <- `composition` <-
+ * `profiles` — was documented and enforced only at its last hop: nothing
+ * stopped `packages/core` from importing `@trick-harness/composition` and
+ * inverting the whole thing. Placing a package in the right group is a
+ * judgement call made once, at review time; this table is what keeps it true
+ * afterwards. Layers are listed with the scopes they may reach, so a new group
+ * has to state its position rather than inherit an accidental one.
+ */
+const LAYER_IMPORTS: Readonly<Record<string, readonly string[]>> = {
+  // The base of the stack: it may not reach any layer above it, because every
+  // layer above is built on it.
+  'packages/core': ['packages/core'],
+  // Adapters bind one product to the core contracts and nothing else. They may
+  // not reach the composition layer that assembles them.
+  'packages/providers': ['packages/core', 'packages/providers'],
+  'packages/integrations': ['packages/core', 'packages/integrations'],
+  // Composition is the only layer allowed to know which providers exist.
+  'packages/composition': [
+    'packages/core',
+    'packages/providers',
+    'packages/integrations',
+    'packages/composition',
+  ],
+}
+
+/**
+ * Fork-local package specifier, e.g. `@trick-harness/provider-codex/invariant`.
+ *
+ * The group each name belongs to is read from the workspace rather than listed
+ * here, so adding a provider is a package directory and nothing else — a gate
+ * that had to be edited for every new package would be edited without thought.
+ */
+const FORK_LOCAL_SPECIFIER = /^@trick-harness\/([^/]+)/
 
 /** Trees inside a package that hold dependencies or build output rather than authored source. */
 const NON_SOURCE_SEGMENTS = new Set(['node_modules', 'lib', 'dist', 'coverage'])
@@ -86,14 +127,55 @@ function reachesProfiles(resolved: string): boolean {
 }
 
 /**
+ * Map every fork-local package name to the group directory it lives in.
+ *
+ * Read from `package.json` files rather than declared, so the layer table above
+ * stays a statement about direction and never becomes a package inventory.
+ * @param repositoryRoot - Absolute path of the repository root.
+ * @returns Package name to owning group, e.g. `@trick-harness/executor` to `packages/core`.
+ */
+export function forkLocalPackageGroups(repositoryRoot: string): ReadonlyMap<string, string> {
+  const groups = new Map<string, string>()
+  for (const match of globSync('packages/*/*/package.json', { cwd: repositoryRoot })) {
+    const file = match.split('\\').join('/')
+    const group = file.split('/').slice(0, 2).join('/')
+    if (!(group in LAYER_IMPORTS)) continue
+    const manifest: unknown = JSON.parse(readFileSync(resolve(repositoryRoot, file), 'utf8'))
+    const name = (manifest as { name?: unknown }).name
+    if (typeof name === 'string') groups.set(name, group)
+  }
+  return groups
+}
+
+/** The group directory a generic source file belongs to. */
+function groupOf(file: string): string | undefined {
+  return Object.keys(LAYER_IMPORTS).find(group => file.startsWith(`${group}/`))
+}
+
+/**
+ * Whether one layer may import a fork-local package from another.
+ * @param from - The importing file's group directory.
+ * @param to - The imported package's group directory.
+ * @returns True when the dependency runs with the one-way arrow, not against it.
+ */
+function layerAllows(from: string, to: string): boolean {
+  return LAYER_IMPORTS[from]?.includes(to) ?? false
+}
+
+/**
  * Apply both boundary rules to one authored source file.
  * @param file - Repo-relative path with `/` separators.
  * @param source - The file's full text.
  * @returns One message per violation, ordered by line.
  */
-export function collectSourceViolations(file: string, source: string): string[] {
+export function collectSourceViolations(
+  file: string,
+  source: string,
+  groups: ReadonlyMap<string, string> = new Map(),
+): string[] {
   const violations: { line: number; detail: string }[] = []
   const lines = source.split('\n')
+  const from = groupOf(file)
 
   for (const [index, line] of lines.entries()) {
     for (const match of line.matchAll(SPECIFIER_PATTERN)) {
@@ -102,10 +184,19 @@ export function collectSourceViolations(file: string, source: string): string[] 
       const specifier = match[1]
       if (specifier === undefined) continue
       const resolved = resolveSpecifier(file, specifier)
-      if (!reachesProfiles(resolved)) continue
+      if (reachesProfiles(resolved)) {
+        violations.push({
+          line: index + 1,
+          detail: `generic package must not import project policy (${resolved})`,
+        })
+        continue
+      }
+      const scope = FORK_LOCAL_SPECIFIER.exec(specifier)
+      const imported = scope === null ? undefined : groups.get(`@trick-harness/${scope[1] ?? ''}`)
+      if (from === undefined || imported === undefined || layerAllows(from, imported)) continue
       violations.push({
         line: index + 1,
-        detail: `generic package must not import project policy (${resolved})`,
+        detail: `${from} must not import ${imported} (${specifier}): the dependency arrow runs one way`,
       })
     }
     for (const identifier of PROJECT_POLICY_IDENTIFIERS) {
@@ -134,8 +225,9 @@ export function collectBoundaryViolations(repositoryRoot: string): string[] {
     .filter(isGenericPackageSource)
     .sort()
 
+  const groups = forkLocalPackageGroups(repositoryRoot)
   return files.flatMap(file =>
-    collectSourceViolations(file, readFileSync(resolve(repositoryRoot, file), 'utf8')))
+    collectSourceViolations(file, readFileSync(resolve(repositoryRoot, file), 'utf8'), groups))
 }
 
 /** Run the reusable-boundary gate. */
