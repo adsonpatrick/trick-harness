@@ -6,6 +6,7 @@
     ".agents/notes/implemented/architecture/2026-08-25-executor-capability.md",
     ".agents/notes/implemented/architecture/2026-08-25-project-profile-seam.md",
     ".agents/notes/implemented/architecture/2026-08-25-opencode-executor-provider.md",
+    ".agents/notes/implemented/architecture/2026-08-25-codex-executor-provider.md",
     ".agents/notes/implemented/architecture/2026-08-25-codex-scoped-one-shot-transport.md",
     ".agents/notes/implemented/architecture/2026-08-25-trick-harness-fork-foundation.md",
     "docs/AGENTS.md",
@@ -17,6 +18,7 @@
     "docs/trick-harness/",
     "packages/core/executor/README.md",
     "packages/core/profile/README.md",
+    "packages/providers/codex/README.md",
     "packages/providers/opencode/README.md",
     "profiles/"
   ]

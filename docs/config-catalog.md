@@ -2280,7 +2280,7 @@ export type CodexPermissionMode =
   | 'dangerously-bypass-approvals-and-sandbox'
 ```
 
-Source: [`packages/subagent/subagent-codex/src/index.ts:42`](../packages/subagent/subagent-codex/src/index.ts)
+Source: [`packages/subagent/subagent-codex/src/index.ts:55`](../packages/subagent/subagent-codex/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-dsh-sdk"></a>
 
@@ -3352,4 +3352,5 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@deepseek-ai/dsh-typert-registry` ([`packages/typert/registry/src/index.ts`](../packages/typert/registry/src/index.ts))
 - `@trick-harness/executor` ([`packages/core/executor/src/index.ts`](../packages/core/executor/src/index.ts))
 - `@trick-harness/profile` ([`packages/core/profile/src/index.ts`](../packages/core/profile/src/index.ts))
+- `@trick-harness/provider-codex` ([`packages/providers/codex/src/index.ts`](../packages/providers/codex/src/index.ts))
 - `@trick-harness/provider-opencode` ([`packages/providers/opencode/src/index.ts`](../packages/providers/opencode/src/index.ts))

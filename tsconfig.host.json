@@ -250,6 +250,7 @@
     { "path": "./packages/runtime-diagnostics/invariants" },
     { "path": "./packages/core/executor" },
     { "path": "./packages/core/profile" },
+    { "path": "./packages/providers/codex" },
     { "path": "./packages/providers/opencode" },
     { "path": "./packages/test-support/agent-loop-testkit" },
     { "path": "./packages/acp/acp" },

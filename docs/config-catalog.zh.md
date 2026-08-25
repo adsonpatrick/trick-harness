@@ -2282,7 +2282,7 @@ export type CodexPermissionMode =
   | 'dangerously-bypass-approvals-and-sandbox'
 ```
 
-来源：[`packages/subagent/subagent-codex/src/index.ts:42`](../packages/subagent/subagent-codex/src/index.ts)
+来源：[`packages/subagent/subagent-codex/src/index.ts:55`](../packages/subagent/subagent-codex/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-dsh-sdk"></a>
 
@@ -3353,4 +3353,5 @@ export interface Config {
 - `@deepseek-ai/dsh-typert-registry`（[`packages/typert/registry/src/index.ts`](../packages/typert/registry/src/index.ts)）
 - `@trick-harness/executor`（[`packages/core/executor/src/index.ts`](../packages/core/executor/src/index.ts)）
 - `@trick-harness/profile`（[`packages/core/profile/src/index.ts`](../packages/core/profile/src/index.ts)）
+- `@trick-harness/provider-codex`（[`packages/providers/codex/src/index.ts`](../packages/providers/codex/src/index.ts)）
 - `@trick-harness/provider-opencode`（[`packages/providers/opencode/src/index.ts`](../packages/providers/opencode/src/index.ts)）

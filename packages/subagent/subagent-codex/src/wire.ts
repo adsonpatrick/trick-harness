@@ -311,6 +311,12 @@ export class CodexAppServerWire {
       cwd,
       ephemeral: true,
       ...THREAD_PERMISSION_PARAMS[this.permissionMode],
+      // A routed sandbox is applied last because it is the more specific
+      // decision: the deployment's permission mode says how a run is
+      // supervised, and the route says what this one run may reach. Routing
+      // cannot select `danger-full-access`, so this can only narrow authority
+      // relative to a bypass mode, never widen it.
+      ...this.routing.sandbox === undefined ? {} : { sandbox: this.routing.sandbox },
     }, signal), signal), 'thread/start response')
     const thread = object(response.thread, 'thread/start thread')
     const id = string(thread.id, 'thread/start thread id')

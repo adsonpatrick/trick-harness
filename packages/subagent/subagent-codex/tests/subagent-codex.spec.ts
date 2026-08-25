@@ -23,8 +23,10 @@ import {
   CODEX_PERMISSION_MODES,
   DEFAULT_CODEX_PERMISSION_MODE,
   codexAppServerArgv,
+  CODEX_ROUTED_SANDBOXES,
   DEFAULT_DISPOSE_GRACE_MS,
   disposeCodexChild,
+  parseCodexDiagnostic,
   startCodexRun,
   startCodexTask,
   textTask,
@@ -2468,5 +2470,118 @@ describe('scoped one-shot transport', () => {
     expect(JSON.stringify(spawned.argv)).not.toContain('CODEX_HOME')
 
     await finish(child, turnStart, run)
+  })
+})
+
+describe('routed sandbox and diagnostic facts', () => {
+  it('emits no sandbox on thread/start when unrouted', async () => {
+    const child = fakeChild()
+    const starting = startCodexRun(request(), runSpec(child))
+    const initialize = await child.peer.nextMethod('initialize')
+    child.peer.respond(initialize, { userAgent: 'codex-cli 0.147.0' })
+    await child.peer.nextMethod('initialized')
+    const threadStart = await child.peer.nextMethod('thread/start')
+    expect(threadStart.params).toEqual({
+      cwd: process.cwd(),
+      ephemeral: true,
+      approvalPolicy: 'never',
+    })
+    child.peer.respond(threadStart, { thread: { id: 'thread-1', ephemeral: true } })
+    const run = await starting
+    const turnStart = await child.peer.nextMethod('turn/start')
+    child.peer.send(
+      { id: turnStart.id, result: { turn: { id: 'turn-1' } } },
+      agentMessage('answer', 'final_answer'),
+      turnCompleted('completed'),
+    )
+    await run.result
+    await run.dispose()
+  })
+
+  for (const sandbox of CODEX_ROUTED_SANDBOXES) {
+    it(`emits the routed ${sandbox} sandbox alongside the unattended policy`, async () => {
+      const child = fakeChild()
+      const starting = startCodexTask(
+        { texts: ['do the task'], signal: new AbortController().signal },
+        { ...runSpec(child), routing: { sandbox } },
+      )
+      const initialize = await child.peer.nextMethod('initialize')
+      child.peer.respond(initialize, { userAgent: 'codex-cli 0.147.0' })
+      await child.peer.nextMethod('initialized')
+      const threadStart = await child.peer.nextMethod('thread/start')
+      expect(threadStart.params).toEqual({
+        cwd: process.cwd(),
+        ephemeral: true,
+        approvalPolicy: 'never',
+        sandbox,
+      })
+      child.peer.respond(threadStart, { thread: { id: 'thread-1', ephemeral: true } })
+      const run = await starting
+      const turnStart = await child.peer.nextMethod('turn/start')
+      child.peer.send(
+        { id: turnStart.id, result: { turn: { id: 'turn-1' } } },
+        agentMessage('answer', 'final_answer'),
+        turnCompleted('completed'),
+      )
+      await run.result
+      await run.dispose()
+    })
+  }
+
+  it('narrows a bypass deployment rather than widening a routed run', async () => {
+    const child = fakeChild()
+    const starting = startCodexTask(
+      { texts: ['do the task'], signal: new AbortController().signal },
+      {
+        ...runSpec(child, {
+          permissionMode: 'dangerously-bypass-approvals-and-sandbox',
+        }),
+        routing: { sandbox: 'read-only' },
+      },
+    )
+    const initialize = await child.peer.nextMethod('initialize')
+    child.peer.respond(initialize, { userAgent: 'codex-cli 0.147.0' })
+    await child.peer.nextMethod('initialized')
+    const threadStart = await child.peer.nextMethod('thread/start')
+    expect((threadStart.params as JsonObject).sandbox).toBe('read-only')
+    child.peer.respond(threadStart, { thread: { id: 'thread-1', ephemeral: true } })
+    const run = await starting
+    const turnStart = await child.peer.nextMethod('turn/start')
+    child.peer.send(
+      { id: turnStart.id, result: { turn: { id: 'turn-1' } } },
+      agentMessage('answer', 'final_answer'),
+      turnCompleted('completed'),
+    )
+    await run.result
+    await run.dispose()
+  })
+
+  it('round-trips every diagnostic this package produces', () => {
+    const cases = [
+      { stage: 'turn', category: 'usageLimitExceeded' },
+      { stage: 'turn', category: 'httpConnectionFailed', httpStatus: 503 },
+      { stage: 'initialize', category: 'unknown' },
+    ] as const
+    for (const facts of cases) {
+      const text = expectedFailureDiagnostic(facts.stage, facts.category, {
+        ...'httpStatus' in facts ? { httpStatus: facts.httpStatus } : {},
+      })
+      expect(parseCodexDiagnostic(text)).toEqual(facts)
+    }
+  })
+
+  it('reads a diagnostic that also carries process outcome fields', () => {
+    const text = expectedFailureDiagnostic('process', 'process-exit', {
+      outcome: { exitCode: 3, signal: 'SIGKILL' },
+    })
+    expect(parseCodexDiagnostic(text)).toEqual({
+      stage: 'process',
+      category: 'process-exit',
+    })
+  })
+
+  it('returns undefined for text it does not own', () => {
+    expect(parseCodexDiagnostic('something else entirely')).toBeUndefined()
+    expect(parseCodexDiagnostic('Product subagent failure (product: Codex)')).toBeUndefined()
   })
 })
