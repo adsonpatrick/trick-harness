@@ -1,9 +1,9 @@
 # Plurora Engineering Harness V2 — Design
 
-**Date:** 2026-08-25  
-**Status:** Approved — owner approval confirmed 2026-08-25  
-**Supersedes:** `2026-08-23-plurora-opencode-engineering-os-design.md` where this document conflicts with V1  
-**Scope:** Plurora engineering harness, executor orchestration, automatic routing, debugging, QA, cloud-only database delivery, automated PR review/remediation, and repository integration
+- **Date:** 2026-08-25
+- **Status:** Approved — owner approval confirmed 2026-08-25
+- **Supersedes:** `2026-08-23-plurora-opencode-engineering-os-design.md` where this document conflicts with V1
+- **Scope:** Plurora engineering harness, executor orchestration, automatic routing, debugging, QA, cloud-only database delivery, automated PR review/remediation, and repository integration
 
 > **Amended by:** `2026-08-25-plurora-engineering-harness-v2-reusable-core-amendment.md`. The amendment is normative for Trick Harness repository naming, reusable Core/providers/integrations boundaries, project profiles, dependency direction, package scope, and R1-R5 acceptance evidence.
 

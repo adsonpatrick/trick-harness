@@ -1,10 +1,10 @@
 # Plurora Engineering Harness V2 — Reusable Trick Harness Core Amendment
 
-**Date:** 2026-08-25  
-**Status:** Approved — owner approval confirmed 2026-08-25  
-**Amends:** `2026-08-25-plurora-engineering-harness-v2-design.md`  
-**Canonical runtime repository:** `adsonpatrick/trick-harness`  
-**Scope:** Package boundaries, project profiles, dependency direction, naming, reuse guarantees, and acceptance evidence for the Harness runtime
+- **Date:** 2026-08-25
+- **Status:** Approved — owner approval confirmed 2026-08-25
+- **Amends:** `2026-08-25-plurora-engineering-harness-v2-design.md`
+- **Canonical runtime repository:** `adsonpatrick/trick-harness`
+- **Scope:** Package boundaries, project profiles, dependency direction, naming, reuse guarantees, and acceptance evidence for the Harness runtime
 
 ## 1. Why this amendment exists
 

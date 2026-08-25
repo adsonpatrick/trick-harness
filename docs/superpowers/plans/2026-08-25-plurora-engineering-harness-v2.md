@@ -2,14 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement these plans task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the approved Plurora Engineering Harness V2 on top of a reusable **Trick Harness** runtime without mixing generic runtime mechanism, Plurora policy, product-repository integration, and rollout verification into one unreviewable change.
+- **Goal:** Deliver the approved Plurora Engineering Harness V2 on top of a reusable **Trick Harness** runtime without mixing generic runtime mechanism, Plurora policy, product-repository integration, and rollout verification into one unreviewable change.
 
-**Architecture:** `adsonpatrick/trick-harness` is the canonical runtime repository and must remain a real fork of `deepseek-ai/deepseek-harness`. Plan R establishes reusable Core/providers/integrations plus the project-profile seam; A and B implement the executor/runtime and engineering workflows using those boundaries; C integrates `neuro-via` by selecting `profile=plurora`; D proves the assembled system with direct deterministic and real-product evidence.
+- **Architecture:** `adsonpatrick/trick-harness` is the canonical runtime repository and must remain a real fork of `deepseek-ai/deepseek-harness`. Plan R establishes reusable Core/providers/integrations plus the project-profile seam; A and B implement the executor/runtime and engineering workflows using those boundaries; C integrates `neuro-via` by selecting `profile=plurora`; D proves the assembled system with direct deterministic and real-product evidence.
 
-**Tech Stack:** TypeScript/Node.js, pnpm workspaces, Cordis/DeepSeek Harness, OpenCode server/SDK/ACP, Codex CLI/app-server, Claude Agent SDK/Claude Code CLI, Git/GitHub CLI, Supabase CLI/Branching/Postgres/pgTAP, existing Plurora Node/Playwright/CI gates.
+- **Tech Stack:** TypeScript/Node.js, pnpm workspaces, Cordis/DeepSeek Harness, OpenCode server/SDK/ACP, Codex CLI/app-server, Claude Agent SDK/Claude Code CLI, Git/GitHub CLI, Supabase CLI/Branching/Postgres/pgTAP, existing Plurora Node/Playwright/CI gates.
 
-**Base Spec:** `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-design.md`  
-**Approved Amendment:** `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-reusable-core-amendment.md`
+- **Base Spec:** `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-design.md`
+- **Approved Amendment:** `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-reusable-core-amendment.md`
 
 ## Planning Status — Approved for Execution
 
@@ -30,6 +30,12 @@ The amended self-review establishes:
 - confirmed bugs may auto-repair; product/design decisions and non-bug improvements may not be auto-fixed to obtain green status;
 - merge/release/deploy remain human/out-of-scope authority;
 - final activation requires **30/30 original acceptance criteria + R1-R5 PASS**.
+
+## Implementation Status
+
+Plan R Tasks 1-5 are implemented in `adsonpatrick/trick-harness` on `docs/harness-v2-bootstrap`: fork provenance and the divergence ledger (`docs/trick-harness/upstream.md`), the `@trick-harness/*` namespace constraint and one-way boundary gate (`scripts/check-trick-boundaries.ts`, wired into `pnpm run constraints`), the validated `HarnessProfile` seam (`packages/core/profile`), `profiles/plurora`, and the test-only `profiles/fixtures/minimal` with R1/R3/R4 evidence in `tests/trick-harness/dual-profile.spec.ts`.
+
+Task 6 is an execution ruling carried into Plans A and B rather than a change in this repository. Tasks 7-8 target the `neuro-via` product repository and are out of scope here. Task 9 is this section plus the naming and ordering already reflected below.
 
 ## Precedence
 
