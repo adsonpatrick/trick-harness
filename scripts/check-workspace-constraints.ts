@@ -54,6 +54,15 @@ const experimentalPackageDirectory = /^packages\/experimental\/[^/]+$/
 const experimentalPackageNamePrefix = '@deepseek-ai/dsh-experimental-'
 /** Directories whose packages this repository publishes: one release member each. */
 const releaseMemberDirectory = /^(?:packages\/(?!experimental\/)[^/]+\/[^/]+|apps\/[^/]+|vendor\/[^/]+)$/
+/**
+ * Directories that may hold fork-local Trick Harness packages: reusable Core
+ * mechanism, executor providers, and external-system integrations. The
+ * hierarchy shape stays `packages/<group>/<pkg>` — these are three reserved
+ * group names, not a new nesting rule.
+ */
+const forkLocalPackageDirectory = /^packages\/(?:core|providers|integrations)\/[^/]+$/
+/** npm namespace reserved for private fork-local Trick Harness packages. */
+const forkLocalPackageNamePrefix = '@trick-harness/'
 
 const localArtifactDirs = new Set(['node_modules'])
 const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
@@ -241,6 +250,40 @@ function usesEmittedTreeDefaults(manifest: PackageManifest): boolean {
     exportDefault(manifest, subpath)?.startsWith('./lib/types/') === true)
 }
 
+/**
+ * Whether one manifest claims the fork-local Trick Harness namespace.
+ *
+ * Membership is decided by package name, not directory: the reserved group
+ * dirs also hold upstream release members (`packages/core/agent` and friends),
+ * so a path test would misclassify them.
+ */
+export function isForkLocalPackage(manifest: PackageManifest): boolean {
+  return manifest.name?.startsWith(forkLocalPackageNamePrefix) === true
+}
+
+/**
+ * Fork-local manifest requirements enforced independently from release metadata.
+ *
+ * The fork adds reusable orchestration packages that upstream does not carry.
+ * They stay unpublished so no fork-local code is ever redistributed under
+ * upstream's release identity, and they stay inside the three reserved group
+ * dirs so the reusable Core/providers/integrations boundary the boundary
+ * checker enforces has a fixed set of paths to scan.
+ * @param entry - One workspace manifest and its repo-relative path.
+ * @returns One error for each violated fork-local rule.
+ */
+export function checkForkLocalManifest({ dir, manifest }: WorkspaceManifest): string[] {
+  if (!isForkLocalPackage(manifest)) return []
+  const label = manifest.name ?? dir
+  const errors: string[] = []
+  if (!forkLocalPackageDirectory.test(dir)) {
+    errors.push(`${label}: fork-local package must live under packages/core, packages/providers, or packages/integrations`)
+  }
+  if (manifest.private !== true) errors.push(`${label}: fork-local package must set "private": true`)
+  if (manifest.publishConfig !== undefined) errors.push(`${label}: fork-local package must omit publishConfig`)
+  return errors
+}
+
 /** Experimental manifest requirements enforced independently from release metadata. */
 export function checkExperimentalManifest({ dir, manifest }: WorkspaceManifest): string[] {
   if (!experimentalPackageDirectory.test(dir)) return []
@@ -254,8 +297,16 @@ export function checkExperimentalManifest({ dir, manifest }: WorkspaceManifest):
   return errors
 }
 
-function checkWorkspace({ dir, manifest }: WorkspaceManifest): string[] {
-  const errors = checkExperimentalManifest({ dir, manifest })
+/**
+ * Enforce every manifest rule that applies to one workspace member.
+ * @param entry - One workspace manifest and its repo-relative path.
+ * @returns Errors prefixed with the member's package.json path.
+ */
+export function checkWorkspace({ dir, manifest }: WorkspaceManifest): string[] {
+  const errors = [
+    ...checkExperimentalManifest({ dir, manifest }),
+    ...checkForkLocalManifest({ dir, manifest }),
+  ]
   const label = manifest.name ?? dir
   const isLandlockPackageDir = dir.startsWith('native/landlock-run/packages/')
   const isPublicLandlockPackage = isLandlockPackageDir
@@ -275,6 +326,9 @@ function checkWorkspace({ dir, manifest }: WorkspaceManifest): string[] {
       || manifest.repository.directory !== expectedDirectory) {
       errors.push(`${label}: published Landlock package repository must use ${repositoryUrl} with directory ${expectedDirectory} for trusted publishing`)
     }
+  } else if (isForkLocalPackage(manifest)) {
+    // Publication rules are checked by checkForkLocalManifest: a fork-local
+    // package sits in a release-member directory but is never released.
   } else if (releaseMemberDirectory.test(dir)) {
     // Release members state that they are publishable: npm refuses a private
     // package, and the repository field is how a consumer finds the source of
