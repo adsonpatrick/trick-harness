@@ -64,10 +64,10 @@ FindingClass = BUG | SECURITY_BUG | TEST_DEFECT | TOOLING_DEFECT |
 
 Also define `DiagnosisContract`, `RoutingContext`, `RouteDecision`, `Finding`, `EvidenceRef`, `WorkflowObjective`, and bounded structured stage result types.
 
-- [ ] Write parser/boundary RED tests for invalid serialized contracts.
-- [ ] Implement only parser/config/durable-boundary validation needed by consumers.
-- [ ] Add invariant/README/JSDoc and Host reference.
-- [ ] Run focused tests/typecheck/constraints and commit: `feat(trick): add engineering workflow contracts`.
+- [x] Write parser/boundary RED tests for invalid serialized contracts.
+- [x] Implement only parser/config/durable-boundary validation needed by consumers.
+- [x] Add invariant/README/JSDoc and Host reference.
+- [x] Run focused tests/typecheck/constraints and commit: `feat(trick): add engineering workflow contracts`.
 
 ---
 
