@@ -11,7 +11,7 @@ import type { Readable, Writable } from 'node:stream'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SubagentResult } from '@deepseek-ai/dsh-subagent'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
-import type { CodexPermissionMode } from './run.ts'
+import type { CodexPermissionMode, CodexRouting } from './run.ts'
 
 type JsonObject = Record<string, unknown>
 
@@ -245,6 +245,7 @@ export class CodexAppServerWire {
     private readonly input: Readable,
     output: Writable,
     private readonly permissionMode: CodexPermissionMode,
+    private readonly routing: CodexRouting = {},
   ) {
     this.transport = new JsonRpcLineTransport(input, output)
     // Fatal protocol state can arrive after the current guarded operation has
@@ -340,6 +341,13 @@ export class CodexAppServerWire {
       const response = object(await this.guarded(this.transport.request('turn/start', {
         threadId,
         input: texts.map(text => ({ type: 'text', text, text_elements: [] })),
+        // `model` and `effort` are the two optional `TurnStartParams` fields
+        // verified against the pinned app-server schema. They are omitted
+        // entirely when unrouted so an unrouted run emits the exact frame it
+        // emitted before this seam existed, and so neither field is ever sent
+        // as an explicit null the server would read as "clear the override".
+        ...this.routing.model === undefined ? {} : { model: this.routing.model },
+        ...this.routing.effort === undefined ? {} : { effort: this.routing.effort },
       }, signal), signal), 'turn/start response')
       const turn = object(response.turn, 'turn/start turn')
       this.commitTurnId(string(turn.id, 'turn/start turn id'))

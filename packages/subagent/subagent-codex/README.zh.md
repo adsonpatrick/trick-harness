@@ -100,6 +100,14 @@ dsh --profile <name>
 
 如果安装时省略 optional dependencies、当前平台不受支持，或所选载荷缺失，第一次委派会在 `initialize` 阶段以安全 `unknown` 类别和已观测到的进程结果失败。原始 wrapper 文本只保留在 Host stderr；提供方既不会探测宿主 CLI，也不会用它重试。独立 wrapper fixture 会另行证明原生载荷失败与不存在宿主回退。
 
+## 受限单次执行传输层
+
+`startCodexTask(request, spec)` 提供的是同一套生命周期，但不依赖共享 subagent 请求形状：它只接收任务文本与一个取消信号，并接受一个可选的 `routing` 对象，为这一次运行携带 `model` 与 `effort`。`startCodexRun` 现在只是它之上不做任何路由的薄适配层，因此通过提供方启动的运行发出的帧与这个接缝存在之前完全一致。
+
+这两个字段名来自锁定版本包生成的 app-server JSON schema，而不是来自文档。`TurnStartParams.model` 为 `string | null`，`TurnStartParams.effort` 为 `ReasoningEffort | null`；`ThreadStartParams` 中根本没有 effort 字段，因此这两个覆盖项都随 `turn/start` 传递，而不是随线程传递。`ReasoningEffort` 是非空字符串而非封闭枚举，因为可接受的取值集合由各模型通过 `Model.supportedReasoningEfforts` 声明，所以这里的校验只检查 schema 实际约束的内容。
+
+缺省字段会直接从帧中省略，而不是作为显式 null 发送；已提供但不是非空值的字段会在进程启动之前被拒绝。路由既不会读取也不会写入 `CODEX_HOME`、Codex profile 或任何其他全局产品默认值。
+
 ## 模型体验
 
 ### 子级请求
