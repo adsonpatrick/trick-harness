@@ -31,6 +31,7 @@ interface SentenceContract {
  */
 const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/core/executor': 'The package routes and supervises runs; the executed product owns every model-facing surface, and the bounded result is returned to the caller rather than rendered into a request.',
+  'packages/composition/runtime': 'The package registers providers and starts nothing; every model-facing surface belongs to the executed product, reached only through a later dispatch.',
   'packages/core/profile': 'The package is a validated policy-data registry with no model-facing surface; consumers own any rendered use.',
   'packages/providers/opencode': 'The provider hands one task string to the OpenCode product, which owns every model-facing surface; the bounded final result is returned to the caller rather than rendered into a request.',
   'packages/providers/codex': 'The provider hands one task string to the Codex product, which owns every model-facing surface; the bounded final result is returned to the caller rather than rendered into a request.',

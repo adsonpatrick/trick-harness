@@ -124,7 +124,7 @@ describe('fork-local Trick Harness workspace constraints', () => {
     'vendor/profile',
   ])('rejects the fork-local namespace outside an approved directory (%s)', (dir) => {
     expect(checkForkLocalManifest({ ...forkLocal, dir })).toEqual([
-      '@trick-harness/profile: fork-local package must live under packages/core, packages/providers, or packages/integrations',
+      '@trick-harness/profile: fork-local package must live under packages/core, packages/providers, packages/integrations, or packages/composition',
     ])
   })
 

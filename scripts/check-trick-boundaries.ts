@@ -3,8 +3,8 @@
  * project profiles own policy, and the dependency direction between them runs
  * one way only.
  *
- * `packages/core`, `packages/providers`, and `packages/integrations` may not
- * import `profiles/**`, and may not name the strong identifiers that belong to
+ * `packages/core`, `packages/providers`, `packages/integrations`, and
+ * `packages/composition` may not import `profiles/**`, and may not name the strong identifiers that belong to
  * a consuming product. Profiles compose the generic layers freely, so the scan
  * is deliberately one-directional.
  *
@@ -18,7 +18,12 @@ import { pathToFileURL } from 'node:url'
 const root = resolve(import.meta.dirname, '..')
 
 /** Package groups that must stay project-agnostic. */
-const GENERIC_PACKAGE_ROOTS = ['packages/core', 'packages/providers', 'packages/integrations'] as const
+const GENERIC_PACKAGE_ROOTS = [
+  'packages/core',
+  'packages/providers',
+  'packages/integrations',
+  'packages/composition',
+] as const
 
 /** Trees inside a package that hold dependencies or build output rather than authored source. */
 const NON_SOURCE_SEGMENTS = new Set(['node_modules', 'lib', 'dist', 'coverage'])

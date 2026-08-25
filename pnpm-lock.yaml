@@ -3407,6 +3407,27 @@ importers:
         specifier: workspace:^
         version: link:../../llm/token-meter
 
+  packages/composition/runtime:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@trick-harness/executor':
+        specifier: workspace:^
+        version: link:../../core/executor
+      '@trick-harness/profile':
+        specifier: workspace:^
+        version: link:../../core/profile
+      '@trick-harness/provider-codex':
+        specifier: workspace:^
+        version: link:../../providers/codex
+      '@trick-harness/provider-opencode':
+        specifier: workspace:^
+        version: link:../../providers/opencode
+
   packages/context/agent-instructions:
     dependencies:
       '@deepseek-ai/schemastery':

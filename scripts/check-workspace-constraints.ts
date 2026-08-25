@@ -57,11 +57,12 @@ const experimentalPackageNamePrefix = '@deepseek-ai/dsh-experimental-'
 const releaseMemberDirectory = /^(?:packages\/(?!experimental\/)[^/]+\/[^/]+|apps\/[^/]+|vendor\/[^/]+)$/
 /**
  * Directories that may hold fork-local Trick Harness packages: reusable Core
- * mechanism, executor providers, and external-system integrations. The
- * hierarchy shape stays `packages/<group>/<pkg>` — these are three reserved
- * group names, not a new nesting rule.
+ * mechanism, executor providers, external-system integrations, and the
+ * composition roots that register them. The hierarchy shape stays
+ * `packages/<group>/<pkg>` — these are four reserved group names, not a new
+ * nesting rule.
  */
-const forkLocalPackageDirectory = /^packages\/(?:core|providers|integrations)\/[^/]+$/
+const forkLocalPackageDirectory = /^packages\/(?:core|providers|integrations|composition)\/[^/]+$/
 
 const localArtifactDirs = new Set(['node_modules'])
 const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
@@ -265,9 +266,9 @@ export function isForkLocalPackage(manifest: PackageManifest): boolean {
  *
  * The fork adds reusable orchestration packages that upstream does not carry.
  * They stay unpublished so no fork-local code is ever redistributed under
- * upstream's release identity, and they stay inside the three reserved group
- * dirs so the reusable Core/providers/integrations boundary the boundary
- * checker enforces has a fixed set of paths to scan.
+ * upstream's release identity, and they stay inside the four reserved group
+ * dirs so the reusable boundary the boundary checker enforces has a fixed set
+ * of paths to scan.
  * @param entry - One workspace manifest and its repo-relative path.
  * @returns One error for each violated fork-local rule.
  */
@@ -276,7 +277,7 @@ export function checkForkLocalManifest({ dir, manifest }: WorkspaceManifest): st
   const label = manifest.name ?? dir
   const errors: string[] = []
   if (!forkLocalPackageDirectory.test(dir)) {
-    errors.push(`${label}: fork-local package must live under packages/core, packages/providers, or packages/integrations`)
+    errors.push(`${label}: fork-local package must live under packages/core, packages/providers, packages/integrations, or packages/composition`)
   }
   if (manifest.private !== true) errors.push(`${label}: fork-local package must set "private": true`)
   if (manifest.publishConfig !== undefined) errors.push(`${label}: fork-local package must omit publishConfig`)

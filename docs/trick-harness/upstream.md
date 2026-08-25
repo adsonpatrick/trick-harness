@@ -77,6 +77,10 @@ An edit to generic upstream core such as `packages/core/agent-loop` requires evi
 | 2026-08-25 | `scripts/translation-pairing.manifest.json` | Exclude `packages/providers/codex/README.md` and the Codex executor Agent Note. | Same seam, same reason: fork-local documents that upstream never publishes bilingually. |
 | 2026-08-25 | `scripts/verify-package-readme-model-experience.ts` | Record `packages/providers/codex` in `NO_MODEL_EXPERIENCE_SECTION`. | The provider hands one task string to a product that owns every model-facing surface; the gate's documented way to state that is this audit map. |
 | 2026-08-25 | `tsconfig.base.json`, `tsconfig.host.json` | Register `@trick-harness/provider-codex` paths and the project reference. | Both files are the whole-repository project graph; a fork-local package is invisible to `tsc -b` without an entry, and there is no per-package seam to use instead. |
+| 2026-08-25 | `scripts/check-trick-boundaries.ts` | Scan `packages/composition` alongside the other generic package roots. | The fork adds a composition layer above `providers`; without an entry it would be the one generic layer free to import project policy, which is exactly the drift the gate exists to catch. |
+| 2026-08-25 | `scripts/translation-pairing.manifest.json` | Exclude `packages/composition/runtime/README.md` and the composition-root Agent Note. | Same seam, same reason: fork-local documents that upstream never publishes bilingually. |
+| 2026-08-25 | `scripts/verify-package-readme-model-experience.ts` | Record `packages/composition/runtime` in `NO_MODEL_EXPERIENCE_SECTION`. | The package registers providers and starts nothing; every model-facing surface belongs to a product reached only through a later dispatch. |
+| 2026-08-25 | `tsconfig.base.json`, `tsconfig.host.json` | Register `@trick-harness/composition` paths and the project reference. | Both files are the whole-repository project graph; a fork-local package is invisible to `tsc -b` without an entry, and there is no per-package seam to use instead. |
 | 2026-08-25 | `docs/superpowers/*.md` | Reformat the three specification and plan header metadata blocks from trailing-two-space hard breaks to list items. | Formatting only, no content change. The `verify-md-wrap` gate reads a run of hard-broken lines as a wrapped prose paragraph and has no exclusion seam; a list expresses the same block without tripping it. |
 
 ## Fork-local layout
@@ -87,7 +91,8 @@ Generic mechanism, executor adapters, and external-system capabilities are fork-
 packages/core/*            reusable orchestration/runtime capabilities
 packages/providers/*       reusable executor adapters
 packages/integrations/*    reusable external-system capabilities
+packages/composition/*     reusable composition roots that register providers
 profiles/<project>/        project-specific composition and policy
 ```
 
-Dependency direction is one-way — `core` <- `providers`/`integrations` <- `profiles` <- project bridge — and is enforced mechanically by `scripts/check-trick-boundaries.ts`.
+Dependency direction is one-way — `core` <- `providers`/`integrations` <- `composition` <- `profiles` <- project bridge — and is enforced mechanically by `scripts/check-trick-boundaries.ts`.
