@@ -258,6 +258,7 @@
     { "path": "./packages/providers/codex" },
     { "path": "./packages/providers/opencode" },
     { "path": "./packages/integrations/github-delivery" },
+    { "path": "./packages/integrations/supabase-preview" },
     { "path": "./packages/test-support/agent-loop-testkit" },
     { "path": "./packages/acp/acp" },
     { "path": "./packages/examples/acp-demo" },

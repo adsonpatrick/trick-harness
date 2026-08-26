@@ -249,7 +249,7 @@ read CI/PR/commit state
 
 **Capability:** provision isolated hosted branch, apply migration history, run remote gates, expose explicit safe connection inputs to approved subprocess tests, then clean up.
 
-- [ ] **Step 1: Verify installed CLI contract before coding commands**
+- [x] **Step 1: Verify installed CLI contract before coding commands**
 
 ```bash
 supabase --version
@@ -265,14 +265,14 @@ supabase gen types --help
 
 Use only flags supported by actual CLI. Do not use Docker-required `db pull`, `db diff`, `test db`, `start`, or local reset paths.
 
-- [ ] Write RED subprocess-command tests proving no canonical command contains `--local`, `supabase start`, `supabase test db`, `db reset`, Docker or shared-dev fallback.
-- [ ] Implement create → wait/inspect healthy → identify preview project → apply pending migrations → migration-list evidence → remote lint → project-provided pgTAP/RLS test command → cleanup.
-- [ ] Accept parent project ref as non-secret project config; auth remains native Supabase CLI/environment.
-- [ ] Never read `.env` inside this package.
-- [ ] If a safe preview DB connection cannot be obtained, emit `BLOCKED` and clean up; never mutate shared parent as fallback.
-- [ ] Cleanup failure is reported independently from primary result.
-- [ ] Add tests for create failure, gate failure, cancellation, cleanup, and shared-parent non-mutation.
-- [ ] Commit: `feat(trick): add Supabase preview branch runtime`.
+- [x] Write RED subprocess-command tests proving no canonical command contains `--local`, `supabase start`, `supabase test db`, `db reset`, Docker or shared-dev fallback.
+- [x] Implement create → wait/inspect healthy → identify preview project → apply pending migrations → migration-list evidence → remote lint → project-provided pgTAP/RLS test command → cleanup.
+- [x] Accept parent project ref as non-secret project config; auth remains native Supabase CLI/environment.
+- [x] Never read `.env` inside this package.
+- [x] If a safe preview DB connection cannot be obtained, emit `BLOCKED` and clean up; never mutate shared parent as fallback.
+- [x] Cleanup failure is reported independently from primary result.
+- [x] Add tests for create failure, gate failure, cancellation, cleanup, and shared-parent non-mutation.
+- [x] Commit: `feat(trick): add Supabase preview branch runtime`.
 
 ---
 

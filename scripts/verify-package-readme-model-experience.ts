@@ -38,6 +38,7 @@ const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/core/journal': 'The package appends and replays durable workflow events; it renders nothing and contacts no product, and by construction stores no model transcript.',
   'packages/core/engineering-workflow': 'The package plans and dispatches stages and reduces each result to compact facts; it composes no prompt of its own, and the caller supplies both the task text and the interpreter.',
   'packages/integrations/github-delivery': 'The package runs a fixed set of git and gh commands as argv arrays; it renders nothing into a request, and every value it carries is a path, a branch or a message the caller supplied.',
+  'packages/integrations/supabase-preview': 'The package runs a fixed set of Supabase CLI commands as argv arrays; it renders nothing into a request, and every value it carries is a project ref, a branch name or a connection string read back from the branch it created.',
   'packages/providers/opencode': 'The provider hands one task string to the OpenCode product, which owns every model-facing surface; the bounded final result is returned to the caller rather than rendered into a request.',
   'packages/providers/codex': 'The provider hands one task string to the Codex product, which owns every model-facing surface; the bounded final result is returned to the caller rather than rendered into a request.',
   'packages/core/scope': 'The package is a model-agnostic registration and lifecycle primitive; model-facing consumers own any context selection.',

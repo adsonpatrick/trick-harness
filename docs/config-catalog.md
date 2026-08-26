@@ -3360,3 +3360,4 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@trick-harness/provider-codex` ([`packages/providers/codex/src/index.ts`](../packages/providers/codex/src/index.ts))
 - `@trick-harness/provider-opencode` ([`packages/providers/opencode/src/index.ts`](../packages/providers/opencode/src/index.ts))
 - `@trick-harness/routing` ([`packages/core/routing/src/index.ts`](../packages/core/routing/src/index.ts))
+- `@trick-harness/supabase-preview` ([`packages/integrations/supabase-preview/src/index.ts`](../packages/integrations/supabase-preview/src/index.ts))

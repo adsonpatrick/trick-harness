@@ -5345,6 +5345,18 @@ importers:
         specifier: workspace:^
         version: link:../../core/journal
 
+  packages/integrations/supabase-preview:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-subprocess':
+        specifier: workspace:^
+        version: link:../../subprocess/subprocess
+
   packages/interaction/commands:
     dependencies:
       zod:

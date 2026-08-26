@@ -27,6 +27,7 @@
     "packages/providers/codex/README.md",
     "packages/providers/opencode/README.md",
     "packages/integrations/github-delivery/README.md",
+    "packages/integrations/supabase-preview/README.md",
     "profiles/"
   ]
 }
