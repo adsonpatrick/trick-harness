@@ -4,19 +4,19 @@
 
 **Goal:** Make the workflow use deterministic mutation capabilities, enforce profile identity and security-repair authority, and make the default lifecycle match the approved PR-centric certification loop.
 
-**Architecture:** WorkflowRunner remains the lifecycle owner but no longer treats every stage as an LLM executor dispatch. `delivery` and required database validation are capability-backed through narrow ports supplied by composition. Profile identity is validated before journal start. Security repair has a deterministic policy gate. The default lifecycle publishes verified work before independent review/QA/security and repeats certification after every repair until final verification.
+**Architecture:** `WorkflowRunner` remains lifecycle owner but no longer treats every stage as an LLM executor dispatch. `delivery` and required database validation are capability-backed through narrow ports supplied by composition. Profile identity is validated before journal start. Security repair has a deterministic policy gate. The default lifecycle publishes verified work before independent review/QA/security and repeats certification after every repair until final verification.
 
 **Tech Stack:** TypeScript, Vitest, Trick Harness workflow/contracts/profile/composition, GitHubDelivery, SupabasePreview, DSH journal.
 
 **Spec:** `docs/superpowers/specs/2026-08-26-harness-v2-pr-review-remediation-design.md`
 
-**Requires:** routing runtime remediation, journal/control remediation and integration safety remediation completed first. Existing PR #1 profile validation/boundary corrections must also be green.
+**Requires:** routing runtime remediation, journal/control remediation, integration safety remediation, PR #1 profile validation, and PR #1 boundary-analysis corrections completed first.
 
 ## Global Constraints
 
-- `objective.profileId` must equal the composed profile id before any journal start, executor start or capability mutation.
-- GitHub delivery is capability-backed; no model executor receives generic shell authority as a substitute for delivery.
-- Database-changing workflows require Supabase Preview capability and block if it is unavailable.
+- `objective.profileId` must equal the composed profile id before journal start, executor start, or capability mutation.
+- GitHub delivery is capability-backed; no model executor receives generic shell authority as a substitute.
+- Database-changing workflows require Supabase Preview and block if it is unavailable.
 - SECURITY_BUG auto-repair requires deterministic policy authorization in addition to diagnosis/evidence.
 - Product/design decisions remain BLOCKED and are never auto-fixed.
 - Default lifecycle is PR-centric: verify -> deliver -> fresh certification -> bounded repair/re-delivery -> final fresh verification.
@@ -30,7 +30,7 @@
 **Files:**
 - Modify: `packages/composition/runtime/src/harness.ts`
 - Modify: `packages/composition/runtime/tests/harness.spec.ts`
-- Modify: `packages/core/control-server/tests/server.spec.ts` if composition is exercised through HTTP fixtures.
+- Modify: `packages/core/control-server/tests/server.spec.ts`
 - Modify: `packages/composition/runtime/README.md`
 
 **Interfaces:**
@@ -49,7 +49,7 @@ function assertObjectiveProfile(objective: WorkflowObjective, profile: HarnessPr
 
 - [ ] **Step 1: Add RED mismatch test**
 
-Compose Plurora profile, pass an objective with `profileId: 'other'`, and assert:
+Compose Plurora profile and pass `profileId: 'other'`:
 
 ```ts
 await expect(harness.run(objective)).rejects.toThrow(BundleCompositionError)
@@ -59,23 +59,23 @@ expect(session.events.some(event => event.type === 'harness/workflow-start')).to
 
 - [ ] **Step 2: Add matching-profile control test**
 
-Same objective with `profileId: pluroraProfile.id` should proceed normally.
+The same objective with `profileId: pluroraProfile.id` proceeds normally.
 
-- [ ] **Step 3: Implement preflight validation before generating/recording mutation-capable run state**
+- [ ] **Step 3: Implement preflight validation before run-id generation/journal mutation**
 
-No side effect or durable workflow start for an invalid objective/profile pair.
+Invalid profile identity starts zero external or durable work.
 
 - [ ] **Step 4: Run GREEN and commit**
 
 ```bash
-pnpm vitest run packages/composition/runtime/tests/harness.spec.ts
-git add packages/composition/runtime
+pnpm vitest run packages/composition/runtime/tests/harness.spec.ts packages/core/control-server/tests/server.spec.ts
+git add packages/composition/runtime packages/core/control-server/tests/server.spec.ts
 git commit -m "fix(trick): bind workflow objective to composed profile"
 ```
 
 ---
 
-### Task 2: Add Explicit Workflow Capability Ports
+### Task 2: Add Explicit Workflow Capability Ports and Move Delivery Off Executors
 
 **Files:**
 - Modify: `packages/core/engineering-workflow/src/types.ts`
@@ -83,11 +83,11 @@ git commit -m "fix(trick): bind workflow objective to composed profile"
 - Modify: `packages/core/engineering-workflow/tests/workflow.spec.ts`
 - Modify: `packages/composition/runtime/src/harness.ts`
 - Modify: `packages/composition/runtime/tests/harness.spec.ts`
-- Modify: `packages/core/engineering-workflow/package.json` if type-only integration contracts are moved into a neutral contracts package rather than importing integration packages directly.
+- Modify: `packages/core/engineering-workflow/README.md`
 
 **Interfaces:**
 
-Keep workflow core independent from concrete integration classes by defining narrow ports in workflow/core contracts:
+Define narrow core-owned ports:
 
 ```ts
 export interface DeliveryCapabilityPort {
@@ -104,36 +104,34 @@ export interface WorkflowCapabilities {
 }
 ```
 
-The concrete composition adapts `GitHubDelivery`/`SupabasePreview` to these ports.
+Concrete integration classes are adapted by composition; workflow core does not import their implementation classes.
 
-- [ ] **Step 1: Add RED test proving delivery does not call executor runtime**
+- [ ] **Step 1: Add RED delivery-authority test**
 
-In `workflow.spec.ts`, plan a delivery stage, register an executor provider whose `start` throws if called for role `delivery`, and supply a fake delivery capability. Assert:
+Supply a fake delivery capability and executor providers for implementation/verification. Assert:
 
 ```ts
 expect(deliveryCapability.deliver).toHaveBeenCalledOnce()
-expect(executorProvider.start).not.toHaveBeenCalledWith(expect.objectContaining({
+expect(executorStart).not.toHaveBeenCalledWith(expect.objectContaining({
   task: expect.stringContaining('delivery'),
 }))
 ```
 
-Use separate providers for earlier implement/verify stages as required by the fixture.
+- [ ] **Step 2: Add RED missing-delivery-capability test**
 
-- [ ] **Step 2: Add RED missing-capability test**
+A lifecycle that requires delivery with no `capabilities.delivery` returns BLOCKED before any shell/git substitute is attempted.
 
-Run a plan containing delivery with no `capabilities.delivery`; assert terminal `BLOCKED` before any git mutation substitute is attempted.
+- [ ] **Step 3: Implement capability-backed delivery dispatch**
 
-- [ ] **Step 3: Implement capability dispatch branch in WorkflowRunner**
+`delivery` remains a deterministic lifecycle stage but is not sent to `executors.start()`.
 
-The queue continues to use `StageSpec`, but `delivery` is handled by the capability port rather than `executors.start()`.
+- [ ] **Step 4: Integrate journal capability barriers**
 
-- [ ] **Step 4: Integrate journal capability start/end barrier**
+Before delivery, await `journal.beginCapability(...)`; after completion/error emit capability end. Wire the concrete GitHub mutation observer to durable `harness/delivery` records.
 
-Before `deliver()`, await `journal.beginCapability({ capability: 'github-delivery', ... })`; after completion/error, emit capability end. Concrete delivery mutation observer writes each verified `harness/delivery` record durably.
+- [ ] **Step 5: Adapt `GitHubDelivery` inside composition**
 
-- [ ] **Step 5: Adapt concrete `GitHubDelivery` in composition**
-
-Composition supplies the port and its `onRecord` observer so each confirmed commit/push/PR record is journaled before the next mutation.
+The adapter converts workflow delivery input to `DeliveryRequest`, passes cancellation, and maps bounded `DeliveryOutcome` back to workflow result.
 
 - [ ] **Step 6: Run GREEN and commit**
 
@@ -156,47 +154,48 @@ git commit -m "fix(trick): route delivery through deterministic capability"
 
 **Interfaces:**
 
-Extend run request with deterministic database-change metadata:
-
 ```ts
 export interface WorkflowDatabaseChange {
   readonly required: true
   readonly migrationPaths: readonly string[]
 }
-
-export interface WorkflowRunRequest {
-  // existing fields
-  readonly databaseChange?: WorkflowDatabaseChange
-}
 ```
 
-No credentials/connection strings are accepted here.
+`WorkflowRunRequest` gains:
 
-The database preview gate runs after implementation verification and before GitHub delivery so a migration failure cannot publish the branch as ready for review.
+```ts
+readonly databaseChange?: WorkflowDatabaseChange
+```
+
+No credentials or connection strings are accepted in this request.
 
 - [ ] **Step 1: Add RED missing-preview-capability test**
 
-Provide `databaseChange.required === true` with no database capability. Assert workflow `BLOCKED`, no delivery capability call, and no fallback to an executor shell.
+Set `databaseChange.required === true` with no database capability. Assert BLOCKED, zero delivery calls, and zero executor-based Supabase substitute.
 
-- [ ] **Step 2: Add RED Preview-failure test**
+- [ ] **Step 2: Add RED preview-failure test**
 
-Fake Preview capability returns a failed migration/lint result. Assert delivery is never called and workflow terminal verdict is non-PASS.
+Fake Preview returns migration/lint failure. Assert delivery never runs and terminal verdict is non-PASS.
 
-- [ ] **Step 3: Add RED successful Preview ordering test**
+- [ ] **Step 3: Add RED successful ordering test**
 
-Record stage/capability calls and assert:
+Record calls and assert:
 
 ```text
 implement -> verify -> supabase-preview -> delivery
 ```
 
-Then certification stages may follow delivery under the PR lifecycle.
+Independent certification follows delivery in Task 5.
 
-- [ ] **Step 4: Adapt concrete `SupabasePreview` in composition**
+- [ ] **Step 4: Implement capability invocation after implementation verification and before delivery**
 
-Supply configured parent project ref from Plurora integration policy/options and wire its mutation observer to durable journal facts. Do not pass secrets through `WorkflowRunRequest`.
+Use journal capability start/end and mutation observer facts from the journal/integration plans.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [ ] **Step 5: Adapt concrete `SupabasePreview` in composition**
+
+Supply only parent/project-safe configuration; credentials remain native CLI/environment inputs and never enter `WorkflowRunRequest`.
+
+- [ ] **Step 6: Run GREEN and commit**
 
 ```bash
 pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/composition/runtime/tests/harness.spec.ts
@@ -214,14 +213,15 @@ git commit -m "fix(trick): gate database work on Supabase preview"
 - Modify: `packages/core/profile/tests/profile.spec.ts`
 - Modify: `profiles/plurora/security-policy.ts`
 - Modify: `profiles/plurora/profile.ts`
-- Modify: `profiles/plurora/tests/profile.spec.ts` or existing security-policy test file.
+- Modify: `profiles/plurora/tests/profile.spec.ts`
 - Modify: `packages/core/engineering-workflow/src/repair.ts`
 - Modify: `packages/core/engineering-workflow/src/index.ts`
+- Modify: `packages/core/engineering-workflow/tests/repair.spec.ts`
 - Modify: `packages/core/engineering-workflow/tests/workflow.spec.ts`
 
 **Interfaces:**
 
-Define deterministic authorization owned by policy, not by model output. A viable contract:
+Use declarative deterministic policy, for example:
 
 ```ts
 export interface SecurityRepairRule {
@@ -236,29 +236,27 @@ export interface SecurityRepairDecision {
 }
 ```
 
-If current profile architecture prefers rule tables rather than executable hooks, keep it declarative and evaluate in workflow/profile mechanism.
+Initial Plurora policy is fail-closed: no matching safe rule means no automatic security mutation.
 
-Initial Plurora policy is fail-closed: no safe rule means no automatic security mutation.
+- [ ] **Step 1: Add RED deny-by-default test**
 
-- [ ] **Step 1: Add RED test: confirmed SECURITY_BUG + diagnosis still does not auto-repair without policy authorization**
+Confirmed SECURITY_BUG + valid diagnosis without a matching security-repair policy must not start a repair provider.
 
-Assert no repair provider starts and workflow blocks/reports for human action.
+- [ ] **Step 2: Add RED narrow allow-rule test**
 
-- [ ] **Step 2: Add RED deterministic allow-rule test**
+Use a test policy permitting only `packages/fixture/security-safe/**`. A matching diagnosis may proceed to repair.
 
-Create a test profile with a narrow allowed boundary, e.g. `packages/fixture/security-safe/**`, and a matching diagnosis `minimalRepairSurface`. Assert repair can proceed only for the matching boundary.
+- [ ] **Step 3: Add RED boundary-mismatch test**
 
-- [ ] **Step 3: Add RED boundary mismatch test**
+The same finding outside the configured allowlist must not start repair.
 
-Same finding/diagnosis outside the allowlist must not start repair.
+- [ ] **Step 4: Implement parser/evaluator**
 
-- [ ] **Step 4: Implement policy parsing/evaluation**
+Authorization cannot depend on finding summary, model prose, or a self-declared “safe” boolean.
 
-Do not trust `Finding.summary`, model prose or self-declared “safe” booleans as authorization.
+- [ ] **Step 5: Preserve diagnosis/RED/GREEN/fresh-verification obligations**
 
-- [ ] **Step 5: Keep regression/fresh-verification requirements unchanged**
-
-Even an authorized security repair still requires diagnosis, RED/GREEN evidence and fresh independent certification.
+Authorization adds a gate; it does not weaken existing repair evidence requirements.
 
 - [ ] **Step 6: Run GREEN and commit**
 
@@ -275,14 +273,14 @@ git commit -m "fix(trick): require policy authorization for security repair"
 **Files:**
 - Modify: `packages/core/engineering-workflow/src/lifecycle.ts`
 - Modify: `packages/core/engineering-workflow/src/index.ts`
-- Modify: `packages/core/engineering-workflow/tests/lifecycle.spec.ts` if present; otherwise extend `packages/core/engineering-workflow/tests/workflow.spec.ts`.
+- Modify: `packages/core/engineering-workflow/tests/lifecycle.spec.ts`
 - Modify: `packages/core/engineering-workflow/tests/workflow.spec.ts`
 - Modify: `packages/core/engineering-workflow/README.md`
-- Modify: `profiles/plurora/workflow-policy.ts` only for risk thresholds already owned by profile.
+- Modify: `profiles/plurora/workflow-policy.ts`
 
 **Interfaces:**
 
-Default lifecycle ordering for ordinary code work:
+Default code lifecycle:
 
 ```text
 implement-1
@@ -295,10 +293,10 @@ review-1
 final-verify-1
 ```
 
-Repair loop after a confirmed repairable finding:
+Repair cycle:
 
 ```text
-debug-N (unless mechanically obvious)
+debug-N when diagnosis is required
 repair-N
 verify-N
 delivery-N
@@ -308,74 +306,72 @@ review-N
 final-verify-N
 ```
 
-Every post-repair certifying stage is fresh and respects cross-executor independence policy.
+- [ ] **Step 1: Add RED low/medium/high/critical order tests in `lifecycle.spec.ts`**
 
-- [ ] **Step 1: Add RED stage-order tests for low/medium/high/critical risk**
-
-At minimum high/critical must demonstrate delivery precedes review and final verification follows post-PR certification.
+High/critical must demonstrate `delivery` before review and a final verification after post-PR certification.
 
 - [ ] **Step 2: Add RED repair-cycle lifecycle test**
 
-Inject one confirmed bug in review. Assert the order includes:
+Inject a confirmed review bug and assert an order containing:
 
 ```text
 delivery-1 -> review-1 -> debug-1 -> repair-1 -> verify-2 -> delivery-2 -> review-2 -> final-verify-1
 ```
 
-Include QA/security where risk requires them.
+Add QA/security where profile risk requires them.
 
 - [ ] **Step 3: Add RED improvement-only test**
 
-An `IMPROVEMENT` finding is reported, not repaired, and does not prevent final PASS unless another policy says it is blocking.
+`IMPROVEMENT` is reported, not repaired, and does not by itself prevent final PASS.
 
-- [ ] **Step 4: Implement lifecycle queue transitions in `lifecycle.ts` rather than ad-hoc pushes spread through `index.ts`**
+- [ ] **Step 4: Implement deterministic transitions in `lifecycle.ts`**
 
-Keep the state machine deterministic. The model does not choose which stage comes next.
+Do not scatter ad-hoc stage-queue mutations through `index.ts`; the model never chooses the next lifecycle stage.
 
-- [ ] **Step 5: Enforce final verification freshness**
+- [ ] **Step 5: Enforce final-verifier freshness/independence**
 
-Final verification gets a fresh executor run and, for high/critical risk, the profile's independence requirement from the last mutator.
+Final verification is a fresh executor run and respects the profile independence requirement from the last mutator.
 
 - [ ] **Step 6: Run GREEN and commit**
 
 ```bash
-pnpm vitest run packages/core/engineering-workflow/tests
-
+pnpm vitest run packages/core/engineering-workflow/tests/lifecycle.spec.ts packages/core/engineering-workflow/tests/workflow.spec.ts
 git add packages/core/engineering-workflow profiles/plurora/workflow-policy.ts
 git commit -m "fix(trick): make default lifecycle PR centric"
 ```
 
 ---
 
-### Task 6: Prove the Workflow Cannot Bypass Deterministic Authorities
+### Task 6: Prove Workflow Authority Cannot Be Bypassed
 
 **Files:**
+- Modify: `profiles/plurora/tests/composition.spec.ts`
 - Modify: `packages/composition/runtime/tests/harness.spec.ts`
 - Modify: `packages/composition/runtime/tests/bundle.spec.ts`
 - Modify: `packages/core/engineering-workflow/tests/workflow.spec.ts`
 - Modify: `packages/composition/runtime/README.md`
 
-- [ ] **Step 1: Add a composed GitHub authority test**
+- [ ] **Step 1: Add composed GitHub authority test**
 
-Use real Plurora profile, fake executor runtime and fake GitHub port. Assert delivery is observed only through the capability and the OpenCode/Codex providers never receive a `delivery` stage task.
+Using the real Plurora profile, assert delivery is observed only through the capability and OpenCode/Codex providers never receive a delivery task.
 
-- [ ] **Step 2: Add a composed DB authority test**
+- [ ] **Step 2: Add composed database authority test**
 
-Mark database change required. Assert Supabase Preview capability runs and generic executor never receives Supabase/git commands as task text.
+Mark database change required. Assert Supabase Preview runs and generic executor task text never contains Supabase/git delivery commands as an authority path.
 
-- [ ] **Step 3: Add a composed SECURITY_BUG fail-closed test**
+- [ ] **Step 3: Add composed SECURITY_BUG fail-closed test**
 
-With Plurora initial policy and no safe rule, confirmed SECURITY_BUG never starts repair.
+With Plurora's initial deny-by-default policy, a confirmed SECURITY_BUG never starts repair unless a deterministic safe rule was explicitly configured.
 
-- [ ] **Step 4: Add a composed full lifecycle test**
+- [ ] **Step 4: Add composed full-lifecycle tests**
 
-For high-risk work, assert:
+High risk:
 
 ```text
 implement -> verify -> delivery -> review -> qa -> final verify
 ```
 
-For critical work include security. After an injected bug, assert bounded repair/re-delivery/re-review before final verification.
+Critical adds security. After an injected bug, prove bounded repair/re-delivery/re-review before final verification.
 
 - [ ] **Step 5: Run package/repository gates**
 
@@ -386,21 +382,11 @@ pnpm lint
 pnpm build
 ```
 
-Run root constraints/doc-sync/hygiene gates.
+Then run root constraints/doc-sync/hygiene gates.
 
 - [ ] **Step 6: Independent review gate**
 
-Reviewer must prove:
-
-```text
-profile mismatch fails before side effects
-delivery has no LLM bypass
-DB Preview has no LLM/shared/local bypass
-security repair is policy-authorized
-post-PR certification order is deterministic
-final verification is fresh
-no material bug can coexist with PASS/PR READY
-```
+Fresh reviewer verifies: profile mismatch fails before side effects, delivery has no LLM bypass, DB Preview has no LLM/shared/local bypass, security repair is policy-authorized, post-PR certification is deterministic, final verification is fresh, and material bugs cannot coexist with PASS/PR READY.
 
 - [ ] **Step 7: Commit docs/test completion**
 
