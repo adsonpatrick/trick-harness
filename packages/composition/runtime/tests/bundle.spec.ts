@@ -284,9 +284,9 @@ describe('disposal', () => {
     kept.dispose()
   })
 
-  it('leaves no orphan registration or run behind on a bundle it owns', () => {
+  it('leaves no orphan registration or run behind on a bundle it owns', async () => {
     const bundle = createHarnessRuntimeBundle(bothProviders().options)
-    bundle.dispose()
+    await bundle.dispose()
     expect(bundle.runtime.list()).toEqual([])
     expect(bundle.runtime.activeRuns()).toBe(0)
   })
@@ -310,15 +310,44 @@ describe('disposal', () => {
       signal: new AbortController().signal,
     })
     await vi.waitFor(() => { expect(observed).toBeDefined() })
-    bundle.dispose()
+    const disposal = bundle.dispose()
     expect(observed?.aborted).toBe(true)
     settled.resolve({ status: 'aborted', output: '' })
+    await disposal
     await expect(run).resolves.toEqual({ status: 'aborted', output: '' })
   })
 
-  it('is safe to dispose twice', () => {
+  it('does not report a bundle disposed until the run it owns has settled', async () => {
+    const settled = Promise.withResolvers<ExecutorResult>()
+    const slow: ExecutorProvider = {
+      name: 'slow',
+      capabilities: { modelOverride: false, reasoningEffort: false, permissionModes: ['read-only'] },
+      start: async () => settled.promise,
+    }
+    const bundle = createHarnessRuntimeBundle({ extraProviders: [slow] })
+    const run = bundle.runtime.start({
+      cwd: '/work/repo',
+      task: 'wait',
+      route: { executor: 'slow', permissionMode: 'read-only' },
+      signal: new AbortController().signal,
+    })
+
+    let quiescent = false
+    const disposal = bundle.dispose()
+    void disposal.then(() => { quiescent = true })
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve()
+    expect(quiescent).toBe(false)
+    expect(bundle.runtime.activeRuns()).toBe(1)
+
+    settled.resolve({ status: 'aborted', output: '' })
+    await disposal
+    expect(bundle.runtime.activeRuns()).toBe(0)
+    await run
+  })
+
+  it('is safe to dispose twice', async () => {
     const bundle = createHarnessRuntimeBundle(bothProviders().options)
-    bundle.dispose()
-    expect(() => { bundle.dispose() }).not.toThrow()
+    await bundle.dispose()
+    await expect(bundle.dispose()).resolves.toBeUndefined()
   })
 })

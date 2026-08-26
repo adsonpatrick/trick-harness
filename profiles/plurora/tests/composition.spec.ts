@@ -49,7 +49,7 @@ describe('the Plurora deployment composition', () => {
     expect([...routedExecutors(pluroraProfile)].sort()).toEqual(['codex', 'opencode'])
   })
 
-  it('loads with every routed executor registered', () => {
+  it('loads with every routed executor registered', async () => {
     const seams = productSeams()
     const bundle = createHarnessRuntimeBundle({
       opencode: { adapter: seams.adapter },
@@ -57,10 +57,10 @@ describe('the Plurora deployment composition', () => {
       profile: pluroraProfile,
     })
     expect(bundle.executors).toEqual(['opencode', 'codex'])
-    bundle.dispose()
+    await bundle.dispose()
   })
 
-  it('starts no product process at load', () => {
+  it('starts no product process at load', async () => {
     const seams = productSeams()
     const bundle = createHarnessRuntimeBundle({
       opencode: { adapter: seams.adapter },
@@ -69,7 +69,7 @@ describe('the Plurora deployment composition', () => {
     })
     expect(seams.reached()).toBe(0)
     expect(bundle.runtime.activeRuns()).toBe(0)
-    bundle.dispose()
+    await bundle.dispose()
   })
 
   it('refuses to load when an executor the policy routes to is left out', () => {
@@ -122,17 +122,17 @@ describe('the Plurora deployment composition', () => {
     for (const rule of [...rules, ...fallbackRules]) {
       if (rule.use['executor'] === 'opencode') expect(rule.use['effort'], rule.id).toBeUndefined()
     }
-    bundle.dispose()
+    await bundle.dispose()
   })
 
-  it('leaves no provider registered after disposal', () => {
+  it('leaves no provider registered after disposal', async () => {
     const seams = productSeams()
     const bundle = createHarnessRuntimeBundle({
       opencode: { adapter: seams.adapter },
       codex: { spawn: seams.spawn },
       profile: pluroraProfile,
     })
-    bundle.dispose()
+    await bundle.dispose()
     expect(bundle.runtime.list()).toEqual([])
   })
 })

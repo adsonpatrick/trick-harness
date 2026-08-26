@@ -83,8 +83,16 @@ export interface HarnessExecutorRuntime {
    * @returns the number of active runs.
    */
   activeRuns(): number
-  /** Unregister every provider and abort every run in flight. */
-  dispose(): void
+  /**
+   * Unregister every provider, abort every run in flight, and wait for them.
+   *
+   * Quiescence, not signal delivery: the promise settles only once every run
+   * that was active has come back through its provider's own teardown, so a
+   * caller that awaits it knows no owned process tree is still coming down.
+   * Idempotent — a second call is answered with the first one's settlement.
+   * @returns Nothing; resolves when the runtime is quiet.
+   */
+  dispose(): Promise<void>
 }
 
 /** Reject a provider whose declared shape cannot be dispatched to. */
@@ -204,6 +212,20 @@ interface ProviderEntry {
 }
 
 /**
+ * One run the runtime owns, and the two handles disposal needs from it.
+ *
+ * The controller alone was not enough: aborting it says the run has been asked
+ * to stop, and a runtime that treated the asking as the answer would report
+ * quiescence while a process tree was still being taken down.
+ */
+interface ActiveRun {
+  /** The runtime's own controller, chained to the caller's signal. */
+  readonly controller: AbortController
+  /** Resolves once the provider call has left its `finally` path. */
+  readonly settled: Promise<void>
+}
+
+/**
  * Create a standalone executor runtime.
  *
  * Independent of Cordis so dispatch and capability rules can be exercised in a
@@ -212,8 +234,10 @@ interface ProviderEntry {
  */
 export function createExecutorRuntime(): HarnessExecutorRuntime {
   const entries = new Map<string, ProviderEntry>()
-  const inFlight = new Set<AbortController>()
-  let disposed = false
+  const inFlight = new Set<ActiveRun>()
+  // Doubles as the disposed flag: once it exists no run may start, and every
+  // later caller is handed the same settlement rather than a second teardown.
+  let disposal: Promise<void> | undefined
 
   return {
     register(provider: ExecutorProvider): ExecutorRegistration {
@@ -243,7 +267,7 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
     },
 
     async start(request: ExecutorStartRequest): Promise<ExecutorResult> {
-      if (disposed) throw new ExecutorProviderError('executor runtime is disposed')
+      if (disposal !== undefined) throw new ExecutorProviderError('executor runtime is disposed')
       validateRequest(request)
       const provider = this.get(request.route.executor)
       validateRoute(provider, request)
@@ -258,12 +282,20 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
       const controller = new AbortController()
       const forward = (): void => { controller.abort(request.signal.reason) }
       request.signal.addEventListener('abort', forward, { once: true })
-      inFlight.add(controller)
+      // Settled from the `finally` below rather than from the call itself: the
+      // run is over when the provider has finished cleaning up after it, and
+      // that is a moment only the provider's own unwinding can report.
+      const finished = Promise.withResolvers<void>()
+      const run: ActiveRun = { controller, settled: finished.promise }
+      inFlight.add(run)
       try {
         return await provider.start({ ...request, signal: controller.signal })
       } finally {
         request.signal.removeEventListener('abort', forward)
-        inFlight.delete(controller)
+        // Removed before the settlement is announced, so a disposer waking on
+        // that promise never sees a run it is waiting for still counted.
+        inFlight.delete(run)
+        finished.resolve()
       }
     },
 
@@ -271,11 +303,20 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
       return inFlight.size
     },
 
-    dispose(): void {
-      disposed = true
-      entries.clear()
-      for (const controller of inFlight) controller.abort()
-      inFlight.clear()
+    dispose(): Promise<void> {
+      // The whole body up to the first `await` runs synchronously, so by the
+      // time any caller can observe the runtime again it is already refusing
+      // new runs and every owned controller has been aborted exactly once.
+      disposal ??= (async (): Promise<void> => {
+        entries.clear()
+        const active = [...inFlight]
+        for (const { controller } of active) controller.abort()
+        // `allSettled` because a run that ends by throwing still ended; the
+        // caller's own promise carries that error, and disposal reports
+        // quiescence rather than a verdict on the work.
+        await Promise.allSettled(active.map(({ settled }) => settled))
+      })()
+      return disposal
     },
   }
 }
@@ -341,13 +382,24 @@ export class ExecutorRuntime extends Service implements HarnessExecutorRuntime {
     return this.runtime.activeRuns()
   }
 
-  /** Abort every run in flight when the owning context stops. */
-  stop(): void {
-    this.runtime.dispose()
+  /**
+   * End every run in flight when the owning context stops, and wait for them.
+   *
+   * Returned rather than fired off, so Cordis holds the fiber open until the
+   * runtime is actually quiet: a context that finished stopping while a
+   * provider was still killing a process tree would leave that tree orphaned
+   * with nothing left to attribute it to.
+   * @returns Nothing; resolves when the runtime is quiet.
+   */
+  stop(): Promise<void> {
+    return this.runtime.dispose()
   }
 
-  /** Unregister every provider and abort every run in flight. */
-  dispose(): void {
-    this.runtime.dispose()
+  /**
+   * Unregister every provider, abort every run in flight, and wait for them.
+   * @returns Nothing; resolves when the runtime is quiet.
+   */
+  dispose(): Promise<void> {
+    return this.runtime.dispose()
   }
 }

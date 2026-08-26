@@ -284,7 +284,10 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       for (const [runner] of inFlight) runner.dispose()
       runners.clear()
       composition.dispose()
-      runtime.dispose()
+      // Last, and awaited: the runtime is what owns the process trees, and a
+      // composition that resolved before they were down would be telling its
+      // caller the machine was quiet while it was still running.
+      await runtime.dispose()
     },
   }
 }

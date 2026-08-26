@@ -86,8 +86,15 @@ export interface HarnessRuntimeBundle {
   readonly runtime: HarnessExecutorRuntime
   /** The registered executor names, in registration order. */
   readonly executors: readonly string[]
-  /** Unregister everything this composition registered and end runs in flight. */
-  dispose(): void
+  /**
+   * Unregister everything this composition registered and end runs in flight.
+   *
+   * The bundle owns its runtime, so disposing it is disposing that runtime:
+   * the promise settles only once every run has come back through its
+   * provider's teardown.
+   * @returns Nothing; resolves when the runtime is quiet.
+   */
+  dispose(): Promise<void>
 }
 
 /** What a composition added to a runtime it does not own. */
@@ -201,9 +208,9 @@ export function createHarnessRuntimeBundle(
   return {
     runtime,
     executors: composition.executors,
-    dispose(): void {
+    async dispose(): Promise<void> {
       composition.dispose()
-      runtime.dispose()
+      await runtime.dispose()
     },
   }
 }
