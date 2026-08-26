@@ -267,7 +267,7 @@ describe('a run that goes wrong', () => {
     expect(projectWorkflow(session.events, 'wf-1').openStages).toEqual([])
   })
 
-  it('ends the run when an executor errors and records the safe diagnostic only', async () => {
+  it('stops with no usable executor left, and records the safe diagnostic only', async () => {
     executors.register(provider('builder', async () => ({
       status: 'error',
       output: '',
@@ -280,9 +280,12 @@ describe('a run that goes wrong', () => {
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
 
-    expect(outcome.state).toBe('failed')
-    expect(outcome.verdict).toBe('FAIL')
+    // The single registered executor cannot serve, and there is nobody to
+    // reroute to. Blocking is the expected outcome of that, not a defect: the
+    // alternative is inventing a route to a product this runtime does not have.
+    expect(outcome.state).toBe('blocked')
     expect(JSON.stringify(session.events)).toContain('transport-unavailable')
+    expect(JSON.stringify(session.events)).toContain('provider did not start')
   })
 
   it('blocks rather than guessing when a stage returns a product decision', async () => {
@@ -867,5 +870,71 @@ describe('a plan that asks for a repair with nothing to repair', () => {
 
     expect(outcome.state).toBe('blocked')
     expect(outcome.summary).toContain('no confirmed defect')
+  })
+})
+
+describe('an executor that stops serving mid-run', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+  let runner: WorkflowRunner
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+  })
+
+  function failing(name: string, category: string, availability: boolean, seen: string[]): ExecutorProvider {
+    return provider(name, async () => {
+      seen.push(name)
+      return { status: 'error', output: '', failure: { category, availability, safeDiagnostic: `${name} declined` } }
+    })
+  }
+
+  it('moves the stage to another product when the first one cannot serve', async () => {
+    const seen: string[] = []
+    executors.register(failing('builder', 'usage-limit-exceeded', true, seen))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('completed')
+    expect(seen).toContain('spare')
+    // The reroute is a real start against a real product, so the budget sees it.
+    expect(outcome.executorStarts).toBeGreaterThan(outcome.stages.length)
+    const events = JSON.stringify(session.events)
+    expect(events).toContain('harness/route-fallback')
+    expect(events).toContain('usage-limit-exceeded')
+    expect(projectWorkflow(session.events, 'wf-1').circuits['builder']).toBe('DEGRADED')
+  })
+
+  it('does not ask a second product the same question after a wrong answer', async () => {
+    const seen: string[] = []
+    executors.register(failing('builder', 'bad-request', false, seen))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    // A quality failure is an answer, not an outage. Rerouting it would record a
+    // second opinion as a recovery, so the run ends on what the first one said.
+    expect(seen).toEqual(['builder'])
+    expect(outcome.state).not.toBe('completed')
+    expect(JSON.stringify(session.events)).not.toContain('harness/route-fallback')
+  })
+
+  it('counts every reroute against the start budget the run was given', async () => {
+    const seen: string[] = []
+    executors.register(failing('builder', 'server-overloaded', true, seen))
+    executors.register(failing('spare', 'server-overloaded', true, seen))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(seen).toEqual(['builder', 'spare'])
+    expect(outcome.executorStarts).toBe(2)
+    expect(outcome.state).toBe('blocked')
   })
 })

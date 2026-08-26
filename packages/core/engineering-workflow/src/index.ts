@@ -27,8 +27,18 @@ import type { ExecutorResult, HarnessExecutorRuntime, ReasoningEffort } from '@t
 import type { WorkflowJournal, WorkflowProjection } from '@trick-harness/journal'
 import type { BlockerKind, WorkflowEndState } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
-import { RoutingError, capVerdict, route } from '@trick-harness/routing'
-import type { RoutingPolicy } from '@trick-harness/routing'
+import {
+  RoutingError,
+  capVerdict,
+  degradedExecutors as degradedIn,
+  disablesExecutor,
+  isAvailabilityFailure,
+  openCircuit,
+  recordFailure,
+  recordSuccess,
+  route,
+} from '@trick-harness/routing'
+import type { ExecutorCircuit, RoutingPolicy } from '@trick-harness/routing'
 import type { RouteDecision, RoutingContext } from '@trick-harness/contracts'
 
 export type * from './types.ts'
@@ -165,6 +175,57 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
       ? 'workflow ended without a recorded terminal state and left no observed effect'
       : `workflow was interrupted; verify the world before retrying — ${reasons.join('; ')}`,
   })
+}
+
+/**
+ * What one workflow learns about its executors while it runs.
+ *
+ * Scoped to a single `run` rather than to the runner, because an outage is a
+ * fact about a window of time and not about the process. A map living on the
+ * runner would let a quota ceiling hit at nine in the morning still be routing
+ * work away from an executor that recovered hours ago, and nothing in a later
+ * run would ever look at it again to find out.
+ */
+/**
+ * Every executor name the policy can produce.
+ *
+ * Read from the table rather than from a list someone maintains beside it, so a
+ * new row naming a new product needs no second edit here to be checked.
+ * @param policy - the resolved routing policy.
+ * @returns the distinct executor names the table may route to.
+ */
+function executorNames(policy: RoutingPolicy): readonly string[] {
+  const named = [...policy.rules, ...policy.fallbackRules]
+    .map(rule => rule.use.executor)
+    .filter((name): name is string => typeof name === 'string')
+  return [...new Set(named)]
+}
+
+interface AvailabilityState {
+  /** Breaker state per executor, for failures the executor can recover from. */
+  readonly circuits: Map<string, ExecutorCircuit>
+  /**
+   * Executors removed from the pool for the rest of the run.
+   *
+   * Separate from the circuits because these do not recover on a probe. An
+   * unauthorized account is fixed by a person, not by waiting, so probing it
+   * would spend the start budget confirming something already known.
+   */
+  readonly disabled: Set<string>
+  /**
+   * Executor starts this run spent on rerouting, beyond each stage's first.
+   *
+   * Mutable, and read by the loop that owns the budget rather than returned
+   * through the dispatch result, because a reroute that ends in a routing
+   * refusal never produces a result to carry it: the starts were still spent,
+   * and a budget that forgot them would let an outage loop for free.
+   */
+  rerouteStarts: number
+}
+
+/** Fresh availability state for one run. */
+function availabilityState(): AvailabilityState {
+  return { circuits: new Map(), disabled: new Set(), rerouteStarts: 0 }
 }
 
 /** Everything the runtime needs, supplied once when the runner is built. */
@@ -307,6 +368,7 @@ export class WorkflowRunner {
     // by a fresh delivery, so the stage that re-reads the work reads the diff a
     // person would now see rather than the one that provoked the repair.
     let delivered = false
+    const availability = availabilityState()
 
     while (queue.length > 0) {
       const stage = queue.shift() as StageSpec
@@ -341,9 +403,13 @@ export class WorkflowRunner {
       }
 
       executorStarts += 1
+      const reroutesBefore = availability.rerouteStarts
       let dispatched: Dispatched
       try {
-        dispatched = await this.#dispatch(stage, request, signal, repairCycles, lastMutator)
+        dispatched = await this.#dispatch(
+          stage, request, signal, repairCycles, lastMutator, availability,
+          maxExecutorStarts - executorStarts,
+        )
       } catch (error) {
         // A policy that cannot answer for this stage — a degraded executor no
         // fallback row covers, a tier the registry does not know — is a refusal,
@@ -351,11 +417,15 @@ export class WorkflowRunner {
         // terminal event at all, and a restart would then read a deterministic
         // refusal as an interrupted run whose effect on the world is unknown.
         if (!(error instanceof RoutingError)) throw error
+        // Account the reroutes before reporting: they were spent whether or not
+        // the last one found anywhere to go.
+        executorStarts += availability.rerouteStarts - reroutesBefore
         return await this.#blocked(
           objective, stages, repairCycles, executorStarts, 'external',
           `${stage.role} could not be routed: ${error.message}`,
         )
       }
+      executorStarts += availability.rerouteStarts - reroutesBefore
       stages.push(dispatched.facts)
       if (dispatched.refusal !== undefined) {
         return await this.#blocked(
@@ -525,19 +595,45 @@ export class WorkflowRunner {
     signal: AbortSignal,
     priorAttempts: number,
     lastMutator: string | undefined,
+    availability: AvailabilityState,
+    extraStarts: number,
   ): Promise<Dispatched> {
+    let spent = 0
+    for (;;) {
+      const attempt = await this.#attempt(
+        stage, request, signal, priorAttempts, lastMutator, availability,
+      )
+      // Only an executor that could not serve the run is retried, and only
+      // while the budget the profile set still has room. A wrong answer is not
+      // retried at all: asking a second product the same question and taking
+      // its answer would report a second opinion as a recovery.
+      // Counted here rather than before the call: a reroute that never found
+      // anywhere to go throws out of `#attempt` without starting anything, and
+      // charging the budget for a start nobody made would be a lie in the
+      // direction that ends runs early.
+      if (spent > 0) availability.rerouteStarts += 1
+      if (!attempt.reroutable || spent >= extraStarts) return attempt.dispatched
+      spent += 1
+    }
+  }
+
+  /** One routed start, and whether its failure permits another. */
+  async #attempt(
+    stage: StageSpec,
+    request: WorkflowRunRequest,
+    signal: AbortSignal,
+    priorAttempts: number,
+    lastMutator: string | undefined,
+    availability: AvailabilityState,
+  ): Promise<{ readonly dispatched: Dispatched; readonly reroutable: boolean }> {
     const { journal, executors, policy } = this.#options
-    const context = this.#routingContext(stage, request, priorAttempts, lastMutator)
+    const context = this.#routingContext(stage, request, priorAttempts, lastMutator, availability)
     const decision = route(context, policy)
     const dispatch = { stageId: stage.stageId, role: stage.role, decision }
 
     journal.routeDecision(dispatch)
     if (decision.fallbackFrom !== undefined) {
-      // Not a failure category: at this point the route says only that the
-      // primary executor was already marked degraded, and naming a category
-      // here would invent a cause the run never observed. Task 3 of the routing
-      // runtime plan replaces this with the category that actually degraded it.
-      await journal.routeFallback(dispatch, 'degraded-executor', {
+      await journal.routeFallback(dispatch, this.#fallbackReason(availability, decision.fallbackFrom), {
         independence: READ_ONLY_ROLES.includes(stage.role) ? 'reduced' : 'preserved',
         assurance: READ_ONLY_ROLES.includes(stage.role) ? 'lowered' : 'unchanged',
       })
@@ -565,12 +661,15 @@ export class WorkflowRunner {
         + 'and this objective requires one'
       await journal.verdict(stage.stageId, stage.role, 'BLOCKED', summary, [])
       return {
-        facts: facts(stage, decision.executor, decision.permissionMode, 'BLOCKED', summary, [], [], 0),
-        canceled: false,
-        failed: false,
-        result: undefined,
-        refusal: summary,
-        routed: { context, decision },
+        dispatched: {
+          facts: facts(stage, decision.executor, decision.permissionMode, 'BLOCKED', summary, [], [], 0),
+          canceled: false,
+          failed: false,
+          result: undefined,
+          refusal: summary,
+          routed: { context, decision },
+        },
+        reroutable: false,
       }
     }
 
@@ -583,8 +682,77 @@ export class WorkflowRunner {
       signal,
     })
     const durationMs = Math.max(0, this.#now() - startedAt)
+    const reroutable = this.#observe(availability, decision.executor, result)
 
-    return await this.#reduce(stage, { context, decision }, result, durationMs, request)
+    return {
+      dispatched: await this.#reduce(stage, { context, decision }, result, durationMs, request),
+      reroutable,
+    }
+  }
+
+  /**
+   * Fold one provider outcome into the run's picture of its executors.
+   *
+   * Everything recorded here is something the run observed. Nothing is inferred
+   * from elapsed time, and nothing is inferred from a provider's prose: a
+   * category the provider stated is the only evidence this uses.
+   * @param availability - The run's live circuit and disabled-executor state.
+   * @param executor - The executor that just ran.
+   * @param result - What it returned.
+   * @returns Whether this stage may be started again on a different executor.
+   */
+  #observe(availability: AvailabilityState, executor: string, result: ExecutorResult): boolean {
+    const { journal } = this.#options
+    const now = this.#now()
+    const circuit = availability.circuits.get(executor) ?? openCircuit(executor, now)
+
+    const record = (outcome: { circuit: ExecutorCircuit; transitions: readonly { from: 'AVAILABLE' | 'DEGRADED'; to: 'AVAILABLE' | 'DEGRADED'; reason: string }[] }): void => {
+      availability.circuits.set(executor, outcome.circuit)
+      for (const change of outcome.transitions) {
+        journal.circuitBreaker(executor, change.from, change.to, change.reason)
+      }
+    }
+
+    if (result.status === 'completed') {
+      // A run that served is the only evidence that clears a degraded circuit.
+      record(recordSuccess(circuit, now))
+      return false
+    }
+    const category = result.status === 'error' ? result.failure?.category : undefined
+    if (category === undefined) return false
+
+    // A category outside the vocabulary is a provider bug, and the run must not
+    // be the place it is discovered: an unclassifiable failure is treated as
+    // final, which is the fail-closed reading.
+    let available: boolean
+    let disabling: boolean
+    try {
+      available = isAvailabilityFailure(category)
+      disabling = disablesExecutor(category)
+    } catch {
+      return false
+    }
+
+    if (disabling) {
+      availability.disabled.add(executor)
+      journal.circuitBreaker(executor, circuit.state, 'DEGRADED', `failure:${category}`)
+      // The executor leaves the pool, and this run still ends here: rerouting
+      // now would hand the same task to another product and report its answer
+      // as recovery from a credential problem.
+      return false
+    }
+    if (!available) return false
+
+    record(recordFailure(circuit, category, now))
+    return true
+  }
+
+  /** The cause a fallback is recorded under, taken from what degraded it. */
+  #fallbackReason(availability: AvailabilityState, from: string): string {
+    // Falls back to the bare fact when the executor was named degraded by the
+    // caller rather than by anything this run watched happen. Naming a category
+    // there would invent a cause the run never observed.
+    return availability.circuits.get(from)?.failureClass ?? 'degraded-executor'
   }
 
   /** Turn one provider result into the compact facts the run carries forward. */
@@ -632,6 +800,7 @@ export class WorkflowRunner {
     await journal.verdict(
       stage.stageId, stage.role, interpreted.verdict, interpreted.summary, interpreted.evidence,
     )
+
     return {
       facts: facts(
         stage, executor, permissionMode, interpreted.verdict, interpreted.summary,
@@ -651,9 +820,25 @@ export class WorkflowRunner {
     request: WorkflowRunRequest,
     priorAttempts: number,
     lastMutator: string | undefined,
+    availability: AvailabilityState,
   ): RoutingContext {
     const { objective } = request
-    const { profile, degradedExecutors = [] } = this.#options
+    const { profile, degradedExecutors = [], executors, policy } = this.#options
+    // Four sources, all of them observed rather than assumed: what the caller
+    // was already told before the run, what the breaker learned during it, what
+    // has been taken out of the pool entirely, and which executors this runtime
+    // has no provider for at all. The last one is the same fact as the others
+    // stated earlier: a name with nothing registered behind it cannot serve a
+    // stage, so routing to it and discovering that at dispatch would turn a
+    // composition gap into a crash halfway through a run.
+    const registered = new Set(executors.list().map(provider => provider.name))
+    const unregistered = executorNames(policy).filter(name => !registered.has(name))
+    const degraded = Object.freeze([...new Set([
+      ...degradedExecutors,
+      ...degradedIn([...availability.circuits.values()]),
+      ...availability.disabled,
+      ...unregistered,
+    ])])
     const implementer = lastMutator ?? request.implementationExecutor
     return {
       role: stage.role,
@@ -663,7 +848,7 @@ export class WorkflowRunner {
       independenceRequirement: profile.independencePolicy[objective.risk],
       priorAttempts,
       priorRouteFailures: Object.freeze([]),
-      degradedExecutors,
+      degradedExecutors: degraded,
       requiredCapabilities: Object.freeze([]),
       ...implementer === undefined || !READ_ONLY_ROLES.includes(stage.role)
         ? {}
