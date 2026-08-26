@@ -23,6 +23,15 @@ import type { IntegrationPolicyDefinition } from '@trick-harness/profile'
  * Database work is cloud-only against an isolated Supabase Preview Branch, with
  * no local or shared-dev fallback: a fallback path is exactly the path that
  * eventually runs a migration against something that matters.
+ *
+ * The Supabase rule names the project and no branch. A branch name written down
+ * here would be a standing execution target — the integration would have every
+ * reason to read it as "run the migration against this" — and the only branch
+ * worth naming is the ephemeral one belonging to the pull request currently in
+ * flight, which no file checked into the repository can know. So the policy
+ * states the requirement instead: the branch is the current PR's, and if one
+ * cannot be resolved or created the workflow is BLOCKED rather than pointed at
+ * whatever else happens to be reachable.
  */
 export const integrationPolicy: IntegrationPolicyDefinition = {
   enabled: [
@@ -50,8 +59,10 @@ export const integrationPolicy: IntegrationPolicyDefinition = {
       when: { integration: 'supabase-preview-branches' },
       use: {
         projectRef: 'uljaajwwnygopsyvwsre',
-        branch: 'neurovia-dev',
         execution: 'cloud-only',
+        previewBranchRequired: true,
+        previewBranchIdentity: 'pull-request',
+        onPreviewUnavailable: 'blocked',
         allowLocalFallback: false,
         allowSharedDevFallback: false,
       },
