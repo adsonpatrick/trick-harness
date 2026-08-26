@@ -426,6 +426,228 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 来源：[`packages/goal/goal/src/domain.ts:66`](../packages/goal/goal/src/domain.ts)
 
+### `harness/*`
+
+<a id="harnessblocker--log-only"></a>
+
+#### `harness/blocker` — log-only
+
+```ts persistence-catalog
+/** Something a person has to decide, recorded instead of guessed at. */
+'harness/blocker': {
+  workflowId: string
+  stageId?: string
+  kind: BlockerKind
+  summary: string
+  evidence: EvidenceRef[]
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:129`](../packages/core/journal/src/types.ts)
+
+<a id="harnesscircuit-breaker--log-only"></a>
+
+#### `harness/circuit-breaker` — log-only
+
+```ts persistence-catalog
+/** One executor circuit transition, as the breaker observed it. */
+'harness/circuit-breaker': {
+  workflowId: string
+  executor: string
+  from: 'AVAILABLE' | 'DEGRADED'
+  to: 'AVAILABLE' | 'DEGRADED'
+  reason: string
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:137`](../packages/core/journal/src/types.ts)
+
+<a id="harnessdelivery--log-only"></a>
+
+#### `harness/delivery` — log-only
+
+```ts persistence-catalog
+/**
+ * One delivery mutation, recorded from re-read state rather than intent.
+ * A commit SHA or PR number written here is what the world was observed to
+ * hold afterwards, so a restart can tell a completed push from an attempted one.
+ */
+'harness/delivery': {
+  workflowId: string
+  action: DeliveryAction
+  branch: string
+  commitSha?: string
+  prNumber?: number
+  prUrl?: string
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:120`](../packages/core/journal/src/types.ts)
+
+<a id="harnessdiagnosis--log-only"></a>
+
+#### `harness/diagnosis` — log-only
+
+```ts persistence-catalog
+/** One completed diagnosis, as the contract a repair is allowed to act on. */
+'harness/diagnosis': { workflowId: string; stageId: string; diagnosis: DiagnosisContract }
+```
+
+来源：[`packages/core/journal/src/types.ts:104`](../packages/core/journal/src/types.ts)
+
+<a id="harnessexecutor-end--log-only"></a>
+
+#### `harness/executor-end` — log-only
+
+```ts persistence-catalog
+/** One executor run ended, with its classified failure when it had one. */
+'harness/executor-end': {
+  workflowId: string
+  stageId: string
+  executor: string
+  outcome: ExecutorOutcome
+  failureClass?: string
+  durationMs: number
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:93`](../packages/core/journal/src/types.ts)
+
+<a id="harnessexecutor-start--log-only"></a>
+
+#### `harness/executor-start` — log-only
+
+```ts persistence-catalog
+/** One executor run began. */
+'harness/executor-start': {
+  workflowId: string
+  stageId: string
+  role: Role
+  executor: string
+  resolvedModel: string
+  permissionMode: RoutedPermissionMode
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:84`](../packages/core/journal/src/types.ts)
+
+<a id="harnessfinding--log-only"></a>
+
+#### `harness/finding` — log-only
+
+```ts persistence-catalog
+/** One triaged finding, carrying its evidence rather than its narration. */
+'harness/finding': { workflowId: string; stageId: string; finding: Finding }
+```
+
+来源：[`packages/core/journal/src/types.ts:102`](../packages/core/journal/src/types.ts)
+
+<a id="harnessroute-decision--log-only"></a>
+
+#### `harness/route-decision` — log-only
+
+```ts persistence-catalog
+/**
+ * The route one stage was dispatched on, with the reasons that produced it.
+ * `reasonCodes` and `policyVersion` are what make the decision explainable
+ * later without re-running the router against a policy that has since moved.
+ */
+'harness/route-decision': {
+  workflowId: string
+  stageId: string
+  role: Role
+  executor: string
+  semanticModelTier: string
+  resolvedModel: string
+  reasoningEffort?: string
+  permissionMode: RoutedPermissionMode
+  reasonCodes: string[]
+  policyVersion: string
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:54`](../packages/core/journal/src/types.ts)
+
+<a id="harnessroute-fallback--log-only"></a>
+
+#### `harness/route-fallback` — log-only
+
+```ts persistence-catalog
+/**
+ * A route taken around an executor that could not serve the run.
+ * Recorded separately from the decision it produced because a fallback is a
+ * fact about assurance, not a routing detail: it names what was asked for,
+ * what answered instead, and what that cost in independence.
+ */
+'harness/route-fallback': {
+  workflowId: string
+  stageId: string
+  requestedExecutor: string
+  fallbackExecutor: string
+  failureClass: string
+  independenceImpact: 'preserved' | 'reduced' | 'lost'
+  assuranceImpact: 'unchanged' | 'lowered'
+  reasonCodes: string[]
+  policyVersion: string
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:72`](../packages/core/journal/src/types.ts)
+
+<a id="harnessverdict--log-only"></a>
+
+#### `harness/verdict` — log-only
+
+```ts persistence-catalog
+/** One stage's verdict, and whether a weakened route lowered it. */
+'harness/verdict': {
+  workflowId: string
+  stageId: string
+  role: Role
+  verdict: WorkflowVerdict
+  summary: string
+  evidence: EvidenceRef[]
+  lowered?: boolean
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:106`](../packages/core/journal/src/types.ts)
+
+<a id="harnessworkflow-end--log-only"></a>
+
+#### `harness/workflow-end` — log-only
+
+```ts persistence-catalog
+/** The workflow stopped, terminally or because it was interrupted. */
+'harness/workflow-end': {
+  workflowId: string
+  state: WorkflowEndState
+  verdict: WorkflowVerdict
+  summary: string
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:145`](../packages/core/journal/src/types.ts)
+
+<a id="harnessworkflow-start--log-only"></a>
+
+#### `harness/workflow-start` — log-only
+
+```ts persistence-catalog
+/** One workflow accepted, with the objective it was accepted for. */
+'harness/workflow-start': {
+  workflowId: string
+  objectiveId: string
+  profileId: string
+  cwd: string
+  requirement: string
+  risk: Risk
+  workload: Workload
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:40`](../packages/core/journal/src/types.ts)
+
 ### `hook/*`
 
 <a id="hookinvoked--log-only"></a>

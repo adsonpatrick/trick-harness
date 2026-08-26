@@ -1,0 +1,333 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Mock } from 'vitest'
+
+import { KNOWN_SESSION_EVENT_TYPES, Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type {
+  DiagnosisContract,
+  EvidenceRef,
+  Finding,
+  RouteDecision,
+  WorkflowObjective,
+} from '@trick-harness/contracts'
+import {
+  HARNESS_EVENT_TYPES,
+  JournalError,
+  WorkflowJournal,
+  isHarnessEventType,
+  projectWorkflow,
+} from '../src/index.ts'
+
+const objective: WorkflowObjective = {
+  id: 'obj-1',
+  cwd: '/repo',
+  requirement: 'the delivery stage must not push to a protected branch',
+  risk: 'high',
+  workload: 'medium',
+  profileId: 'plurora',
+}
+
+const decision: RouteDecision = {
+  executor: 'opencode',
+  semanticModelTier: 'opencode.workhorse',
+  resolvedModel: 'MiMo V2.5',
+  permissionMode: 'workspace-write',
+  reasonCodes: ['role:implement', 'rule:implementation', 'tier:opencode.workhorse'],
+  policyVersion: 'plurora-v1.0.0',
+}
+
+const evidence: readonly EvidenceRef[] = [
+  { kind: 'test', locator: 'packages/core/journal/tests/journal.spec.ts', summary: 'focused suite green' },
+]
+
+const finding: Finding = {
+  id: 'f-1',
+  class: 'BUG',
+  raisedBy: 'review',
+  summary: 'the delivery stage accepts a protected branch',
+  confirmed: true,
+  evidence: [{ kind: 'diff', locator: 'src/delivery.ts', summary: 'no branch check before push' }],
+}
+
+const diagnosis: DiagnosisContract = {
+  symptom: 'a push to master is accepted',
+  reproduction: 'run the delivery stage with branch master',
+  expectedVsActual: 'expected refusal, observed a push',
+  observedEvidence: [{ kind: 'log', locator: 'run-4', summary: 'push accepted' }],
+  affectedBoundary: 'the delivery stage branch guard',
+  ruledOutHypotheses: ['the remote is misconfigured'],
+  rootCauseHypothesis: 'the guard runs after the push is constructed',
+  confidence: 'high',
+  regressionTestSeam: 'delivery.spec.ts',
+  minimalRepairSurface: 'src/delivery.ts',
+  unknowns: [],
+  securityRelevance: 'possible',
+}
+
+describe('the harness event vocabulary', () => {
+  it('declares the twelve events the lifecycle needs, in lifecycle order', () => {
+    expect([...HARNESS_EVENT_TYPES]).toStrictEqual([
+      'harness/workflow-start',
+      'harness/route-decision',
+      'harness/route-fallback',
+      'harness/executor-start',
+      'harness/executor-end',
+      'harness/finding',
+      'harness/diagnosis',
+      'harness/verdict',
+      'harness/delivery',
+      'harness/blocker',
+      'harness/circuit-breaker',
+      'harness/workflow-end',
+    ])
+  })
+
+  it('is known to the build that reads logs back', () => {
+    // The read path refuses a log holding a type outside this set, so a harness
+    // assembled without this package's declaration merge fails to reconstruct a
+    // session that used one rather than reading it back with facts missing.
+    for (const type of HARNESS_EVENT_TYPES) {
+      expect(KNOWN_SESSION_EVENT_TYPES.has(type), type).toBe(true)
+    }
+  })
+
+  it('recognises its own types and nothing else', () => {
+    expect(isHarnessEventType('harness/verdict')).toBe(true)
+    expect(isHarnessEventType('harness/telepathy')).toBe(false)
+    expect(isHarnessEventType('user/message')).toBe(false)
+  })
+})
+
+describe('writing and replaying one workflow', () => {
+  let session: Session
+  let flush: Mock<() => Promise<boolean>>
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s-1'))
+    flush = vi.fn(async () => Promise.resolve(true))
+    journal = new WorkflowJournal(session, 'wf-1', flush)
+  })
+
+  /** Project the session as a fresh process would: from the log alone. */
+  function replay(workflowId = 'wf-1'): ReturnType<typeof projectWorkflow> {
+    return projectWorkflow(session.events, workflowId)
+  }
+
+  it('serializes every event type without the append path rejecting a payload', async () => {
+    journal.start(objective)
+    journal.routeDecision({ stageId: 'impl-1', role: 'implement', decision })
+    await journal.routeFallback(
+      { stageId: 'impl-1', role: 'implement', decision: { ...decision, fallbackFrom: 'codex' } },
+      'usage-limit-exceeded',
+      { independence: 'reduced', assurance: 'lowered' },
+    )
+    journal.executorStart({ stageId: 'impl-1', role: 'implement', decision })
+    journal.executorEnd('impl-1', 'opencode', 'completed', 1_200)
+    journal.finding('review-1', finding)
+    await journal.diagnosis('debug-1', diagnosis)
+    await journal.verdict('verify-1', 'verify', 'PASS', 'focused suite green', evidence)
+    await journal.delivery({ action: 'push', branch: 'feat/x', commitSha: 'abc123' })
+    await journal.blocker({ stageId: 'refine-1', kind: 'product-decision', summary: 'which branch is protected', evidence })
+    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
+    await journal.end('completed', 'PASS', 'delivered')
+
+    const written = session.events.filter(event => event.type.startsWith('harness/')).map(event => event.type)
+    expect(written).toStrictEqual([...HARNESS_EVENT_TYPES])
+  })
+
+  it('replays the objective, routes, findings, diagnoses, verdicts and delivery from the log alone', async () => {
+    journal.start(objective)
+    journal.routeDecision({ stageId: 'impl-1', role: 'implement', decision })
+    journal.finding('review-1', finding)
+    await journal.diagnosis('debug-1', diagnosis)
+    await journal.verdict('verify-1', 'verify', 'PARTIAL', 'one finding open', evidence)
+    await journal.delivery({ action: 'pr-open', branch: 'feat/x', prNumber: 7, prUrl: 'https://example.invalid/pr/7' })
+
+    const state = replay()
+    expect(state.objective).toStrictEqual({
+      id: 'obj-1',
+      cwd: '/repo',
+      requirement: objective.requirement,
+      risk: 'high',
+      workload: 'medium',
+      profileId: 'plurora',
+    })
+    expect(state.routes).toStrictEqual([{
+      stageId: 'impl-1',
+      role: 'implement',
+      executor: 'opencode',
+      resolvedModel: 'MiMo V2.5',
+      permissionMode: 'workspace-write',
+      reasonCodes: decision.reasonCodes,
+      policyVersion: 'plurora-v1.0.0',
+    }])
+    expect(state.findings).toStrictEqual([finding])
+    expect(state.diagnoses).toStrictEqual([diagnosis])
+    expect(state.verdicts[0]?.verdict).toBe('PARTIAL')
+    expect(state.deliveries).toStrictEqual([{
+      action: 'pr-open',
+      branch: 'feat/x',
+      prNumber: 7,
+      prUrl: 'https://example.invalid/pr/7',
+    }])
+  })
+
+  it('marks the route a fallback amended, without losing the decision it replaced', async () => {
+    journal.routeDecision({ stageId: 'review-1', role: 'review', decision })
+    await journal.routeFallback(
+      { stageId: 'review-1', role: 'review', decision: { ...decision, fallbackFrom: 'codex' } },
+      'rate-limit',
+      { independence: 'lost', assurance: 'lowered' },
+    )
+    expect(replay().routes[0]?.fallbackFrom).toBe('codex')
+  })
+
+  it('reports the stages a restart must verify before retrying', () => {
+    journal.executorStart({ stageId: 'impl-1', role: 'implement', decision })
+    journal.executorEnd('impl-1', 'opencode', 'completed', 10)
+    journal.executorStart({ stageId: 'impl-2', role: 'implement', decision })
+
+    const state = replay()
+    expect(state.openStages).toStrictEqual(['impl-2'])
+    expect(state.executorStarts).toBe(2)
+    expect(state.end).toBeUndefined()
+  })
+
+  it('projects the last circuit state each executor was left in', () => {
+    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:rate-limit')
+    journal.circuitBreaker('codex', 'DEGRADED', 'AVAILABLE', 'manual-refresh')
+    journal.circuitBreaker('opencode', 'AVAILABLE', 'DEGRADED', 'failure:server-capacity')
+    expect(replay().circuits).toStrictEqual({ codex: 'AVAILABLE', opencode: 'DEGRADED' })
+  })
+
+  it('keeps one workflow out of another workflow`s projection', async () => {
+    journal.start(objective)
+    const other = new WorkflowJournal(session, 'wf-2', flush)
+    other.finding('review-1', finding)
+    await other.end('failed', 'FAIL', 'broken')
+
+    expect(replay().findings).toStrictEqual([])
+    expect(replay().end).toBeUndefined()
+    expect(replay('wf-2').findings).toStrictEqual([finding])
+    expect(replay('wf-2').end?.state).toBe('failed')
+  })
+
+  it('returns an empty projection for a workflow the log never saw', () => {
+    expect(replay('wf-absent')).toStrictEqual({
+      workflowId: 'wf-absent',
+      routes: [],
+      findings: [],
+      diagnoses: [],
+      verdicts: [],
+      deliveries: [],
+      blockers: [],
+      circuits: {},
+      openStages: [],
+      executorStarts: 0,
+    })
+  })
+})
+
+describe('what the journal refuses to lose', () => {
+  let session: Session
+  let flush: Mock<() => Promise<boolean>>
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s-2'))
+    flush = vi.fn(async () => Promise.resolve(true))
+    journal = new WorkflowJournal(session, 'wf-1', flush)
+  })
+
+  it('checkpoints exactly the facts a restart would otherwise act against', async () => {
+    journal.start(objective)
+    journal.routeDecision({ stageId: 'impl-1', role: 'implement', decision })
+    journal.executorStart({ stageId: 'impl-1', role: 'implement', decision })
+    journal.executorEnd('impl-1', 'opencode', 'completed', 5)
+    journal.finding('review-1', finding)
+    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:rate-limit')
+    expect(flush).not.toHaveBeenCalled()
+
+    await journal.routeFallback({ stageId: 'impl-1', role: 'implement', decision }, 'rate-limit', { independence: 'preserved', assurance: 'unchanged' })
+    await journal.diagnosis('debug-1', diagnosis)
+    await journal.verdict('verify-1', 'verify', 'PASS', 'green', evidence)
+    await journal.delivery({ action: 'commit', branch: 'feat/x', commitSha: 'abc' })
+    await journal.blocker({ kind: 'design-decision', summary: 'unclear', evidence })
+    await journal.end('completed', 'PASS', 'done')
+    expect(flush).toHaveBeenCalledTimes(6)
+  })
+
+  it('survives pruning everything that is not a durable harness fact', async () => {
+    journal.start(objective)
+    journal.finding('review-1', finding)
+    await journal.verdict('verify-1', 'verify', 'PARTIAL', 'one finding open', evidence)
+    const before = projectWorkflow(session.events, 'wf-1')
+
+    // Compaction and tool-result pruning act on the conversation surface. The
+    // durable facts live in their own events, so removing every other event
+    // must leave the projection identical.
+    const pruned = session.events.filter(event => event.type.startsWith('harness/'))
+    expect(projectWorkflow(pruned, 'wf-1')).toStrictEqual(before)
+    expect(projectWorkflow(pruned, 'wf-1').findings[0]?.evidence).toStrictEqual(finding.evidence)
+  })
+
+  it('refuses a log holding a harness fact this build cannot interpret', () => {
+    const foreign = [{ type: 'harness/telepathy', data: { workflowId: 'wf-1' } }] as unknown as SessionEvent[]
+    expect(() => projectWorkflow(foreign, 'wf-1')).toThrow(JournalError)
+    expect(() => projectWorkflow(foreign, 'wf-1')).toThrow(expect.objectContaining({ code: 'unknown-event' }))
+  })
+
+  it('ignores events that are not the journal`s to interpret', () => {
+    const foreign = [{ type: 'user/message', data: { workflowId: 'wf-1' } }] as unknown as SessionEvent[]
+    expect(projectWorkflow(foreign, 'wf-1').findings).toStrictEqual([])
+  })
+})
+
+describe('what never reaches the durable log', () => {
+  it('writes the declared fields of a finding and drops whatever else was attached', () => {
+    const session = Session.create(SessionId('s-3'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => Promise.resolve(true))
+    const leaky = {
+      ...finding,
+      transcript: 'the model reasoned at length about the branch guard',
+      toolCalls: [{ name: 'read', args: { path: '.env' } }],
+    } as unknown as Finding
+
+    journal.finding('review-1', leaky)
+
+    const logged = session.events.find(event => event.type === 'harness/finding')
+    const payload = logged?.data as { finding: Record<string, unknown> } | undefined
+    expect(Object.keys(payload?.finding ?? {}).sort()).toStrictEqual([
+      'class',
+      'confirmed',
+      'evidence',
+      'id',
+      'raisedBy',
+      'summary',
+    ])
+    expect(JSON.stringify(logged)).not.toContain('reasoned at length')
+    expect(JSON.stringify(logged)).not.toContain('.env')
+  })
+
+  it('writes the declared fields of a diagnosis and drops the reasoning that produced it', async () => {
+    const session = Session.create(SessionId('s-4'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => Promise.resolve(true))
+    const leaky = { ...diagnosis, chainOfThought: 'first I suspected the remote' } as unknown as DiagnosisContract
+
+    await journal.diagnosis('debug-1', leaky)
+
+    const logged = session.events.find(event => event.type === 'harness/diagnosis')
+    expect(JSON.stringify(logged)).not.toContain('first I suspected')
+    expect((logged?.data as { diagnosis: DiagnosisContract }).diagnosis.rootCauseHypothesis)
+      .toBe(diagnosis.rootCauseHypothesis)
+  })
+
+  it('omits an optional field rather than writing it empty', () => {
+    const session = Session.create(SessionId('s-5'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => Promise.resolve(true))
+    journal.executorEnd('impl-1', 'opencode', 'completed', 3)
+    const payload = session.events.find(event => event.type === 'harness/executor-end')?.data
+    expect(Object.hasOwn(payload as object, 'failureClass')).toBe(false)
+  })
+})

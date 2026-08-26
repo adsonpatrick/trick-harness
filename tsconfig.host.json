@@ -250,6 +250,7 @@
     { "path": "./packages/runtime-diagnostics/invariants" },
     { "path": "./packages/core/contracts" },
     { "path": "./packages/core/routing" },
+    { "path": "./packages/core/journal" },
     { "path": "./packages/core/executor" },
     { "path": "./packages/core/profile" },
     { "path": "./packages/composition/runtime" },

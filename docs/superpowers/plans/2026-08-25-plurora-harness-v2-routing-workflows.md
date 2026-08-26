@@ -140,14 +140,14 @@ harness/circuit-breaker
 harness/workflow-end
 ```
 
-- [ ] Write RED event serialization/replay tests.
-- [ ] Declare `SessionEventMap` extensions with exact payloads/JSDoc.
-- [ ] Implement journal append helpers using `session.append(...)`; flush at route fallback, diagnosis, verdict, delivery mutation, blocker, and terminal state.
-- [ ] Project route history, findings, diagnoses, PR/delivery state, verdicts and circuit state solely from session events.
-- [ ] Test compaction/context pruning cannot erase durable evidence references.
-- [ ] Test missing required Harness journal plugin fails reconstruction rather than silently ignoring facts.
-- [ ] No raw model reasoning/tool transcripts in event payloads; store bounded results/evidence refs only.
-- [ ] Add real-loader composition test and commit: `feat(trick): add durable workflow journal`.
+- [x] Write RED event serialization/replay tests.
+- [x] Declare `SessionEventMap` extensions with exact payloads/JSDoc.
+- [x] Implement journal append helpers using `session.append(...)`; flush at route fallback, diagnosis, verdict, delivery mutation, blocker, and terminal state.
+- [x] Project route history, findings, diagnoses, PR/delivery state, verdicts and circuit state solely from session events.
+- [x] Test compaction/context pruning cannot erase durable evidence references.
+- [x] Test missing required Harness journal plugin fails reconstruction rather than silently ignoring facts.
+- [x] No raw model reasoning/tool transcripts in event payloads; store bounded results/evidence refs only.
+- [x] Add real-loader composition test and commit: `feat(trick): add durable workflow journal`.
 
 ---
 
