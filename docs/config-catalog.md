@@ -3352,6 +3352,7 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@deepseek-ai/dsh-typert-registry` ([`packages/typert/registry/src/index.ts`](../packages/typert/registry/src/index.ts))
 - `@trick-harness/composition` ([`packages/composition/runtime/src/index.ts`](../packages/composition/runtime/src/index.ts))
 - `@trick-harness/contracts` ([`packages/core/contracts/src/index.ts`](../packages/core/contracts/src/index.ts))
+- `@trick-harness/engineering-workflow` ([`packages/core/engineering-workflow/src/index.ts`](../packages/core/engineering-workflow/src/index.ts))
 - `@trick-harness/executor` ([`packages/core/executor/src/index.ts`](../packages/core/executor/src/index.ts))
 - `@trick-harness/journal` ([`packages/core/journal/src/index.ts`](../packages/core/journal/src/index.ts))
 - `@trick-harness/profile` ([`packages/core/profile/src/index.ts`](../packages/core/profile/src/index.ts))

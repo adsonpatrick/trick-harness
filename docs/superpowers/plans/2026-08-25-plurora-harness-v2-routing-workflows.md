@@ -158,12 +158,12 @@ harness/workflow-end
 
 **Produces:** lifecycle controller/state machine consuming an approved objective, profile, route, provider and validated stage results.
 
-- [ ] Write RED state-machine tests for normal implement→verify→delivery/review flow, cancellation, executor error, BLOCKED product decision, and restart projection.
-- [ ] Implement one operation lifecycle owner with explicit AbortController/run registry and teardown.
-- [ ] Enforce workflow budgets from `HarnessProfile.workflowPolicy`.
-- [ ] On restart after a prior nonterminal durable workflow exists but no owned live run exists, project it as interrupted/inconclusive and verify world state before retry.
-- [ ] Add role-specific permission/route request construction; read-only roles request read-only provider mode.
-- [ ] Return compact stage facts, not child transcript.
+- [x] Write RED state-machine tests for normal implement→verify→delivery/review flow, cancellation, executor error, BLOCKED product decision, and restart projection.
+- [x] Implement one operation lifecycle owner with explicit AbortController/run registry and teardown.
+- [x] Enforce workflow budgets from `HarnessProfile.workflowPolicy`.
+- [x] On restart after a prior nonterminal durable workflow exists but no owned live run exists, project it as interrupted/inconclusive and verify world state before retry.
+- [x] Add role-specific permission/route request construction; read-only roles request read-only provider mode.
+- [x] Return compact stage facts, not child transcript.
 - [ ] Commit: `feat(trick): add deterministic engineering workflow runtime`.
 
 ---

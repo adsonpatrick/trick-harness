@@ -23,6 +23,7 @@
     "packages/core/contracts/README.md",
     "packages/core/journal/README.md",
     "packages/core/routing/README.md",
+    "packages/core/engineering-workflow/README.md",
     "packages/providers/codex/README.md",
     "packages/providers/opencode/README.md",
     "profiles/"

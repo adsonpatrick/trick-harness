@@ -36,6 +36,7 @@ const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/core/contracts': 'The package declares the workflow vocabulary and the parsers that read it back; nothing here is rendered into a request, and the stages that do own their own prompts.',
   'packages/core/routing': 'The package is a pure policy function selecting an executor and a semantic tier; it renders nothing and contacts no product, and the selected executor owns every model-facing surface.',
   'packages/core/journal': 'The package appends and replays durable workflow events; it renders nothing and contacts no product, and by construction stores no model transcript.',
+  'packages/core/engineering-workflow': 'The package plans and dispatches stages and reduces each result to compact facts; it composes no prompt of its own, and the caller supplies both the task text and the interpreter.',
   'packages/providers/opencode': 'The provider hands one task string to the OpenCode product, which owns every model-facing surface; the bounded final result is returned to the caller rather than rendered into a request.',
   'packages/providers/codex': 'The provider hands one task string to the Codex product, which owns every model-facing surface; the bounded final result is returned to the caller rather than rendered into a request.',
   'packages/core/scope': 'The package is a model-agnostic registration and lifecycle primitive; model-facing consumers own any context selection.',

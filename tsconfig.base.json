@@ -58,6 +58,8 @@
       "@trick-harness/journal": ["./packages/core/journal/src/index.ts"],
       "@trick-harness/journal/invariant": ["./packages/core/journal/src/invariant.ts"],
       "@trick-harness/journal/types": ["./packages/core/journal/src/types.ts"],
+      "@trick-harness/engineering-workflow": ["./packages/core/engineering-workflow/src/index.ts"],
+      "@trick-harness/engineering-workflow/invariant": ["./packages/core/engineering-workflow/src/invariant.ts"],
       "@deepseek-ai/dsh-tool-call-timeout-policy": ["./packages/guard/timeout-policy/src"],
       "@deepseek-ai/dsh-tool-call-timeout-policy/invariant": ["./packages/guard/timeout-policy/src/invariant.ts"],
       "@deepseek-ai/dsh-typert-registry": ["./packages/typert/registry/src/index.ts"],

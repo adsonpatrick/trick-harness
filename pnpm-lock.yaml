@@ -3752,6 +3752,33 @@ importers:
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
 
+  packages/core/engineering-workflow:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:^
+        version: link:../session
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+      '@trick-harness/executor':
+        specifier: workspace:^
+        version: link:../executor
+      '@trick-harness/journal':
+        specifier: workspace:^
+        version: link:../journal
+      '@trick-harness/profile':
+        specifier: workspace:^
+        version: link:../profile
+      '@trick-harness/routing':
+        specifier: workspace:^
+        version: link:../routing
+
   packages/core/executor:
     devDependencies:
       '@deepseek-ai/cordis':
