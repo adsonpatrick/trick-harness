@@ -33,7 +33,7 @@
 
 Use scalar declarative fields such as:
 
-```ts
+```text
 use: {
   projectRef: 'uljaajwwnygopsyvwsre',
   execution: 'cloud-only',

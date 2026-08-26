@@ -41,13 +41,13 @@
 - `WorkflowOutcome.objectiveId` remains the logical objective id.
 - `HarnessCompositionOptions` gains:
 
-```ts
+```text
 readonly workflowIdFactory?: () => string
 ```
 
 Default factory:
 
-```ts
+```text
 import { randomUUID } from 'node:crypto'
 const workflowIdFactory = options.workflowIdFactory ?? randomUUID
 ```
@@ -67,7 +67,7 @@ workflowIdFactory: () => ids.shift()!
 
 Run the same `WorkflowObjective` twice and assert:
 
-```ts
+```text
 expect(first.workflowId).toBe('wf-101')
 expect(second.workflowId).toBe('wf-102')
 expect(first.objectiveId).toBe(second.objectiveId)
@@ -85,7 +85,7 @@ Expected: current composition uses `objective.id` as workflow id, so the second 
 
 Replace construction equivalent to:
 
-```ts
+```text
 new WorkflowJournal(session, objective.id, flush)
 new WorkflowRunner(objective.id, ...)
 ```
@@ -98,7 +98,7 @@ Before starting a generated id, check both live run ownership and durable Sessio
 
 Use a stable error such as:
 
-```ts
+```text
 new BundleCompositionError(`workflow id ${JSON.stringify(workflowId)} already exists`)
 ```
 
@@ -126,7 +126,7 @@ git commit -m "fix(trick): separate workflow run and objective identity"
 
 Replace starter semantics that derive identity from the objective with a returned run handle:
 
-```ts
+```text
 export interface ControlStartedWorkflow {
   readonly workflowId: string
   readonly outcome: Promise<WorkflowOutcome>
@@ -184,7 +184,7 @@ git commit -m "fix(trick): key control workflows by generated run id"
 
 Introduce one async journal API that appends route/start facts and guarantees they are flushed before return. Example contract:
 
-```ts
+```text
 async beginExecutor(input: {
   readonly stageId: string
   readonly role: Role
@@ -207,7 +207,7 @@ Do not dispatch the provider until it resolves successfully.
 
 In `workflow.spec.ts`, make `flush` return a Promise controlled by the test and provider `start` a spy.
 
-```ts
+```text
 const gate = deferred<boolean>()
 flush.mockReturnValueOnce(gate.promise)
 const running = runner.run(...)
@@ -228,7 +228,7 @@ Return `false` or reject according to the existing `JournalFlush` contract. Asse
 
 The old sync sequence:
 
-```ts
+```text
 journal.routeDecision(...)
 journal.executorStart(...)
 await executors.start(...)
@@ -291,14 +291,14 @@ interface CapabilityEndEvent {
 
 Journal API:
 
-```ts
+```text
 beginCapability(...): Promise<void> // append + durable flush
 endCapability(...): Promise<void>
 ```
 
 Projection gains:
 
-```ts
+```text
 readonly openCapabilities: readonly string[]
 ```
 
@@ -310,7 +310,7 @@ Assert both event types are in `KNOWN_SESSION_EVENT_TYPES` and survive prune/rep
 
 Write `capability-start` with no end and assert:
 
-```ts
+```text
 expect(assessRestart(projectWorkflow(...)).requiresWorldVerification).toBe(true)
 ```
 

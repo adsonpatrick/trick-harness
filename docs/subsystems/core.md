@@ -762,11 +762,28 @@ start(request: ExecutorStartRequest): Promise<ExecutorResult>
  */
 activeRuns(): number
 
-/** Abort every run in flight when the owning context stops. */
-stop(): void
+/**
+ * Report what this runtime has seen of its providers' teardown.
+ * @returns the standing cleanup evidence.
+ */
+cleanupReport(): ExecutorCleanupReport
 
-/** Unregister every provider and abort every run in flight. */
-dispose(): void
+/**
+ * End every run in flight when the owning context stops, and wait for them.
+ *
+ * Returned rather than fired off, so Cordis holds the fiber open until the
+ * runtime is actually quiet: a context that finished stopping while a
+ * provider was still killing a process tree would leave that tree orphaned
+ * with nothing left to attribute it to.
+ * @returns Nothing; resolves when the runtime is quiet.
+ */
+stop(): Promise<void>
+
+/**
+ * Unregister every provider, abort every run in flight, and wait for them.
+ * @returns Nothing; resolves when the runtime is quiet.
+ */
+dispose(): Promise<void>
 ```
 
 Source: [`packages/core/executor/src/index.ts`](../../packages/core/executor/src/index.ts)

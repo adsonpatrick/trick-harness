@@ -61,7 +61,7 @@ Unknown native categories become `other`, `availability: false`.
 
 - [ ] **Step 1: Write RED provider tests in `packages/providers/codex/tests/codex.spec.ts`**
 
-```ts
+```text
 it.each([
   ['usageLimitExceeded', 'usage-limit-exceeded', true],
   ['sessionBudgetExceeded', 'session-budget-exceeded', true],
@@ -122,7 +122,7 @@ git commit -m "fix(trick): normalize executor failure categories"
 
 Add a deterministic helper equivalent to:
 
-```ts
+```text
 export function isHeavyWrite(context: RoutingContext): boolean {
   return (
     (context.role === 'implement' || context.role === 'repair' || context.role === 'qa') &&
@@ -131,14 +131,11 @@ export function isHeavyWrite(context: RoutingContext): boolean {
 }
 ```
 
-The invariant this task enforces is about the *tier*, not about staying on one
-product. Heavy work must never be answered by a cheap reasoning tier just
-because the workhorse went away; it may be answered by Codex when Codex can
-actually take the work, and it must block when nothing can.
+The invariant this task enforces is about the *tier*, not about staying on one product. Heavy work must never be answered by a cheap reasoning tier just because the workhorse went away; it may be answered by Codex when Codex can actually take the work, and it must block when nothing can.
 
 - [ ] **Step 1: Add RED heavy-outage tests in `profiles/plurora/tests/routing.spec.ts`**
 
-```ts
+```text
 it.each(['implement', 'repair', 'qa'] as const)(
   'moves heavy %s work to Codex when only OpenCode is degraded',
   (role) => {
@@ -165,11 +162,9 @@ it('blocks heavy work when no executor is usable', () => {
 
 - [ ] **Step 2: Add RED credential-degradation test**
 
-An executor without a usable credential must reach `route` already in
-`degradedExecutors`, so the outcome is a stated block rather than a failed
-dispatch:
+An executor without a usable credential must reach `route` already in `degradedExecutors`, so the outcome is a stated block rather than a failed dispatch:
 
-```ts
+```text
 expect(degradedFor({ codexCredential: 'missing' })).toContain('codex')
 ```
 
@@ -181,16 +176,11 @@ pnpm vitest run profiles/plurora/tests/routing.spec.ts packages/core/routing/tes
 
 - [ ] **Step 4: Implement usable-executor fallback validation**
 
-Apply the check after identifying the primary route and before accepting any
-automatic fallback decision: a fallback candidate is eligible only when it is
-neither degraded nor uncredentialed. Keep concrete model ids out of
-`WorkflowRunner`.
+Apply the check after identifying the primary route and before accepting any automatic fallback decision: a fallback candidate is eligible only when it is neither degraded nor uncredentialed. Keep concrete model ids out of `WorkflowRunner`.
 
 - [ ] **Step 5: Keep the Plurora `opencode-unavailable` fallback observable**
 
-The row stands. What this step adds is that it can never fire silently: the
-decision carries `fallback:opencode`, and `independence:unsatisfied` is recorded
-when the fallback leaves no independent executor.
+The row stands. What this step adds is that it can never fire silently: the decision carries `fallback:opencode`, and `independence:unsatisfied` is recorded when the fallback leaves no independent executor.
 
 - [ ] **Step 6: Run GREEN and commit**
 
@@ -215,7 +205,7 @@ git commit -m "fix(plurora): fall back only to a usable executor"
 - Consumes: normalized `ExecutorFailure`, `openCircuit`, `recordFailure`, `recordSuccess`, `degradedExecutors`, `route`, `WorkflowJournal`.
 - Produces: one per-workflow circuit map and a bounded rerouting loop for the same `StageSpec`.
 
-```ts
+```text
 const circuits = new Map<string, ExecutorCircuit>()
 ```
 
@@ -223,7 +213,7 @@ const circuits = new Map<string, ExecutorCircuit>()
 
 In `packages/core/engineering-workflow/tests/workflow.spec.ts`, make the primary judging provider fail once:
 
-```ts
+```text
 reviewer.start = vi.fn().mockResolvedValueOnce({
   status: 'error',
   output: '',
@@ -241,7 +231,7 @@ Register the policy-authorized fallback provider and assert completed workflow, 
 
 Return:
 
-```ts
+```text
 failure: {
   category: 'bad-request',
   availability: false,
@@ -309,7 +299,7 @@ git commit -m "fix(trick): route live availability failures through fallback"
 
 **Interfaces:**
 
-```ts
+```text
 export interface StageRouteOverride {
   readonly role: Role
   readonly executor: string
@@ -320,7 +310,7 @@ export interface StageRouteOverride {
 
 `WorkflowRunRequest` gains:
 
-```ts
+```text
 readonly routeOverride?: StageRouteOverride
 ```
 

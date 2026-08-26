@@ -560,6 +560,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   ConsumeTokenRequest: 'event-local request contract is owned by packages/client/ui-input-trigger/src/types.ts',
   InsertTextRequest: 'event-local request contract is owned by packages/client/ui-input-trigger/src/types.ts',
   AgentHandle: 'agent ownership handle is owned by packages/core/agent/README.md',
+  ExecutorCleanupReport: 'executor teardown evidence is owned by packages/core/executor/README.md',
   ExecutorProvider: 'executor provider contract is owned by packages/core/executor/README.md',
   ExecutorRegistration: 'executor registration handle is owned by packages/core/executor/README.md',
   ExecutorResult: 'bounded executor result is owned by packages/core/executor/README.md',

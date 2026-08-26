@@ -37,7 +37,7 @@
 
 Add a preflight assertion before `WorkflowJournal`/`WorkflowRunner` construction:
 
-```ts
+```text
 function assertObjectiveProfile(objective: WorkflowObjective, profile: HarnessProfile): void {
   if (objective.profileId !== profile.id) {
     throw new BundleCompositionError(
@@ -51,7 +51,7 @@ function assertObjectiveProfile(objective: WorkflowObjective, profile: HarnessPr
 
 Compose Plurora profile and pass `profileId: 'other'`:
 
-```ts
+```text
 await expect(harness.run(objective)).rejects.toThrow(BundleCompositionError)
 expect(providerStart).not.toHaveBeenCalled()
 expect(session.events.some(event => event.type === 'harness/workflow-start')).toBe(false)
@@ -89,7 +89,7 @@ git commit -m "fix(trick): bind workflow objective to composed profile"
 
 Define narrow core-owned ports:
 
-```ts
+```text
 export interface DeliveryCapabilityPort {
   deliver(input: WorkflowDeliveryInput, signal: AbortSignal): Promise<WorkflowDeliveryResult>
 }
@@ -110,7 +110,7 @@ Concrete integration classes are adapted by composition; workflow core does not 
 
 Supply a fake delivery capability and executor providers for implementation/verification. Assert:
 
-```ts
+```text
 expect(deliveryCapability.deliver).toHaveBeenCalledOnce()
 expect(executorStart).not.toHaveBeenCalledWith(expect.objectContaining({
   task: expect.stringContaining('delivery'),
@@ -163,7 +163,7 @@ export interface WorkflowDatabaseChange {
 
 `WorkflowRunRequest` gains:
 
-```ts
+```text
 readonly databaseChange?: WorkflowDatabaseChange
 ```
 

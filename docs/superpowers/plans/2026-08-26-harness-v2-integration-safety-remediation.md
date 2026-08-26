@@ -54,7 +54,7 @@ Canonical enabled ids:
 
 Supabase profile policy stores the parent ref only:
 
-```ts
+```text
 {
   parentProjectRef: 'uljaajwwnygopsyvwsre',
   execution: 'cloud-only',
@@ -69,7 +69,7 @@ Compose the real `pluroraProfile` with Supabase integration options and control-
 
 - [ ] **Step 2: Add RED profile assertions**
 
-```ts
+```text
 expect(pluroraProfile.integrationPolicy.enabled).toContain('supabase-preview')
 expect(pluroraProfile.integrationPolicy.enabled).toContain('control-server')
 expect(JSON.stringify(pluroraProfile.integrationPolicy)).not.toContain('supabase-preview-branches')
@@ -151,13 +151,13 @@ git commit -m "fix(trick): await GitHub delivery process-tree quiescence"
 
 **Interfaces:**
 
-```ts
+```text
 export type DeliveryRecordObserver = (record: DeliveryRecord) => Promise<void>
 ```
 
 `GitHubDeliveryOptions` gains:
 
-```ts
+```text
 readonly onRecord?: DeliveryRecordObserver
 ```
 

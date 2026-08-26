@@ -254,7 +254,7 @@ Low-risk work may scale QA/security according to profile policy, but the orderin
 
 **Required correction:** add a single-consumption stage override contract:
 
-```ts
+```text
 interface StageRouteOverride {
   readonly role: Role
   readonly executor: string
@@ -378,7 +378,7 @@ Provider packages retain native taxonomy internally; one adapter maps native cat
 
 ### 8.2 Workflow capabilities
 
-```ts
+```text
 export interface GitHubDeliveryPort {
   deliver(request: DeliveryRequest): Promise<DeliveryOutcome>
 }
@@ -399,7 +399,7 @@ The runner receives these ports from composition. Tests use fakes with the same 
 
 Extend the request with bounded runtime decisions:
 
-```ts
+```text
 export interface WorkflowRunRequest {
   readonly objective: WorkflowObjective
   readonly routeOverride?: StageRouteOverride
@@ -417,7 +417,7 @@ No database credentials or provider secrets are part of the request.
 
 Composition owns:
 
-```ts
+```text
 readonly workflowIdFactory?: () => string
 ```
 
@@ -425,7 +425,7 @@ Default: `crypto.randomUUID()`.
 
 ### 8.5 Security repair policy
 
-```ts
+```text
 export interface SecurityRepairPolicy {
   authorize(input: {
     readonly finding: Finding

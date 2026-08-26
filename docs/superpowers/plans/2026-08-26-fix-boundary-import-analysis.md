@@ -60,19 +60,15 @@
 
 - [ ] Add multiline static import case:
 
-```ts
+```text
 import {
   pluroraProfile,
 } from '../../../../profiles/plurora/profile.ts'
 ```
 
 - [ ] Add multiline `export { ... } from` case.
-- [ ] Add multiline literal `import(
-'../../../../profiles/plurora/profile.ts'
-)` case.
-- [ ] Add multiline literal `require(
-'../../../../profiles/plurora/profile.ts'
-)` case.
+- [ ] Add multiline literal `import('../../../../profiles/plurora/profile.ts')` case, written across several physical lines in the fixture.
+- [ ] Add multiline literal `require('../../../../profiles/plurora/profile.ts')` case, written across several physical lines in the fixture.
 - [ ] Add negative cases for comments and string literals containing import-like text.
 - [ ] Assert violation line numbers refer to the syntax node/module specifier line.
 - [ ] Run `pnpm vitest run scripts/check-trick-boundaries.spec.ts`; expected: at least multiline cases FAIL against current regex scan.
