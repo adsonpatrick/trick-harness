@@ -2,7 +2,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
-import { DEFAULT_MODEL_REGISTRY, MATCHABLE_FACTS } from './index.ts'
+import { AVAILABILITY_FAILURES, DEFAULT_MODEL_REGISTRY, MATCHABLE_FACTS, QUALITY_FAILURES } from './index.ts'
 
 const PACKAGE_NAME = '@trick-harness/routing'
 
@@ -40,6 +40,40 @@ const EXPECTED_FACTS = [
   'unavailable',
 ]
 
+/**
+ * The failures that may be routed around, restated; see {@link EXPECTED_TIERS}.
+ *
+ * This is the set with teeth. A category moved from the quality list to this
+ * one turns a wrong answer into a recoverable outage, which is exactly the
+ * substitution the harness is built to prevent — so the membership is pinned
+ * here rather than trusted to whoever edits the vocabulary next.
+ */
+const EXPECTED_AVAILABILITY_FAILURES = [
+  'usage-limit-exceeded',
+  'rate-limit',
+  'server-capacity',
+  'executor-unavailable',
+  'auth-temporarily-unavailable',
+  'transient-infra',
+]
+
+/** The failures that may never be routed around; see {@link EXPECTED_AVAILABILITY_FAILURES}. */
+const EXPECTED_QUALITY_FAILURES = [
+  'context-window-exceeded',
+  'bad-request',
+  'sandbox-denied',
+  'cyber-policy-refusal',
+  'wrong-answer',
+  'failed-verification',
+]
+
+/** Compare a shipped vocabulary against its independently restated expectation. */
+function pin(fail: InvariantFailure, label: string, actual: readonly string[], expected: readonly string[]): void {
+  if (actual.length !== expected.length || !actual.every((item, index) => item === expected[index])) {
+    fail(`${label} no longer matches the set pinned here: got ${actual.join(', ')}`)
+  }
+}
+
 /** Check the routing mechanism's own shipped tables. */
 const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
   for (const tier of EXPECTED_TIERS) {
@@ -61,6 +95,13 @@ const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
     // matching on a fact nobody supplies never fires, and a rule that never
     // fires reads exactly like one that always agrees.
     fail(`the matchable routing facts no longer match the set pinned here: got ${MATCHABLE_FACTS.join(', ')}`)
+  }
+  pin(fail, 'the availability failure categories', AVAILABILITY_FAILURES, EXPECTED_AVAILABILITY_FAILURES)
+  pin(fail, 'the quality failure categories', QUALITY_FAILURES, EXPECTED_QUALITY_FAILURES)
+  for (const failure of AVAILABILITY_FAILURES) {
+    if ((QUALITY_FAILURES as readonly string[]).includes(failure)) {
+      fail(`failure category ${JSON.stringify(failure)} is classified as both availability and quality`)
+    }
   }
 }
 

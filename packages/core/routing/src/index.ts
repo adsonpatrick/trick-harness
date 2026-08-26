@@ -17,6 +17,7 @@ import { MATCHABLE_FACTS, RoutingError } from './types.ts'
 import type { ModelRegistry, PolicyRule, RoutingFacts, RoutingPolicy } from './types.ts'
 
 export * from './types.ts'
+export * from './availability.ts'
 
 /**
  * The tier aliases this repository ships, as of 2026-08-25.
@@ -227,6 +228,54 @@ function independentAlternative(
 }
 
 /**
+ * Route around an executor the breaker has marked degraded.
+ *
+ * The fallback table is the profile's, not the router's: which product covers
+ * for which is a policy decision, and inventing a substitute here would route a
+ * run to a product the project never authorised. When the role is one that
+ * certifies somebody else's work, a substitute that is not the implementer is
+ * preferred — an outage is a poor reason to let the author mark its own
+ * homework. A degraded executor with no authorised substitute is refused rather
+ * than dispatched, because the one thing already known about it is that it
+ * cannot serve the run.
+ * @param context - The run being routed.
+ * @param policy - The policy in force.
+ * @param facts - The flattened routing facts.
+ * @param chosen - The decision the primary table produced.
+ * @returns The fallback decision, or undefined when the primary route stands.
+ * @throws {RoutingError} when the primary executor is degraded and no fallback matches.
+ */
+function fallbackAlternative(
+  context: RoutingContext,
+  policy: RoutingPolicy,
+  facts: RoutingFacts,
+  chosen: RouteDecision,
+): RouteDecision | undefined {
+  if (!context.degradedExecutors.includes(chosen.executor)) return undefined
+
+  const usable = policy.fallbackRules.filter((rule) => {
+    const executor = rule.use['executor']
+    return matches(rule, { ...facts, unavailable: chosen.executor })
+      && typeof executor === 'string'
+      && executor !== chosen.executor
+      && !context.degradedExecutors.includes(executor)
+  })
+  const implementer = context.implementationExecutor
+  const independent = READ_ONLY_ROLES.includes(context.role) && implementer !== undefined
+    ? usable.find(rule => rule.use['executor'] !== implementer)
+    : undefined
+  const rule = independent ?? usable[0]
+  if (rule === undefined) {
+    throw new RoutingError(
+      'no-fallback',
+      `executor ${JSON.stringify(chosen.executor)} is degraded and no fallback rule covers role ${JSON.stringify(context.role)}`,
+    )
+  }
+  const decision = decide(context, policy, rule, [`role:${context.role}`, `fallback:${chosen.executor}`])
+  return Object.freeze({ ...decision, fallbackFrom: chosen.executor })
+}
+
+/**
  * Route one run.
  * @param context - Everything the decision is allowed to depend on.
  * @param policy - The versioned rule table and its model registry.
@@ -242,10 +291,15 @@ export function route(context: RoutingContext, policy: RoutingPolicy): RouteDeci
   if (rule === undefined) {
     throw new RoutingError('no-rule', `no routing rule matches role ${JSON.stringify(context.role)}`)
   }
-  const chosen = decide(context, policy, rule, [`role:${context.role}`])
+  const primary = decide(context, policy, rule, [`role:${context.role}`])
 
-  const independent = independentAlternative(context, policy, facts, chosen)
-  if (independent !== undefined) return independent
+  const fallback = fallbackAlternative(context, policy, facts, primary)
+  const chosen = fallback ?? primary
+
+  if (fallback === undefined) {
+    const independent = independentAlternative(context, policy, facts, chosen)
+    if (independent !== undefined) return independent
+  }
   if (
     context.implementationExecutor === chosen.executor
     && context.independenceRequirement !== 'fresh-context'

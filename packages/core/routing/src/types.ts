@@ -65,7 +65,15 @@ export type RoutingFacts = Readonly<Partial<Record<MatchableFact, string | numbe
 /** A policy the router cannot apply, or a context it cannot route. */
 export class RoutingError extends Error {
   /** Machine-readable cause, so a caller can distinguish policy bugs from bad input. */
-  readonly code: 'unknown-fact' | 'unknown-tier' | 'no-rule' | 'incomplete-rule' | 'permission-escalation' | 'invalid-override'
+  readonly code:
+    | 'unknown-fact'
+    | 'unknown-tier'
+    | 'no-rule'
+    | 'incomplete-rule'
+    | 'permission-escalation'
+    | 'invalid-override'
+    | 'unknown-failure'
+    | 'no-fallback'
 
   /**
    * @param code - Machine-readable cause.

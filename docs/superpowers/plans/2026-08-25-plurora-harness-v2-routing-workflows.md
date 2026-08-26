@@ -108,13 +108,13 @@ codex.frontier          -> GPT-5.6 Sol
 AVAILABLE -> DEGRADED -> AVAILABLE
 ```
 
-- [ ] Write RED tests for `usageLimitExceeded` and verified Codex rate/server capacity categories producing fallback.
-- [ ] Write RED tests proving context-window/bad-request/sandbox/cyber-policy/wrong-answer/failed-verification are not quota fallback.
-- [ ] Implement generic fallback/circuit-breaker mechanism consuming profile policy.
-- [ ] Implement circuit breaker with explicit transition events, configurable bounded probe/cooldown policy, and explicit/manual refresh path.
-- [ ] Prove review fallback prefers an executor different from the implementer when possible.
-- [ ] For critical security assurance, test that fallback may lower assurance and therefore return `PARTIAL/BLOCKED` rather than PASS.
-- [ ] Commit: `feat(trick): add routing fallback and quota circuit breaker`.
+- [x] Write RED tests for `usageLimitExceeded` and verified Codex rate/server capacity categories producing fallback.
+- [x] Write RED tests proving context-window/bad-request/sandbox/cyber-policy/wrong-answer/failed-verification are not quota fallback.
+- [x] Implement generic fallback/circuit-breaker mechanism consuming profile policy.
+- [x] Implement circuit breaker with explicit transition events, configurable bounded probe/cooldown policy, and explicit/manual refresh path.
+- [x] Prove review fallback prefers an executor different from the implementer when possible.
+- [x] For critical security assurance, test that fallback may lower assurance and therefore return `PARTIAL/BLOCKED` rather than PASS.
+- [x] Commit: `feat(trick): add routing fallback and quota circuit breaker`.
 
 ---
 
