@@ -10,7 +10,7 @@
  * @packageDocumentation
  */
 
-import { AUTO_REPAIRABLE_FINDINGS, READ_ONLY_ROLES } from '@trick-harness/contracts'
+import { READ_ONLY_ROLES } from '@trick-harness/contracts'
 import type {
   DiagnosisContract,
   EvidenceRef,
@@ -33,6 +33,7 @@ import type { RoutingContext } from '@trick-harness/contracts'
 
 export type * from './types.ts'
 export * from './repair.ts'
+export * from './triage.ts'
 
 import {
   assessRepairCompletion,
@@ -42,6 +43,7 @@ import {
   validateDiagnosis,
 } from './repair.ts'
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
+import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type {
   RestartAssessment,
@@ -93,8 +95,10 @@ function writeVolumeFor(role: Role): WriteVolume {
  *
  * The plan is a function of the objective's risk alone, so the same objective
  * plans the same way on every machine and in every replay. Higher risk adds
- * certification rather than changing what implementation does: a review at
- * high, and a security stage on top of it at critical.
+ * certification rather than changing what implementation does: QA from medium,
+ * an independent code review at high, and a security stage on top of both at
+ * critical. Below medium, QA is proportionate rather than absent — the work
+ * folds into verification instead of buying a separate stage for it.
  * @param objective - The approved objective.
  * @returns The stages in the order they will run.
  */
@@ -105,6 +109,9 @@ export function planStages(objective: WorkflowObjective): readonly StageSpec[] {
   ]
   if (objective.risk === 'high' || objective.risk === 'critical') {
     stages.push({ stageId: 'review-1', role: 'review' })
+  }
+  if (objective.risk !== 'low') {
+    stages.push({ stageId: 'qa-1', role: 'qa' })
   }
   if (objective.risk === 'critical') {
     stages.push({ stageId: 'security-1', role: 'security' })
@@ -184,6 +191,8 @@ interface Dispatched {
    * return is what the run carries forward.
    */
   readonly result: ExecutorResult | undefined
+  /** Why the stage was never started, when routing could not honour policy. */
+  readonly refusal: string | undefined
 }
 
 /** The blocker kind each repair-gate refusal is recorded as. */
@@ -275,7 +284,7 @@ export class WorkflowRunner {
     const stages: StageFacts[] = []
     let repairCycles = 0
     let executorStarts = 0
-    let verifications = 1
+    const attempts = new Map<Role, number>()
     // The repair session: one defect, what a debugger established about it, and
     // what the gate allowed. All three are cleared when a repair stage ends, so
     // the next cycle cannot inherit the last cycle's authority.
@@ -311,6 +320,11 @@ export class WorkflowRunner {
       executorStarts += 1
       const dispatched = await this.#dispatch(stage, request, signal, repairCycles, lastMutator)
       stages.push(dispatched.facts)
+      if (dispatched.refusal !== undefined) {
+        return await this.#blocked(
+          objective, stages, repairCycles, executorStarts, 'external', dispatched.refusal,
+        )
+      }
       if (permissionModeFor(stage.role) === 'workspace-write' && !dispatched.canceled) {
         lastMutator = dispatched.facts.executor
       }
@@ -324,17 +338,26 @@ export class WorkflowRunner {
           dispatched.facts.summary)
       }
 
-      const { verdict } = dispatched.facts
+      // Triage has the last word on a stage's verdict. A stage may report what it
+      // concluded; it may not report a PASS over a confirmed material defect, and
+      // it may not carry on while a decision nobody made is outstanding.
+      const triaged = triage(dispatched.facts.findings)
+      const reconciled = reconcileVerdict(dispatched.facts.verdict, triaged, dispatched.facts.summary)
+      if (reconciled.corrected) {
+        await journal.verdict(stage.stageId, stage.role, reconciled.verdict, reconciled.summary, [])
+      }
+      const verdict = reconciled.verdict
+
       if (verdict === 'BLOCKED') {
-        const kind = blockerKindOf(dispatched.facts.findings)
+        const kind = blockerKindOf(triaged.blocking.length > 0 ? triaged.blocking : dispatched.facts.findings)
         await journal.blocker({
           stageId: stage.stageId,
           kind,
-          summary: dispatched.facts.summary,
+          summary: reconciled.summary,
           evidence: dispatched.facts.evidence,
         })
         return await this.#end(objective, stages, repairCycles, executorStarts, 'blocked', 'BLOCKED',
-          dispatched.facts.summary)
+          reconciled.summary)
       }
 
       if (stage.role === 'debug' && verdict === 'PASS') {
@@ -376,41 +399,45 @@ export class WorkflowRunner {
       }
 
       if (verdict === 'FAIL' || verdict === 'PARTIAL') {
-        if (stage.role !== 'verify') {
+        // Any certifying stage may open a repair cycle, not only verification:
+        // a review, a QA pass and a security stage each find defects the stage
+        // before them did not, and a defect found later is not a lesser defect.
+        if (!CERTIFYING_ROLES.includes(stage.role)) {
           return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'FAIL',
-            dispatched.facts.summary)
+            reconciled.summary)
         }
         if (repairCycles >= maxRepairCycles) {
           return await this.#blocked(
             objective, stages, repairCycles, executorStarts, 'budget-exhausted',
-            `verification still fails after ${maxRepairCycles} repair cycles; a person has to look`,
+            `${stage.role} still fails after ${maxRepairCycles} repair cycles; a person has to look`,
           )
         }
-        // A repair acts on a named defect. A verification that failed without
-        // naming one has reported that something is wrong, which is not the same
-        // as having said what to fix, and guessing is how a repair invents work.
-        const repairable = dispatched.facts.findings.find(
-          finding => finding.confirmed && AUTO_REPAIRABLE_FINDINGS.includes(finding.class),
-        )
+        // A repair acts on a named defect. A stage that failed without naming
+        // one has reported that something is wrong, which is not the same as
+        // having said what to fix, and guessing is how a repair invents work.
+        const repairable = triaged.repairable[0]
         if (repairable === undefined) {
           return await this.#blocked(
             objective, stages, repairCycles, executorStarts, 'external',
-            'verification failed without naming a confirmed defect an automated repair may act on',
+            `${stage.role} failed without naming a confirmed defect an automated repair may act on`,
           )
         }
         defect = repairable
         diagnosis = undefined
         authorization = undefined
         repairCycles += 1
-        verifications += 1
+        const retry = (attempts.get(stage.role) ?? 1) + 1
+        attempts.set(stage.role, retry)
         // Mechanically obvious scaffolding defects skip diagnosis; everything
-        // that changes behavior gets a read-only debugger first.
+        // that changes behavior gets a read-only debugger first. The stage that
+        // found the defect is re-run afterwards, by a fresh stage of its own
+        // role, so nothing is certified on the strength of a pre-repair reading.
         queue.unshift(
           ...isMechanicallyObvious(repairable)
             ? []
             : [{ stageId: `debug-${repairCycles}`, role: 'debug' as const }],
           { stageId: `repair-${repairCycles}`, role: 'repair' },
-          { stageId: `verify-${verifications}`, role: 'verify' },
+          { stageId: `${stage.role}-${retry}`, role: stage.role },
         )
         continue
       }
@@ -420,7 +447,7 @@ export class WorkflowRunner {
       // nothing to repair, so the run stops with what it knows.
       if (verdict === 'INCONCLUSIVE') {
         return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'INCONCLUSIVE',
-          dispatched.facts.summary)
+          reconciled.summary)
       }
     }
 
@@ -459,6 +486,26 @@ export class WorkflowRunner {
         : { reasoningEffort: decision.reasoningEffort as ReasoningEffort },
     })
 
+    if (
+      context.independenceRequirement === 'cross-executor-required'
+      && decision.reasonCodes.includes('independence:unsatisfied')
+    ) {
+      // Routing already said it could not find a reader other than the writer.
+      // At this level that is a refusal, not a note: the stage is never started,
+      // because a certification the implementer produced would be recorded as
+      // assurance the run never actually obtained.
+      const summary = `no executor independent of ${decision.executor} is available to ${stage.role}, `
+        + 'and this objective requires one'
+      await journal.verdict(stage.stageId, stage.role, 'BLOCKED', summary, [])
+      return {
+        facts: facts(stage, decision.executor, decision.permissionMode, 'BLOCKED', summary, [], [], 0),
+        canceled: false,
+        failed: false,
+        result: undefined,
+        refusal: summary,
+      }
+    }
+
     journal.executorStart(dispatch)
     const startedAt = this.#now()
     const result = await executors.start({
@@ -490,6 +537,7 @@ export class WorkflowRunner {
         canceled: true,
         failed: false,
         result: undefined,
+        refusal: undefined,
       }
     }
 
@@ -503,6 +551,7 @@ export class WorkflowRunner {
         canceled: false,
         failed: true,
         result: undefined,
+        refusal: undefined,
       }
     }
 
@@ -520,6 +569,7 @@ export class WorkflowRunner {
       canceled: false,
       failed: false,
       result,
+      refusal: undefined,
     }
   }
 

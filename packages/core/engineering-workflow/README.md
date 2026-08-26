@@ -6,7 +6,7 @@ This is a fork-local package: private to `adsonpatrick/trick-harness`, never pub
 
 ## The plan is a function of the objective
 
-`planStages` reads the objective's risk and nothing else, so the same objective plans the same way on every machine and in every replay. Risk adds certification rather than changing what implementation does — a review at high, a security stage on top of it at critical — which keeps "what will this run do" answerable before anything is dispatched, from the objective alone.
+`planStages` reads the objective's risk and nothing else, so the same objective plans the same way on every machine and in every replay. Risk adds certification rather than changing what implementation does — QA from medium, an independent code review at high, a security stage on top of both at critical — which keeps "what will this run do" answerable before anything is dispatched, from the objective alone. Below medium, QA is proportionate rather than absent: the work folds into verification instead of buying a separate stage for it.
 
 ## One owner, one signal
 
@@ -20,11 +20,27 @@ A `WorkflowRunner` owns at most one live run and the `AbortController` that ends
 
 A stage hands back `StageFacts`: its verdict, its summary, its findings and its evidence references. The executor's output does not travel — the caller's `StageInterpreter` reduces it at the boundary, and whatever it returns is all the run carries. That is what keeps one stage's context out of the next one's, which is the whole point of dispatching them separately.
 
+## Triage decides, not the stage that found it
+
+`triage` is a total function over `FindingClass`, and it runs on every stage's findings before the run acts on any of them. Confirmed `BUG`, `SECURITY_BUG`, `TEST_DEFECT` and `TOOLING_DEFECT` are repairable, worst first. `PRODUCT_DECISION`, `DESIGN_DECISION` and `UNRESOLVED` block, confirmed or not, because what is missing is a decision and no amount of evidence supplies one. Everything else — intentional behavior, improvements, refactor suggestions, style, false positives, and any defect nobody confirmed — is reported and left alone. A reviewer that could decide its own findings were actionable would be deciding scope, and scope is not a reviewer's to expand.
+
+`reconcileVerdict` then holds the stage's verdict to those findings. The vocabulary is unchanged and nothing new is invented; two combinations are simply refused. A `PASS` over a confirmed material defect becomes `FAIL`, and any verdict becomes `BLOCKED` while a decision nobody made is outstanding. When triage disagrees, the correction is journalled as its own verdict, so the record shows both what the stage said and what the run acted on.
+
+## Every certifying stage can open a repair cycle
+
+`verify`, `review`, `qa` and `security` all certify somebody else's work, and a defect a review found is not a lesser defect than one verification found. Any of them may open a repair cycle against the worst finding it named, and the stage that found it is re-run afterwards under a fresh stage id of its own role — `qa-1` fails, `qa-2` re-reads the repaired tree. Nothing is certified on the strength of a pre-repair reading.
+
+`QA_SEQUENCE`, `qaCharter`, `REVIEW_INPUTS` and `SECURITY_GROUNDING` hold what those stages are expected to cover as data rather than prose, so every profile composing a charter or a review prompt reads the same order the approved Spec fixed. `qaCharter` scales the sequence to the risk without reordering it: the visual, accessibility and exploratory passes are trimmed when a mistake is cheap, and everything that establishes what changed and what could break runs at every level.
+
+## Independence the profile requires is enforced, not noted
+
+Routing marks a certification it had to route back to the implementer with `independence:unsatisfied`. At `cross-executor-required` the runtime treats that as a refusal rather than a note: the stage is never started, and the run ends `BLOCKED`. Recording assurance the run did not actually obtain is worse than not obtaining it, because only the second is visible. At `cross-executor-preferred` the mark stands and the stage runs, which is what "preferred" means.
+
 ## Diagnosis comes before repair, and is a separate stage
 
-A failed verification does not queue a repair. It queues a read-only `debug` stage first, and the repair that follows is authorized against what that stage established — a `DiagnosisContract` with a reproduction, ruled-out hypotheses, a root cause the debugger rates above low confidence, and a regression seam to attach a test to. `authorizeRepair` runs before dispatch, so a repair that may not start never gets a writable working tree in the first place. The one exception is a mechanically obvious scaffolding defect: a confirmed `TEST_DEFECT` or `TOOLING_DEFECT` that points at evidence has no behavior to reproduce, and skips diagnosis. A confirmed `BUG` or `SECURITY_BUG` never does.
+A failed certification does not queue a repair. It queues a read-only `debug` stage first, and the repair that follows is authorized against what that stage established — a `DiagnosisContract` with a reproduction, ruled-out hypotheses, a root cause the debugger rates above low confidence, and a regression seam to attach a test to. `authorizeRepair` runs before dispatch, so a repair that may not start never gets a writable working tree in the first place. The one exception is a mechanically obvious scaffolding defect: a confirmed `TEST_DEFECT` or `TOOLING_DEFECT` that points at evidence has no behavior to reproduce, and skips diagnosis. A confirmed `BUG` or `SECURITY_BUG` never does.
 
-A verification that fails without naming a confirmed repairable finding is blocked rather than repaired. Reporting that something is wrong is not the same as saying what to fix, and guessing at the difference is how a repair invents work nobody asked for.
+A certifying stage that fails without naming a confirmed repairable finding is blocked rather than repaired. Reporting that something is wrong is not the same as saying what to fix, and guessing at the difference is how a repair invents work nobody asked for.
 
 ## A missing product decision stops the run
 
@@ -75,11 +91,11 @@ runner.dispose()
 
 ## Invariant companion
 
-`./invariant` pins workspace write authority to exactly the three mutating roles and checks that every declared read-only role would in fact be dispatched read-only.
+`./invariant` pins workspace write authority to exactly the three mutating roles, checks that every declared read-only role would in fact be dispatched read-only, and pins the set of finding classes triage would repair to the four an automated repair may touch.
 
 ## Known Limitations and Deferred Work
 
-- **Findings are not triaged** — the repair gate picks the first confirmed repairable finding a failed verification named, and nothing decides between several or closes the loop on the ones it did not act on.
+- **One defect per cycle** — a stage that named several repairable defects gets the worst one repaired and re-runs; the rest are found again by the re-run rather than batched, and nothing closes the loop on a finding by id.
 - **The regression test is claimed, not observed** — `RepairEvidence` is what the caller's reader says the repair produced. This package checks that the claim was made and pins what it must contain; confirming the named test really failed first is the verifier's job.
 - **The breaker's state is not consulted** — `degradedExecutors` is a constructor option, so a circuit that opens mid-run does not affect the stages still to come.
 - **`priorAttempts` counts repair cycles only** — a stage retried for any other reason presents the same routing facts it did the first time.

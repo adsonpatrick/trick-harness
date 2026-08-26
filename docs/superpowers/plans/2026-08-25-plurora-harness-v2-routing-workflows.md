@@ -203,15 +203,15 @@ finding/symptom
 **Files:**
 - Extend workflow package or split single-purpose private plugins only if lifecycle ownership is clearer.
 
-- [ ] Write RED triage tests for every `FindingClass`.
-- [ ] Auto-repair only confirmed eligible `BUG`, safe `SECURITY_BUG`, `TEST_DEFECT`, and required in-scope `TOOLING_DEFECT`.
-- [ ] No auto-fix for product/design decisions, intentional behavior, improvements, refactors or style.
-- [ ] Code review consumes exact requirement + diff + fresh repository evidence and remains read-only.
-- [ ] QA sequence follows approved impact/risk/charter/negative/boundary/E2E/visual/accessibility flow.
-- [ ] Security stage is risk-triggered and consumes repository `SECURITY.md`; reviewer remains read-only.
-- [ ] Verdict vocabulary remains `PASS|PARTIAL|FAIL|INCONCLUSIVE|BLOCKED`; no PASS with confirmed material bug.
-- [ ] Test fresh-context/cross-executor enforcement according to profile policy.
-- [ ] Commit: `feat(trick): add independent review and QA orchestration`.
+- [x] Write RED triage tests for every `FindingClass`.
+- [x] Auto-repair only confirmed eligible `BUG`, safe `SECURITY_BUG`, `TEST_DEFECT`, and required in-scope `TOOLING_DEFECT`.
+- [x] No auto-fix for product/design decisions, intentional behavior, improvements, refactors or style.
+- [x] Code review consumes exact requirement + diff + fresh repository evidence and remains read-only.
+- [x] QA sequence follows approved impact/risk/charter/negative/boundary/E2E/visual/accessibility flow.
+- [x] Security stage is risk-triggered and consumes repository `SECURITY.md`; reviewer remains read-only.
+- [x] Verdict vocabulary remains `PASS|PARTIAL|FAIL|INCONCLUSIVE|BLOCKED`; no PASS with confirmed material bug.
+- [x] Test fresh-context/cross-executor enforcement according to profile policy.
+- [x] Commit: `feat(trick): add independent review and QA orchestration`.
 
 ---
 

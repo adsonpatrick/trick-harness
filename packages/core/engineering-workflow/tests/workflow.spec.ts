@@ -25,6 +25,8 @@ const POLICY: RoutingPolicy = Object.freeze({
   rules: Object.freeze([
     Object.freeze({ id: 'verify', when: Object.freeze({ role: 'verify' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'review', when: Object.freeze({ role: 'review' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
+    Object.freeze({ id: 'debug', when: Object.freeze({ role: 'debug' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
+    Object.freeze({ id: 'qa', when: Object.freeze({ role: 'qa' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'security', when: Object.freeze({ role: 'security' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'default', when: Object.freeze({}), use: Object.freeze({ executor: 'builder', tier: 'implementation' }) }),
   ]),
@@ -132,12 +134,14 @@ describe('the stage plan', () => {
 
   it('inserts an independent review before delivery when risk is high', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'high' })
-    expect(stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'review', 'delivery'])
+    expect(stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'review', 'qa', 'delivery'])
   })
 
   it('adds a security stage for a critical objective', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'critical' })
-    expect(stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'review', 'security', 'delivery'])
+    expect(stages.map(stage => stage.role)).toEqual([
+      'implement', 'verify', 'review', 'qa', 'security', 'delivery',
+    ])
   })
 
   it('names every stage uniquely so the journal can pair starts with ends', () => {
@@ -348,7 +352,7 @@ describe('a run that goes wrong', () => {
       'implement', 'verify', 'debug', 'repair', 'verify', 'delivery',
     ])
     expect(outcome.stages.find(stage => stage.role === 'debug')?.permissionMode).toBe('read-only')
-    expect(modes).toEqual(['read-only', 'read-only'])
+    expect(modes).toEqual(['read-only', 'read-only', 'read-only'])
     for (const stage of outcome.stages) expect(stage.permissionMode).toBe(permissionModeFor(stage.role))
     expect(JSON.stringify(session.events)).toContain('harness/diagnosis')
   })
@@ -612,5 +616,169 @@ describe('what a restart may conclude', () => {
 
     expect(assessment.requiresWorldVerification).toBe(true)
     expect(assessment.summary).toContain('push')
+  })
+})
+
+describe('triage inside a run', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+  let runner: WorkflowRunner
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  })
+
+  it('refuses a stage that reports PASS over a confirmed material defect', async () => {
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'PASS', summary: 'looks fine', findings: [bug()], evidence: [] }
+        : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+    })
+
+    // The claimed PASS became a FAIL, which is what opened the repair cycle.
+    expect(outcome.repairCycles).toBeGreaterThan(0)
+    expect(outcome.stages.map(stage => stage.role)).toContain('debug')
+  })
+
+  it('blocks on a product decision however the stage graded itself', async () => {
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? {
+          role: stage.role,
+          executor,
+          verdict: 'PASS',
+          summary: 'shipped it',
+          findings: [{ ...bug(), class: 'PRODUCT_DECISION', summary: 'which currency rounds?' }],
+          evidence: [],
+        }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.repairCycles).toBe(0)
+    expect(projectWorkflow(session.events, 'wf-1').blockers.at(-1)?.kind).toBe('product-decision')
+  })
+
+  it('opens a repair cycle for a QA failure and re-runs QA afterwards', async () => {
+    let qaRuns = 0
+    const outcome = await runner.run({
+      objective: { ...OBJECTIVE, risk: 'medium' },
+      interpret: (stage, executor) => {
+        if (stage.role !== 'qa') return interpretAllPass(stage, executor)
+        qaRuns += 1
+        return {
+          role: stage.role,
+          executor,
+          verdict: qaRuns === 1 ? 'FAIL' : 'PASS',
+          summary: qaRuns === 1 ? 'negative path throws' : 'negative path handled',
+          findings: qaRuns === 1 ? [{ ...bug(), raisedBy: 'qa' }] : [],
+          evidence: [],
+        }
+      },
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(outcome.stages.map(stage => stage.role)).toEqual([
+      'implement', 'verify', 'qa', 'debug', 'repair', 'qa', 'delivery',
+    ])
+    expect(outcome.stages.filter(stage => stage.role === 'qa').map(stage => stage.stageId))
+      .toEqual(['qa-1', 'qa-2'])
+  })
+
+  it('repairs the worst defect first when a stage names several', async () => {
+    let verifications = 0
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => {
+        if (stage.role !== 'verify') return interpretAllPass(stage, executor)
+        verifications += 1
+        return {
+          role: stage.role,
+          executor,
+          verdict: verifications === 1 ? 'FAIL' : 'PASS',
+          summary: 'suite',
+          findings: verifications === 1
+            ? [{ ...bug('f-tool', 'TOOLING_DEFECT') }, { ...bug('f-sec', 'SECURITY_BUG') }]
+            : [],
+          evidence: [],
+        }
+      },
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+    })
+
+    // A tooling defect alone would have skipped diagnosis; the security bug did not.
+    expect(outcome.stages.map(stage => stage.role)).toContain('debug')
+    expect(outcome.state).toBe('completed')
+  })
+})
+
+describe('independence the profile actually requires', () => {
+  const SOLO_POLICY: RoutingPolicy = Object.freeze({
+    policyVersion: 'solo-v1.0.0',
+    rules: Object.freeze([
+      Object.freeze({ id: 'only', when: Object.freeze({}), use: Object.freeze({ executor: 'builder', tier: 'implementation' }) }),
+    ]),
+    fallbackRules: Object.freeze([]),
+    registry: Object.freeze({ implementation: 'mimo-v2.5', reasoning: 'deepseek-v4-flash' }),
+  })
+
+  it('refuses to certify with the implementer when the objective requires someone else', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: SOLO_POLICY, executors, journal,
+    })
+    const starts: string[] = []
+    executors.register(provider('builder', async (request) => {
+      starts.push(request.route.permissionMode)
+      return passing('builder')
+    }))
+
+    const outcome = await runner.run({
+      objective: { ...OBJECTIVE, risk: 'high' },
+      interpret: interpretAllPass,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('independent')
+    // Implementation ran; the certifying stage was never started at all.
+    expect(starts).toEqual(['workspace-write'])
+  })
+
+  it('accepts the implementer as a reader when the objective only prefers otherwise', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: SOLO_POLICY, executors, journal,
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+
+    const outcome = await runner.run({
+      objective: { ...OBJECTIVE, risk: 'medium' },
+      interpret: interpretAllPass,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('completed')
   })
 })

@@ -2,8 +2,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
-import { READ_ONLY_ROLES, ROLES } from '@trick-harness/contracts'
+import { FINDING_CLASSES, READ_ONLY_ROLES, ROLES } from '@trick-harness/contracts'
 import { permissionModeFor } from './index.ts'
+import { triageFinding } from './triage.ts'
 
 const PACKAGE_NAME = '@trick-harness/engineering-workflow'
 
@@ -24,6 +25,17 @@ export const inject = ['invariants']
  */
 const EXPECTED_MUTATING_ROLES = ['implement', 'repair', 'delivery']
 
+/**
+ * The finding classes an automated repair may act on, restated rather than derived.
+ *
+ * Triage reads `AUTO_REPAIRABLE_FINDINGS`, so checking triage against that list
+ * would only prove triage can read. The four are named here instead: a class
+ * added to the repairable set upstream, or a rule in triage that quietly widened
+ * what counts, is a startup failure rather than a run that repairs something
+ * nobody authorised it to touch.
+ */
+const EXPECTED_REPAIRABLE_CLASSES = ['BUG', 'SECURITY_BUG', 'TEST_DEFECT', 'TOOLING_DEFECT']
+
 /** Check that write authority still belongs to exactly the mutating roles. */
 const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
   const mutating = ROLES.filter(role => permissionModeFor(role) === 'workspace-write')
@@ -37,6 +49,23 @@ const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
     if (permissionModeFor(role) !== 'read-only') {
       fail(`role ${JSON.stringify(role)} is declared read-only but would be dispatched with write authority`)
     }
+  }
+
+  const repairable = FINDING_CLASSES.filter(findingClass => triageFinding({
+    id: 'invariant',
+    class: findingClass,
+    raisedBy: 'review',
+    summary: 'invariant probe',
+    confirmed: true,
+    evidence: [{ kind: 'file', locator: 'invariant', summary: 'probe' }],
+  }).disposition === 'repair')
+  const widened = repairable.filter(findingClass => !EXPECTED_REPAIRABLE_CLASSES.includes(findingClass))
+  if (widened.length > 0) {
+    fail(`triage would repair ${widened.join(', ')}, which is outside what an automated repair may touch`)
+  }
+  const narrowed = EXPECTED_REPAIRABLE_CLASSES.filter(findingClass => !repairable.includes(findingClass as never))
+  if (narrowed.length > 0) {
+    fail(`triage no longer repairs ${narrowed.join(', ')}, so the authorised repair set has silently shrunk`)
   }
 }
 
