@@ -226,4 +226,16 @@ describe('cleanup is reported apart from the work', () => {
     expect(outcome.cleanup.succeeded).toBe(false)
     expect(outcome.cleanup.message).toContain('exit code 1')
   })
+
+  it('tears the branch down even when the failure is one this package never named', async () => {
+    scripts.unshift({
+      match: names('db', 'push'),
+      respond: () => { throw new TypeError('the seam refused to spawn') },
+    })
+
+    await expect(capability().run({ branchName: 'preview-run' })).rejects.toThrow(TypeError)
+
+    const spoken = argvs().map(argv => argv.join(' '))
+    expect(spoken.some(line => line.includes('branches delete'))).toBe(true)
+  })
 })

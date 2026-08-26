@@ -150,6 +150,31 @@ describe('when a repair may be believed', () => {
 
     expect(completion.complete).toBe(true)
   })
+
+  it('does not claim a regression test the mechanical repair never owed', () => {
+    const mechanical = authorizeRepair(finding({ class: 'TOOLING_DEFECT' }))
+    const completion = assessRepairCompletion(mechanical, {
+      focusedGreen: EVIDENCE,
+      rootCauseAddressed: false,
+    })
+
+    expect(completion.summary).not.toContain('regression test')
+    expect(completion.summary).toContain('shown green')
+  })
+
+  it('still holds a diagnosed mechanical repair to the cause it was authorized on', () => {
+    const diagnosed = authorizeRepair(finding({ class: 'TEST_DEFECT' }), DIAGNOSIS)
+    expect(diagnosed.requiresRegressionTest).toBe(false)
+    expect(diagnosed.rootCause).toBeDefined()
+
+    const completion = assessRepairCompletion(diagnosed, {
+      focusedGreen: EVIDENCE,
+      rootCauseAddressed: false,
+    })
+
+    expect(completion.complete).toBe(false)
+    expect(completion.gaps).toEqual(['the change does not address the diagnosed root cause, so the symptom may only have moved'])
+  })
 })
 
 describe('the error itself', () => {

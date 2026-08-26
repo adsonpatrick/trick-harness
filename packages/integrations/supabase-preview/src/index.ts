@@ -409,10 +409,15 @@ export class SupabasePreview {
       }
     }
     catch (error) {
-      if (!(error instanceof PreviewError)) throw error
+      // Cleanup first, and for every error rather than only the ones this
+      // package names. A failure it did not anticipate — the subprocess seam
+      // refusing to spawn, a reader throwing on malformed output — leaves the
+      // same hosted branch behind as one it did, and a leaked branch costs
+      // money and needs a person whatever raised it.
       const cleanup = created
         ? await this.#cleanup(branchName)
         : { attempted: false, succeeded: false, message: undefined }
+      if (!(error instanceof PreviewError)) throw error
       return {
         status: 'BLOCKED',
         branch,

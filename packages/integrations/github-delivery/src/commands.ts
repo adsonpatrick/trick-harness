@@ -165,12 +165,18 @@ export function approvedWriteSet(files: readonly string[]): readonly string[] {
  * @throws DeliveryError when the command names a denied operation.
  */
 export function assertAllowed(argv: readonly string[]): void {
-  const [program, subcommand] = argv
+  const [program] = argv
+  // `git -c key=value <subcommand>` is still that subcommand. Reading argv[1]
+  // literally would let a configuration flag hide a denied operation behind it,
+  // so the leading `-c` pairs are stepped over rather than counted.
+  let at = 1
+  while (argv[at] === '-c') at += 2
+  const subcommand = argv[at]
   if (program === 'git' && subcommand !== undefined && DENIED_SUBCOMMANDS.includes(subcommand)) {
     throw new DeliveryError('denied-operation', `git ${subcommand} is outside the delivery operation set`)
   }
   if (program === 'git' && subcommand === 'push') {
-    for (const argument of argv.slice(2)) {
+    for (const argument of argv.slice(at + 1)) {
       if (DENIED_PUSH_ARGS.includes(argument)) {
         throw new DeliveryError('denied-operation', `${argument} would rewrite or remove remote history`)
       }
@@ -195,9 +201,15 @@ export const statusArgv = (): readonly string[] => ['git', 'status', '--porcelai
 
 /**
  * Read the paths currently staged.
+ *
+ * `core.quotePath=false` is set for this one command rather than left to the
+ * repository's configuration: with the default, git renders a path holding any
+ * byte outside ASCII as an escaped, quoted string, and the read-back this feeds
+ * would then refuse a perfectly ordinary write set for not matching itself.
  * @returns The `git diff --cached --name-only` command.
  */
-export const stagedPathsArgv = (): readonly string[] => ['git', 'diff', '--cached', '--name-only']
+export const stagedPathsArgv = (): readonly string[] =>
+  ['git', '-c', 'core.quotePath=false', 'diff', '--cached', '--name-only']
 
 /**
  * Read the commit one ref resolves to.

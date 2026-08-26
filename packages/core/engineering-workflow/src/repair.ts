@@ -208,22 +208,31 @@ export function assessRepairCompletion(
   evidence: RepairEvidence,
 ): RepairCompletion {
   const gaps: string[] = []
-  if (authorization.requiresRegressionTest) {
-    if (evidence.regressionTest === undefined) {
-      gaps.push('no regression test pins the defect, so it can come back unseen')
-    }
-    if (!evidence.rootCauseAddressed) {
-      gaps.push('the change does not address the diagnosed root cause, so the symptom may only have moved')
-    }
+  if (authorization.requiresRegressionTest && evidence.regressionTest === undefined) {
+    gaps.push('no regression test pins the defect, so it can come back unseen')
+  }
+  // Owed wherever a diagnosis was demanded, not only where a regression test
+  // was. A repair authorized on a stated root cause that does not address it is
+  // a symptom that stopped appearing, whatever class of defect it was.
+  if (authorization.rootCause !== undefined && !evidence.rootCauseAddressed) {
+    gaps.push('the change does not address the diagnosed root cause, so the symptom may only have moved')
   }
   if (evidence.focusedGreen === undefined) {
     gaps.push('no focused run shows the repaired behavior passing')
   }
+  // The summary names what this repair actually produced. A mechanical fix owes
+  // no regression test, and saying it was pinned by one would put a claim in the
+  // durable record that nothing in the run supports.
+  const shown = [
+    ...evidence.regressionTest === undefined ? [] : ['pinned by a regression test'],
+    ...authorization.rootCause === undefined ? [] : ['addressed at its diagnosed cause'],
+    'shown green',
+  ]
   return Object.freeze({
     complete: gaps.length === 0,
     gaps: Object.freeze(gaps),
     summary: gaps.length === 0
-      ? `the repair of ${authorization.findingId} is pinned by a regression test and shown green`
+      ? `the repair of ${authorization.findingId} is ${shown.join(', ')}`
       : `the repair of ${authorization.findingId} is incomplete: ${gaps.join('; ')}`,
   })
 }

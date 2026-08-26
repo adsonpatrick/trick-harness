@@ -27,9 +27,9 @@ import type { ExecutorResult, HarnessExecutorRuntime, ReasoningEffort } from '@t
 import type { WorkflowJournal, WorkflowProjection } from '@trick-harness/journal'
 import type { BlockerKind, WorkflowEndState } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
-import { route } from '@trick-harness/routing'
+import { RoutingError, capVerdict, route } from '@trick-harness/routing'
 import type { RoutingPolicy } from '@trick-harness/routing'
-import type { RoutingContext } from '@trick-harness/contracts'
+import type { RouteDecision, RoutingContext } from '@trick-harness/contracts'
 
 export type * from './types.ts'
 export * from './repair.ts'
@@ -194,6 +194,14 @@ interface Dispatched {
   readonly result: ExecutorResult | undefined
   /** Why the stage was never started, when routing could not honour policy. */
   readonly refusal: string | undefined
+  /**
+   * The route this stage actually ran on, and the run it was routed for.
+   *
+   * Carried out of dispatch because the assurance a verdict can claim depends
+   * on both: a PASS reached on a fallback route is a weaker fact than the same
+   * PASS reached on the route the risk level called for.
+   */
+  readonly routed: { readonly context: RoutingContext; readonly decision: RouteDecision } | undefined
 }
 
 /** The blocker kind each repair-gate refusal is recorded as. */
@@ -310,10 +318,20 @@ export class WorkflowRunner {
       }
 
       if (stage.role === 'repair') {
+        // A repair stage with no open defect is a plan asking for a writable
+        // tree and naming nothing to fix. The internal plans never do it; a
+        // caller-supplied `plan` can, and it is refused rather than allowed to
+        // fail as a type error on the way into the gate.
+        if (defect === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            `stage ${stage.stageId} repairs, but no confirmed defect is open for it to act on`,
+          )
+        }
         // The gate runs before dispatch, so a repair that may not start never
         // gets a writable working tree in the first place.
         try {
-          authorization = authorizeRepair(defect as Finding, diagnosis)
+          authorization = authorizeRepair(defect, diagnosis)
         } catch (error) {
           if (!(error instanceof RepairError)) throw error
           return await this.#blocked(
@@ -323,7 +341,21 @@ export class WorkflowRunner {
       }
 
       executorStarts += 1
-      const dispatched = await this.#dispatch(stage, request, signal, repairCycles, lastMutator)
+      let dispatched: Dispatched
+      try {
+        dispatched = await this.#dispatch(stage, request, signal, repairCycles, lastMutator)
+      } catch (error) {
+        // A policy that cannot answer for this stage — a degraded executor no
+        // fallback row covers, a tier the registry does not know — is a refusal,
+        // not a crash. Letting it leave `run` would end the workflow with no
+        // terminal event at all, and a restart would then read a deterministic
+        // refusal as an interrupted run whose effect on the world is unknown.
+        if (!(error instanceof RoutingError)) throw error
+        return await this.#blocked(
+          objective, stages, repairCycles, executorStarts, 'external',
+          `${stage.role} could not be routed: ${error.message}`,
+        )
+      }
       stages.push(dispatched.facts)
       if (dispatched.refusal !== undefined) {
         return await this.#blocked(
@@ -353,6 +385,27 @@ export class WorkflowRunner {
         await journal.verdict(stage.stageId, stage.role, reconciled.verdict, reconciled.summary, [])
       }
       const verdict = reconciled.verdict
+
+      // What the route can support has the last word after triage has had its
+      // say. A PASS reached on a fallback route, or by a reader that turned out
+      // to be the writer, is a weaker fact than the same PASS on the route the
+      // risk level called for — and at critical risk a security assurance that
+      // nobody qualified gave is not an assurance. The run stops here rather
+      // than opening a repair cycle: there is no defect to fix, only assurance
+      // the run did not obtain, and that is a thing a person decides about.
+      if (dispatched.routed !== undefined) {
+        const supported = capVerdict(verdict, dispatched.routed.context, dispatched.routed.decision)
+        if (supported !== verdict) {
+          const cause = dispatched.routed.decision.fallbackFrom === undefined
+            ? 'no reader independent of the executor that did the work was available'
+            : `${dispatched.routed.decision.fallbackFrom} was degraded and a substitute answered`
+          const summary = `${stage.role} passed, but on a route that cannot support it: ${cause}`
+          await journal.verdict(stage.stageId, stage.role, supported, summary, [])
+          return supported === 'BLOCKED'
+            ? await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', summary)
+            : await this.#end(objective, stages, repairCycles, executorStarts, 'failed', supported, summary)
+        }
+      }
 
       if (verdict === 'BLOCKED') {
         const kind = blockerKindOf(triaged.blocking.length > 0 ? triaged.blocking : dispatched.facts.findings)
@@ -513,6 +566,7 @@ export class WorkflowRunner {
         failed: false,
         result: undefined,
         refusal: summary,
+        routed: { context, decision },
       }
     }
 
@@ -526,19 +580,20 @@ export class WorkflowRunner {
     })
     const durationMs = Math.max(0, this.#now() - startedAt)
 
-    return await this.#reduce(stage, decision.executor, decision.permissionMode, result, durationMs, request)
+    return await this.#reduce(stage, { context, decision }, result, durationMs, request)
   }
 
   /** Turn one provider result into the compact facts the run carries forward. */
   async #reduce(
     stage: StageSpec,
-    executor: string,
-    permissionMode: RoutedPermissionMode,
+    routed: { readonly context: RoutingContext; readonly decision: RouteDecision },
     result: ExecutorResult,
     durationMs: number,
     request: WorkflowRunRequest,
   ): Promise<Dispatched> {
     const { journal } = this.#options
+    const executor = routed.decision.executor
+    const permissionMode = routed.decision.permissionMode
 
     if (result.status === 'aborted') {
       journal.executorEnd(stage.stageId, executor, 'canceled', durationMs)
@@ -548,6 +603,7 @@ export class WorkflowRunner {
         failed: false,
         result: undefined,
         refusal: undefined,
+        routed,
       }
     }
 
@@ -562,6 +618,7 @@ export class WorkflowRunner {
         failed: true,
         result: undefined,
         refusal: undefined,
+        routed,
       }
     }
 
@@ -580,6 +637,7 @@ export class WorkflowRunner {
       failed: false,
       result,
       refusal: undefined,
+      routed,
     }
   }
 

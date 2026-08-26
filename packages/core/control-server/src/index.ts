@@ -42,6 +42,17 @@ const MAX_SUMMARY_CHARS = 500
 /** Most stages one status names; a longer run is truncated to the newest. */
 const MAX_STAGES = 50
 
+/**
+ * Finished workflows whose status stays readable in memory.
+ *
+ * A run leaves the live set the moment it settles, so the liveness a supervisor
+ * reads is the truth and a workflow id becomes reusable once nothing holds it.
+ * Its last status is kept a while longer for the caller that asks right after,
+ * and the oldest is dropped past this bound — the durable journal, not this
+ * map, is what answers about a run this process no longer has.
+ */
+const MAX_FINISHED = 200
+
 /** Bound one free-text field to what a status is for. */
 function bounded(text: string): string {
   return text.length <= MAX_SUMMARY_CHARS ? text : `${text.slice(0, MAX_SUMMARY_CHARS)}…`
@@ -157,6 +168,7 @@ export class HarnessControlServer {
   readonly #host: string
   readonly #token: string
   readonly #runs = new Map<string, LiveRun>()
+  readonly #finished = new Map<string, ControlWorkflowStatus>()
   readonly #server: Server
   #port = 0
 
@@ -212,8 +224,12 @@ export class HarnessControlServer {
    * back with something.
    */
   async dispose(): Promise<void> {
-    for (const run of this.#runs.values()) run.controller.abort()
-    await Promise.allSettled([...this.#runs.values()].map(run => run.settled))
+    // Snapshotted before the first abort, because a run that settles between
+    // the abort and the wait retires itself out of the live set, and disposal
+    // would then return without having waited for the one it just canceled.
+    const live = [...this.#runs.values()]
+    for (const run of live) run.controller.abort()
+    await Promise.allSettled(live.map(run => run.settled))
     await new Promise<void>((resolve) => {
       this.#server.close(() => {
         resolve()
@@ -244,6 +260,7 @@ export class HarnessControlServer {
       .then((status) => {
         const stored = this.#runs.get(objective.id)
         if (stored !== undefined) stored.status = status
+        this.#retire(objective.id, status)
         return status
       })
     const run: LiveRun = {
@@ -257,8 +274,27 @@ export class HarnessControlServer {
   }
 
   /**
-   * Read a workflow's status: the live run if this process owns it, the durable
-   * projection otherwise.
+   * Move a settled run out of the live set, keeping its last status.
+   *
+   * Retiring rather than holding is what keeps a long-lived server honest: the
+   * live count stays the count of runs actually going, and an id that finished
+   * can be run again instead of colliding with its own record forever.
+   * @param workflowId - The workflow that settled.
+   * @param status - The status it settled on.
+   */
+  #retire(workflowId: string, status: ControlWorkflowStatus): void {
+    this.#runs.delete(workflowId)
+    this.#finished.set(workflowId, status)
+    while (this.#finished.size > MAX_FINISHED) {
+      const oldest = this.#finished.keys().next()
+      if (oldest.done === true) break
+      this.#finished.delete(oldest.value)
+    }
+  }
+
+  /**
+   * Read a workflow's status: the live run if this process owns it, the last
+   * status if it finished here, the durable projection otherwise.
    * @param workflowId - The workflow to read.
    * @returns The bounded status.
    * @throws {ControlError} when no live run and no durable record names it.
@@ -266,6 +302,8 @@ export class HarnessControlServer {
   async statusOf(workflowId: string): Promise<ControlWorkflowStatus> {
     const run = this.#runs.get(workflowId)
     if (run !== undefined) return run.status
+    const finished = this.#finished.get(workflowId)
+    if (finished !== undefined) return finished
     const assessment = await this.#options.restart?.(workflowId)
     if (assessment === undefined) {
       throw new ControlError('unknown-workflow', 404, 'no workflow of that id is running or recorded')
@@ -282,6 +320,11 @@ export class HarnessControlServer {
   async cancelWorkflow(workflowId: string): Promise<ControlWorkflowStatus> {
     const run = this.#runs.get(workflowId)
     if (run === undefined) {
+      // A run that already finished is not an error to cancel; it is a caller
+      // that asked a moment too late, and the status it settled on is the
+      // honest answer to what happened to it.
+      const finished = this.#finished.get(workflowId)
+      if (finished !== undefined) return finished
       throw new ControlError('unknown-workflow', 404, 'no workflow of that id is running here')
     }
     run.controller.abort()

@@ -200,6 +200,42 @@ describe('run, status and cancel', () => {
     expect(((await fetch(`${base}/workflows/wf-2`, { headers: auth })).status)).toBe(200)
     for (const resolve of release.values()) resolve()
   })
+
+  it('lets a finished id be started again instead of holding 409 forever', async () => {
+    const { base, auth } = await serve({ start: async objective => outcome(objective.id) })
+
+    const first = await fetch(`${base}/workflows`, {
+      method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE),
+    })
+    await fetch(`${base}/workflows/wf-1`, { headers: auth })
+    const again = await fetch(`${base}/workflows`, {
+      method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE),
+    })
+
+    expect(first.status).toBe(202)
+    expect(again.status).toBe(202)
+  })
+
+  it('answers cancel on a finished run with its status rather than a 404', async () => {
+    const { base, auth } = await serve({ start: async objective => outcome(objective.id) })
+
+    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
+    await fetch(`${base}/workflows/wf-1`, { headers: auth })
+    const canceled = await fetch(`${base}/workflows/wf-1/cancel`, { method: 'POST', headers: auth })
+
+    expect(canceled.status).toBe(200)
+    expect(((await canceled.json()) as ControlWorkflowStatus).state).toBe('completed')
+  })
+
+  it('reports live runs on /health, not everything it has ever run', async () => {
+    const { base, auth } = await serve({ start: async objective => outcome(objective.id) })
+
+    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
+    await fetch(`${base}/workflows/wf-1`, { headers: auth })
+    const health = (await (await fetch(`${base}/health`)).json()) as { workflows: number }
+
+    expect(health.workflows).toBe(0)
+  })
 })
 
 describe('what a restart may say', () => {

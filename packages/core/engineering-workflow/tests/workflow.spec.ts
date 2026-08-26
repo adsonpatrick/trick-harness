@@ -782,3 +782,90 @@ describe('independence the profile actually requires', () => {
     expect(outcome.state).toBe('completed')
   })
 })
+
+describe('a pass the route it ran on cannot support', () => {
+  it('caps a high-risk certification answered by a fallback executor', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['reviewer'],
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('spare', async () => passing('spare')))
+
+    const outcome = await runner.run({
+      objective: { ...OBJECTIVE, risk: 'high' },
+      interpret: interpretAllPass,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('failed')
+    expect(outcome.verdict).toBe('PARTIAL')
+    expect(outcome.summary).toContain('degraded')
+  })
+
+  it('leaves an ordinary low-risk pass alone even on a fallback route', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['reviewer'],
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('spare', async () => passing('spare')))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('completed')
+    expect(outcome.verdict).toBe('PASS')
+  })
+})
+
+describe('a stage the policy cannot answer for', () => {
+  it('blocks with a terminal event rather than letting the routing error escape', async () => {
+    const NO_FALLBACK: RoutingPolicy = Object.freeze({
+      policyVersion: 'no-fallback-v1.0.0',
+      rules: POLICY.rules,
+      fallbackRules: Object.freeze([]),
+      registry: POLICY.registry,
+    })
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: NO_FALLBACK, executors, journal, degradedExecutors: ['builder'],
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('could not be routed')
+    // The terminal event is the point: without it a restart would read a
+    // deterministic refusal as a run whose effect on the world is unknown.
+    const projection = projectWorkflow(session.events, 'wf-1')
+    expect(projection.end?.state).toBe('blocked')
+    expect(projection.blockers).toHaveLength(1)
+  })
+})
+
+describe('a plan that asks for a repair with nothing to repair', () => {
+  it('refuses the stage instead of failing as a type error inside the gate', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    executors.register(provider('builder', async () => passing('builder')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      plan: () => [{ stageId: 'repair-1', role: 'repair' }],
+      interpret: interpretAllPass,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no confirmed defect')
+  })
+})

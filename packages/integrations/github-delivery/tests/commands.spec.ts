@@ -14,6 +14,7 @@ import {
   prUpdateArgv,
   prViewArgv,
   pushArgv,
+  stagedPathsArgv,
 } from '../src/commands.ts'
 
 /**
@@ -123,6 +124,13 @@ describe('the operations that are absent rather than guarded', () => {
     }
   })
 
+  it('sees the subcommand behind leading configuration flags', () => {
+    expect(codeOf(() => { assertAllowed(['git', '-c', 'core.hooksPath=/dev/null', 'merge', 'main']) }))
+      .toBe('denied-operation')
+    expect(codeOf(() => { assertAllowed(['git', '-c', 'a=1', '-c', 'b=2', 'push', 'origin', '--force']) }))
+      .toBe('denied-operation')
+  })
+
   it('refuses merging, releasing and deploying through gh', () => {
     expect(codeOf(() => { assertAllowed(['gh', 'pr', 'merge', '1']) })).toBe('denied-operation')
     expect(codeOf(() => { assertAllowed(['gh', 'release', 'create', 'v1']) })).toBe('denied-operation')
@@ -143,5 +151,14 @@ describe('the pull request commands', () => {
 
     expect(argv.slice(0, 4)).toEqual(['gh', 'pr', 'edit', '7'])
     expect(argv).not.toContain('create')
+  })
+})
+
+describe('reading the staged set back', () => {
+  it('turns off path quoting, so a non-ASCII path reads back as itself', () => {
+    const argv = stagedPathsArgv()
+
+    expect(argv).toEqual(['git', '-c', 'core.quotePath=false', 'diff', '--cached', '--name-only'])
+    expect(() => { assertAllowed(argv) }).not.toThrow()
   })
 })

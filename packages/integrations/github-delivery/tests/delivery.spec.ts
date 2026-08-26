@@ -190,6 +190,12 @@ describe('staging exactly the approved write set', () => {
     await expect(delivery().stage(['a.txt', 'b.txt'])).resolves.toEqual(['a.txt', 'b.txt'])
   })
 
+  it('reads a non-ASCII path back as itself rather than as git escaping it', async () => {
+    writeFileSync(join(work, 'relatório.txt'), 'ok\n')
+
+    await expect(delivery().stage(['relatório.txt'])).resolves.toEqual(['relatório.txt'])
+  })
+
   it('refuses when the index holds work the delivery was not scoped to commit', async () => {
     writeFileSync(join(work, 'a.txt'), 'a\n')
     writeFileSync(join(work, 'stowaway.txt'), 'not mine\n')
