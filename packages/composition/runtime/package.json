@@ -31,7 +31,15 @@
     "@trick-harness/executor": "workspace:^",
     "@trick-harness/profile": "workspace:^",
     "@trick-harness/provider-codex": "workspace:^",
-    "@trick-harness/provider-opencode": "workspace:^"
+    "@trick-harness/provider-opencode": "workspace:^",
+    "@deepseek-ai/dsh-session": "workspace:^",
+    "@trick-harness/contracts": "workspace:^",
+    "@trick-harness/control-server": "workspace:^",
+    "@trick-harness/engineering-workflow": "workspace:^",
+    "@trick-harness/github-delivery": "workspace:^",
+    "@trick-harness/journal": "workspace:^",
+    "@trick-harness/routing": "workspace:^",
+    "@trick-harness/supabase-preview": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-invariants": "workspace:^",
@@ -39,6 +47,14 @@
     "@trick-harness/executor": "workspace:^",
     "@trick-harness/profile": "workspace:^",
     "@trick-harness/provider-codex": "workspace:^",
-    "@trick-harness/provider-opencode": "workspace:^"
+    "@trick-harness/provider-opencode": "workspace:^",
+    "@deepseek-ai/dsh-session": "workspace:^",
+    "@trick-harness/contracts": "workspace:^",
+    "@trick-harness/control-server": "workspace:^",
+    "@trick-harness/engineering-workflow": "workspace:^",
+    "@trick-harness/github-delivery": "workspace:^",
+    "@trick-harness/journal": "workspace:^",
+    "@trick-harness/routing": "workspace:^",
+    "@trick-harness/supabase-preview": "workspace:^"
   }
 }

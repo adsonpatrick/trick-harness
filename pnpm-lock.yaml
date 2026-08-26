@@ -3415,9 +3415,27 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:^
+        version: link:../../core/session
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../../core/contracts
+      '@trick-harness/control-server':
+        specifier: workspace:^
+        version: link:../../core/control-server
+      '@trick-harness/engineering-workflow':
+        specifier: workspace:^
+        version: link:../../core/engineering-workflow
       '@trick-harness/executor':
         specifier: workspace:^
         version: link:../../core/executor
+      '@trick-harness/github-delivery':
+        specifier: workspace:^
+        version: link:../../integrations/github-delivery
+      '@trick-harness/journal':
+        specifier: workspace:^
+        version: link:../../core/journal
       '@trick-harness/profile':
         specifier: workspace:^
         version: link:../../core/profile
@@ -3427,6 +3445,12 @@ importers:
       '@trick-harness/provider-opencode':
         specifier: workspace:^
         version: link:../../providers/opencode
+      '@trick-harness/routing':
+        specifier: workspace:^
+        version: link:../../core/routing
+      '@trick-harness/supabase-preview':
+        specifier: workspace:^
+        version: link:../../integrations/supabase-preview
 
   packages/context/agent-instructions:
     dependencies:

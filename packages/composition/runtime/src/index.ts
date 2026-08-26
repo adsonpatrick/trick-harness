@@ -201,3 +201,5 @@ export function createHarnessRuntimeBundle(
     },
   }
 }
+
+export * from './harness.ts'

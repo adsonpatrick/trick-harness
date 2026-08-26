@@ -337,11 +337,11 @@ POST /workflows/:id/cancel
 - Add real composition/profile fixtures and snapshots
 - Update package docs/catalog/Agent Notes
 
-- [ ] Compose contracts, executor runtime/providers, routing, journal, workflow, integrations and control server through `HarnessProfile`.
-- [ ] Keep Claude overlay optional/disableable.
-- [ ] Add real Loader/profile composition test with fake external services only at true network/product boundaries.
-- [ ] Add keyless snapshot for user-visible workflow status/finding/fallback transcript through real control-server entry path.
-- [ ] Run focused tests first, then:
+- [x] Compose contracts, executor runtime/providers, routing, journal, workflow, integrations and control server through `HarnessProfile`.
+- [x] Keep Claude overlay optional/disableable.
+- [x] Add real Loader/profile composition test with fake external services only at true network/product boundaries.
+- [x] Add keyless snapshot for user-visible workflow status/finding/fallback transcript through real control-server entry path.
+- [x] Run focused tests first, then:
 
 ```bash
 pnpm run constraints
@@ -355,9 +355,9 @@ pnpm run hygiene
 pnpm run doc-sync
 ```
 
-- [ ] Run independent code verification against Plan B requirements.
-- [ ] Run focused security review of control server, subprocess command construction, credential scrubbing, delivery authority and Supabase isolation.
-- [ ] Fix confirmed bugs only; report non-bug improvements separately.
+- [x] Run independent code verification against Plan B requirements.
+- [x] Run focused security review of control server, subprocess command construction, credential scrubbing, delivery authority and Supabase isolation.
+- [x] Fix confirmed bugs only; report non-bug improvements separately.
 
 ## Plan B Completion Evidence
 
