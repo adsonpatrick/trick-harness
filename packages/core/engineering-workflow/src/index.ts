@@ -10,8 +10,9 @@
  * @packageDocumentation
  */
 
-import { READ_ONLY_ROLES } from '@trick-harness/contracts'
+import { AUTO_REPAIRABLE_FINDINGS, READ_ONLY_ROLES } from '@trick-harness/contracts'
 import type {
+  DiagnosisContract,
   EvidenceRef,
   Finding,
   Role,
@@ -31,6 +32,16 @@ import type { RoutingPolicy } from '@trick-harness/routing'
 import type { RoutingContext } from '@trick-harness/contracts'
 
 export type * from './types.ts'
+export * from './repair.ts'
+
+import {
+  assessRepairCompletion,
+  authorizeRepair,
+  isMechanicallyObvious,
+  RepairError,
+  validateDiagnosis,
+} from './repair.ts'
+import type { RepairAuthorization, RepairEvidence } from './repair.ts'
 
 import type {
   RestartAssessment,
@@ -165,6 +176,19 @@ interface Dispatched {
   readonly facts: StageFacts
   readonly canceled: boolean
   readonly failed: boolean
+  /**
+   * The provider result, kept only for the caller's own readers.
+   *
+   * It never reaches `StageFacts` and never reaches the journal; the diagnosis
+   * and repair-evidence readers are handed it inside the same turn and what they
+   * return is what the run carries forward.
+   */
+  readonly result: ExecutorResult | undefined
+}
+
+/** The blocker kind each repair-gate refusal is recorded as. */
+function blockerKindOfRepairError(error: RepairError): BlockerKind {
+  return error.code === 'product-decision' ? 'product-decision' : 'external'
 }
 
 /**
@@ -252,6 +276,15 @@ export class WorkflowRunner {
     let repairCycles = 0
     let executorStarts = 0
     let verifications = 1
+    // The repair session: one defect, what a debugger established about it, and
+    // what the gate allowed. All three are cleared when a repair stage ends, so
+    // the next cycle cannot inherit the last cycle's authority.
+    let defect: Finding | undefined
+    let diagnosis: DiagnosisContract | undefined
+    let authorization: RepairAuthorization | undefined
+    // The executor that last wrote to the tree, so the verifier that follows a
+    // repair is routed as an independent reader rather than back to the writer.
+    let lastMutator: string | undefined
 
     while (queue.length > 0) {
       const stage = queue.shift() as StageSpec
@@ -262,9 +295,25 @@ export class WorkflowRunner {
         )
       }
 
+      if (stage.role === 'repair') {
+        // The gate runs before dispatch, so a repair that may not start never
+        // gets a writable working tree in the first place.
+        try {
+          authorization = authorizeRepair(defect as Finding, diagnosis)
+        } catch (error) {
+          if (!(error instanceof RepairError)) throw error
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, blockerKindOfRepairError(error), error.message,
+          )
+        }
+      }
+
       executorStarts += 1
-      const dispatched = await this.#dispatch(stage, request, signal, repairCycles)
+      const dispatched = await this.#dispatch(stage, request, signal, repairCycles, lastMutator)
       stages.push(dispatched.facts)
+      if (permissionModeFor(stage.role) === 'workspace-write' && !dispatched.canceled) {
+        lastMutator = dispatched.facts.executor
+      }
 
       if (dispatched.canceled) {
         return await this.#end(objective, stages, repairCycles, executorStarts, 'canceled', 'INCONCLUSIVE',
@@ -288,6 +337,44 @@ export class WorkflowRunner {
           dispatched.facts.summary)
       }
 
+      if (stage.role === 'debug' && verdict === 'PASS') {
+        const produced = request.diagnose?.(stage, dispatched.facts.executor, dispatched.result as ExecutorResult)
+        if (produced === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'the debugger finished without stating a diagnosis, so no repair is authorized',
+          )
+        }
+        try {
+          diagnosis = validateDiagnosis(produced)
+        } catch (error) {
+          if (!(error instanceof RepairError)) throw error
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, blockerKindOfRepairError(error), error.message,
+          )
+        }
+        await journal.diagnosis(stage.stageId, diagnosis)
+        continue
+      }
+
+      if (stage.role === 'repair' && (verdict === 'PASS' || verdict === 'PARTIAL')) {
+        const claimed: RepairEvidence = request.repairEvidence?.(
+          stage, dispatched.facts.executor, dispatched.result as ExecutorResult,
+        ) ?? { rootCauseAddressed: false }
+        const completion = assessRepairCompletion(authorization as RepairAuthorization, claimed)
+        // The repair session ends here whatever it concluded; the verifier that
+        // follows starts from the tree, not from this stage's authority.
+        defect = undefined
+        diagnosis = undefined
+        authorization = undefined
+        if (!completion.complete) {
+          await journal.verdict(stage.stageId, stage.role, 'INCONCLUSIVE', completion.summary, [])
+          return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'INCONCLUSIVE',
+            completion.summary)
+        }
+        continue
+      }
+
       if (verdict === 'FAIL' || verdict === 'PARTIAL') {
         if (stage.role !== 'verify') {
           return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'FAIL',
@@ -299,9 +386,29 @@ export class WorkflowRunner {
             `verification still fails after ${maxRepairCycles} repair cycles; a person has to look`,
           )
         }
+        // A repair acts on a named defect. A verification that failed without
+        // naming one has reported that something is wrong, which is not the same
+        // as having said what to fix, and guessing is how a repair invents work.
+        const repairable = dispatched.facts.findings.find(
+          finding => finding.confirmed && AUTO_REPAIRABLE_FINDINGS.includes(finding.class),
+        )
+        if (repairable === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'verification failed without naming a confirmed defect an automated repair may act on',
+          )
+        }
+        defect = repairable
+        diagnosis = undefined
+        authorization = undefined
         repairCycles += 1
         verifications += 1
+        // Mechanically obvious scaffolding defects skip diagnosis; everything
+        // that changes behavior gets a read-only debugger first.
         queue.unshift(
+          ...isMechanicallyObvious(repairable)
+            ? []
+            : [{ stageId: `debug-${repairCycles}`, role: 'debug' as const }],
           { stageId: `repair-${repairCycles}`, role: 'repair' },
           { stageId: `verify-${verifications}`, role: 'verify' },
         )
@@ -327,9 +434,10 @@ export class WorkflowRunner {
     request: WorkflowRunRequest,
     signal: AbortSignal,
     priorAttempts: number,
+    lastMutator: string | undefined,
   ): Promise<Dispatched> {
     const { journal, executors, policy } = this.#options
-    const context = this.#routingContext(stage, request, priorAttempts)
+    const context = this.#routingContext(stage, request, priorAttempts, lastMutator)
     const decision = route(context, policy)
     const dispatch = { stageId: stage.stageId, role: stage.role, decision }
 
@@ -381,6 +489,7 @@ export class WorkflowRunner {
         facts: facts(stage, executor, permissionMode, 'INCONCLUSIVE', 'the stage was canceled', [], [], durationMs),
         canceled: true,
         failed: false,
+        result: undefined,
       }
     }
 
@@ -393,6 +502,7 @@ export class WorkflowRunner {
         facts: facts(stage, executor, permissionMode, 'FAIL', summary, [], [], durationMs),
         canceled: false,
         failed: true,
+        result: undefined,
       }
     }
 
@@ -409,14 +519,20 @@ export class WorkflowRunner {
       ),
       canceled: false,
       failed: false,
+      result,
     }
   }
 
   /** The routing context one stage presents, built from the role and profile. */
-  #routingContext(stage: StageSpec, request: WorkflowRunRequest, priorAttempts: number): RoutingContext {
+  #routingContext(
+    stage: StageSpec,
+    request: WorkflowRunRequest,
+    priorAttempts: number,
+    lastMutator: string | undefined,
+  ): RoutingContext {
     const { objective } = request
     const { profile, degradedExecutors = [] } = this.#options
-    const implementer = request.implementationExecutor
+    const implementer = lastMutator ?? request.implementationExecutor
     return {
       role: stage.role,
       workload: objective.workload,

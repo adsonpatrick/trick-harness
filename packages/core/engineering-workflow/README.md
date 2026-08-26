@@ -20,6 +20,20 @@ A `WorkflowRunner` owns at most one live run and the `AbortController` that ends
 
 A stage hands back `StageFacts`: its verdict, its summary, its findings and its evidence references. The executor's output does not travel — the caller's `StageInterpreter` reduces it at the boundary, and whatever it returns is all the run carries. That is what keeps one stage's context out of the next one's, which is the whole point of dispatching them separately.
 
+## Diagnosis comes before repair, and is a separate stage
+
+A failed verification does not queue a repair. It queues a read-only `debug` stage first, and the repair that follows is authorized against what that stage established — a `DiagnosisContract` with a reproduction, ruled-out hypotheses, a root cause the debugger rates above low confidence, and a regression seam to attach a test to. `authorizeRepair` runs before dispatch, so a repair that may not start never gets a writable working tree in the first place. The one exception is a mechanically obvious scaffolding defect: a confirmed `TEST_DEFECT` or `TOOLING_DEFECT` that points at evidence has no behavior to reproduce, and skips diagnosis. A confirmed `BUG` or `SECURITY_BUG` never does.
+
+A verification that fails without naming a confirmed repairable finding is blocked rather than repaired. Reporting that something is wrong is not the same as saying what to fix, and guessing at the difference is how a repair invents work nobody asked for.
+
+## A missing product decision stops the run
+
+When the diagnosis names a `productDecisionDependency`, the gate returns a `product-decision` blocker and the run ends `BLOCKED` before anything is written. Inventing the behavior is the one failure a later review could not detect, because the code would be self-consistent and the reviewer has no more access to the unmade decision than the repairer did.
+
+## A symptom that stopped appearing is not a repair
+
+`assessRepairCompletion` judges a finished repair against what it was authorized to owe. A behavior fix owes a regression test that pins the defect and a change that addresses the diagnosed cause; every repair owes a focused run that shows the result green. Any gap makes the repair `INCONCLUSIVE` and ends the run there — the verifier that would have followed is not asked to bless work whose own author could not say what it fixed. The verifier that does follow a repair is routed with the repairing executor named as `implementationExecutor`, so independence policy can send the reading to someone other than the writer.
+
 ## Budgets end runs; they do not extend them
 
 `maxExecutorStarts` and `maxRepairCycles` come from the profile, and reaching either produces a `budget-exhausted` blocker and a terminal `BLOCKED`. A verification that still fails after the last repair cycle is a thing a person has to look at, not a thing to try once more.
@@ -49,6 +63,10 @@ const runner = new WorkflowRunner('wf-1', options)
 const outcome = await runner.run({
   objective,
   interpret: (stage, executor) => interpret(stage, executor),
+  // Read the debugger's own output back; returning undefined blocks the repair.
+  diagnose: () => undefined,
+  // Read the repair's claims back; silence is judged as no evidence at all.
+  repairEvidence: () => ({ rootCauseAddressed: false }),
   task: (stage) => `${stage.role}: ${objective.requirement}`,
 })
 console.log(planStages(objective).length, outcome.state, outcome.verdict)
@@ -61,7 +79,7 @@ runner.dispose()
 
 ## Known Limitations and Deferred Work
 
-- **Diagnosis is not yet required before repair** — a repair stage is queued on a failed verification with no `DiagnosisContract` in between. That gate belongs to the debugging and repair work and is not in this package yet.
-- **Findings are not triaged** — a `BLOCKED` verdict's blocker kind is read from its findings, but no stage decides which findings are eligible for repair at all.
+- **Findings are not triaged** — the repair gate picks the first confirmed repairable finding a failed verification named, and nothing decides between several or closes the loop on the ones it did not act on.
+- **The regression test is claimed, not observed** — `RepairEvidence` is what the caller's reader says the repair produced. This package checks that the claim was made and pins what it must contain; confirming the named test really failed first is the verifier's job.
 - **The breaker's state is not consulted** — `degradedExecutors` is a constructor option, so a circuit that opens mid-run does not affect the stages still to come.
 - **`priorAttempts` counts repair cycles only** — a stage retried for any other reason presents the same routing facts it did the first time.

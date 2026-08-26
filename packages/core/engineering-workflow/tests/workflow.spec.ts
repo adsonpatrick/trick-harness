@@ -10,7 +10,7 @@ import type {
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { RoutingPolicy } from '@trick-harness/routing'
-import type { StageResult, WorkflowObjective } from '@trick-harness/contracts'
+import type { DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import {
   WorkflowError,
   WorkflowRunner,
@@ -90,6 +90,40 @@ function interpretAllPass(stage: StageSpec, executor: string): StageResult {
 function taskFor(stage: StageSpec, objective: WorkflowObjective): string {
   return `${stage.role}: ${objective.requirement}`
 }
+
+const DIAGNOSIS: DiagnosisContract = Object.freeze({
+  symptom: 'rounding is off by a cent on the last item',
+  reproduction: 'pnpm vitest run cart.spec.ts -t "totals"',
+  expectedVsActual: 'expected 10.00, got 9.99',
+  observedEvidence: Object.freeze([
+    Object.freeze({ kind: 'test' as const, locator: 'cart.spec.ts:totals', summary: 'red before the fix' }),
+  ]),
+  affectedBoundary: 'packages/cart/src/total.ts',
+  ruledOutHypotheses: Object.freeze(['locale formatting', 'stale fixture']),
+  rootCauseHypothesis: 'the subtotal truncates before the tax is applied',
+  confidence: 'high',
+  regressionTestSeam: 'cart.spec.ts totals suite',
+  minimalRepairSurface: 'total.ts rounding order',
+  unknowns: Object.freeze([]),
+  securityRelevance: 'none',
+})
+
+function bug(id = 'f-1', findingClass: Finding['class'] = 'BUG'): Finding {
+  return {
+    id,
+    class: findingClass,
+    raisedBy: 'verify',
+    summary: 'totals are a cent short',
+    confirmed: true,
+    evidence: [{ kind: 'test', locator: 'cart.spec.ts:totals', summary: 'red' }],
+  }
+}
+
+const REPAIRED = Object.freeze({
+  regressionTest: Object.freeze({ kind: 'test' as const, locator: 'cart.spec.ts:totals', summary: 'red first' }),
+  focusedGreen: Object.freeze({ kind: 'test' as const, locator: 'cart.spec.ts:totals', summary: 'green after' }),
+  rootCauseAddressed: true,
+})
 
 describe('the stage plan', () => {
   it('runs implement, verify and delivery for an ordinary objective', () => {
@@ -280,7 +314,124 @@ describe('a run that goes wrong', () => {
     expect(projection.blockers[0]?.kind).toBe('product-decision')
   })
 
-  it('repairs a failed verification within the profile budget', async () => {
+  it('repairs a failed verification through a read-only diagnosis first', async () => {
+    let verifications = 0
+    const modes: string[] = []
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async (request) => {
+      modes.push(request.route.permissionMode)
+      return passing('reviewer')
+    }))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => {
+        if (stage.role !== 'verify') return interpretAllPass(stage, executor)
+        verifications += 1
+        return {
+          role: stage.role,
+          executor,
+          verdict: verifications === 1 ? 'FAIL' : 'PASS',
+          summary: verifications === 1 ? 'focused suite red' : 'focused suite green',
+          findings: verifications === 1 ? [bug()] : [],
+          evidence: [],
+        }
+      },
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(outcome.repairCycles).toBe(1)
+    expect(outcome.stages.map(stage => stage.role)).toEqual([
+      'implement', 'verify', 'debug', 'repair', 'verify', 'delivery',
+    ])
+    expect(outcome.stages.find(stage => stage.role === 'debug')?.permissionMode).toBe('read-only')
+    expect(modes).toEqual(['read-only', 'read-only'])
+    for (const stage of outcome.stages) expect(stage.permissionMode).toBe(permissionModeFor(stage.role))
+    expect(JSON.stringify(session.events)).toContain('harness/diagnosis')
+  })
+
+  it('blocks rather than repairing when the failed verification names no defect', async () => {
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.repairCycles).toBe(0)
+    expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify'])
+  })
+
+  it('blocks when the debugger finishes without stating a diagnosis', async () => {
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        : interpretAllPass(stage, executor),
+      diagnose: () => undefined,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'debug'])
+    expect(outcome.stages.some(stage => stage.role === 'repair')).toBe(false)
+  })
+
+  it('blocks before any mutation when the defect depends on an unmade product decision', async () => {
+    const started: string[] = []
+    executors.register(provider('builder', async (request) => {
+      started.push(request.route.permissionMode)
+      return passing('builder')
+    }))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        : interpretAllPass(stage, executor),
+      diagnose: () => ({ ...DIAGNOSIS, productDecisionDependency: 'nobody said which currency to round to' }),
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.stages.some(stage => stage.role === 'repair')).toBe(false)
+    // Only the original implement stage ever held write authority.
+    expect(started.filter(mode => mode === 'workspace-write')).toHaveLength(1)
+    expect(projectWorkflow(session.events, 'wf-1').blockers.at(-1)?.kind).toBe('product-decision')
+  })
+
+  it('treats a repair with no regression test as incomplete rather than done', async () => {
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => ({ focusedGreen: REPAIRED.focusedGreen, rootCauseAddressed: true }),
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('failed')
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.summary).toContain('regression test')
+  })
+
+  it('repairs a mechanically obvious test defect without a debugger', async () => {
     let verifications = 0
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
@@ -294,16 +445,16 @@ describe('a run that goes wrong', () => {
           role: stage.role,
           executor,
           verdict: verifications === 1 ? 'FAIL' : 'PASS',
-          summary: verifications === 1 ? 'focused suite red' : 'focused suite green',
-          findings: [],
+          summary: 'suite',
+          findings: verifications === 1 ? [bug('f-2', 'TEST_DEFECT')] : [],
           evidence: [],
         }
       },
+      repairEvidence: () => REPAIRED,
       task: taskFor,
     })
 
     expect(outcome.state).toBe('completed')
-    expect(outcome.repairCycles).toBe(1)
     expect(outcome.stages.map(stage => stage.role)).toEqual([
       'implement', 'verify', 'repair', 'verify', 'delivery',
     ])
@@ -316,8 +467,10 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [bug()], evidence: [] }
         : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
       task: taskFor,
     })
 

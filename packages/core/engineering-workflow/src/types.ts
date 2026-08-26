@@ -9,6 +9,7 @@ import type {
 } from '@trick-harness/contracts'
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { WorkflowEndState } from '@trick-harness/journal'
+import type { RepairEvidence } from './repair.ts'
 
 /** One stage the plan intends to run, named before anything is dispatched. */
 export interface StageSpec {
@@ -83,4 +84,20 @@ export interface WorkflowRunRequest {
   readonly interpret: StageInterpreter
   /** Prompt text per role; the runtime never composes task text itself. */
   readonly task: (stage: StageSpec, objective: WorkflowObjective) => string
+  /**
+   * Reads the debugger stage's result back as a diagnosis, if it produced one.
+   *
+   * The runtime never parses a diagnosis out of provider output. A caller that
+   * knows the executor's shape supplies this, and returning `undefined` is a
+   * legitimate answer: a debugger that established nothing has established
+   * nothing, and the repair gate refuses on that rather than proceeding.
+   */
+  readonly diagnose?: (stage: StageSpec, executor: string, result: ExecutorResult) => unknown
+  /**
+   * Reads a finished repair's own claims back, for the completion gate.
+   *
+   * Absent, a repair is judged to have produced no regression test and no
+   * focused green run, because silence is not evidence.
+   */
+  readonly repairEvidence?: (stage: StageSpec, executor: string, result: ExecutorResult) => RepairEvidence
 }

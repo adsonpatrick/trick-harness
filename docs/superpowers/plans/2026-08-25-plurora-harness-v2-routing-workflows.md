@@ -188,13 +188,13 @@ finding/symptom
  -> optional QA retest
 ```
 
-- [ ] Write RED tests proving repair cannot start for non-trivial bug without valid `DiagnosisContract` except mechanically obvious test/tooling defects with explicit evidence.
-- [ ] Enforce debugger read-only capability and fresh repair session.
-- [ ] Require diagnosis fields from the approved Spec.
-- [ ] If product-decision dependency is material, emit blocker and stop before mutation.
-- [ ] Repair stage requires regression RED for behavior defects, focused GREEN and fresh verifier.
-- [ ] Symptom disappearance without supported root cause is incomplete.
-- [ ] Commit: `feat(trick): add diagnosis and repair workflow`.
+- [x] Write RED tests proving repair cannot start for non-trivial bug without valid `DiagnosisContract` except mechanically obvious test/tooling defects with explicit evidence.
+- [x] Enforce debugger read-only capability and fresh repair session.
+- [x] Require diagnosis fields from the approved Spec.
+- [x] If product-decision dependency is material, emit blocker and stop before mutation.
+- [x] Repair stage requires regression RED for behavior defects, focused GREEN and fresh verifier.
+- [x] Symptom disappearance without supported root cause is incomplete.
+- [x] Commit: `feat(trick): add diagnosis and repair workflow`.
 
 ---
 
