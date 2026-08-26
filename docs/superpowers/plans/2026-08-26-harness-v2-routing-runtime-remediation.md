@@ -4,7 +4,7 @@
 
 **Goal:** Make Plurora routing invariants, availability fallback, circuit breaking, and one-run manual override true in the live WorkflowRunner rather than only in pure router tests.
 
-**Architecture:** Providers normalize native execution failures into the Harness routing vocabulary at the provider boundary. The WorkflowRunner owns per-workflow degraded/circuit state and reroutes the same stage only for availability failures. Hard Plurora invariants are applied after fallback selection, and a human stage override is single-consumption, journaled, and never widens permission authority.
+**Architecture:** Providers normalize native execution failures into the Harness routing vocabulary at the provider boundary. `WorkflowRunner` owns per-workflow degraded/circuit state and reroutes the same stage only for availability failures. Hard Plurora invariants are applied after fallback selection, and a human stage override is single-consumption, journaled, and never widens permission authority.
 
 **Tech Stack:** TypeScript, Vitest, DSH Session journal, Trick Harness executor/providers/routing/workflow/control-server/composition.
 
@@ -28,16 +28,15 @@
 
 **Files:**
 - Modify: `packages/providers/codex/src/config.ts`
-- Modify: `packages/providers/codex/tests/config.spec.ts`
+- Modify: `packages/providers/codex/tests/codex.spec.ts`
 - Modify: `packages/core/routing/src/index.ts`
 - Modify: `packages/core/routing/tests/availability.spec.ts`
-- Modify: `packages/core/executor/src/types.ts` only if the normalized category type is owned there rather than as a string union in routing/contracts.
 
 **Interfaces:**
 - Consumes: current `ExecutorFailure { category, availability, safeDiagnostic, httpStatus? }`.
 - Produces: one normalized category vocabulary matching `packages/core/routing` exactly.
 
-Use these normalized values for Codex mappings:
+Use this explicit mapping in `packages/providers/codex/src/config.ts`:
 
 ```ts
 const CODEX_FAILURE_MAP = {
@@ -57,11 +56,9 @@ const CODEX_FAILURE_MAP = {
 } as const
 ```
 
-Unknown native categories become `other`, `availability: false`; they are never guessed into availability.
+Unknown native categories become `other`, `availability: false`.
 
-- [ ] **Step 1: Write RED provider tests for the native-to-normalized mapping**
-
-Add table-driven assertions in `packages/providers/codex/tests/config.spec.ts`:
+- [ ] **Step 1: Write RED provider tests in `packages/providers/codex/tests/codex.spec.ts`**
 
 ```ts
 it.each([
@@ -81,34 +78,30 @@ it.each([
 
 - [ ] **Step 2: Run the focused test and confirm RED**
 
-Run:
-
 ```bash
-pnpm vitest run packages/providers/codex/tests/config.spec.ts
+pnpm vitest run packages/providers/codex/tests/codex.spec.ts
 ```
 
-Expected: at least the `usageLimitExceeded` assertion fails because the current result still exposes the native camelCase category.
+Expected: at least `usageLimitExceeded` fails because the current result still exposes the provider-native category.
 
-- [ ] **Step 3: Implement the explicit mapping in `packages/providers/codex/src/config.ts`**
+- [ ] **Step 3: Implement the closed mapping**
 
-Do not infer by regex/case conversion. Use a closed mapping so protocol changes fail safely.
+Do not infer categories by case conversion. `executorFailure()` must emit only routing-normalized values.
 
-- [ ] **Step 4: Align `packages/core/routing` failure vocab/tests with the same normalized strings**
+- [ ] **Step 4: Align routing failure vocab/tests**
 
-Delete duplicate aliases that let camelCase and kebab-case both pass. There must be one routing vocabulary.
+Remove duplicate aliases that allow provider-native camelCase and normalized kebab-case to coexist at the routing boundary.
 
-- [ ] **Step 5: Run provider + routing tests GREEN**
+- [ ] **Step 5: Run GREEN**
 
 ```bash
-pnpm vitest run packages/providers/codex/tests/config.spec.ts packages/core/routing/tests/availability.spec.ts
+pnpm vitest run packages/providers/codex/tests/codex.spec.ts packages/core/routing/tests/availability.spec.ts
 ```
-
-Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/providers/codex packages/core/routing packages/core/executor/src/types.ts
+git add packages/providers/codex packages/core/routing
 git commit -m "fix(trick): normalize executor failure categories"
 ```
 
@@ -120,13 +113,13 @@ git commit -m "fix(trick): normalize executor failure categories"
 - Modify: `packages/core/routing/src/index.ts`
 - Modify: `packages/core/routing/tests/availability.spec.ts`
 - Modify: `profiles/plurora/routing-policy.ts`
-- Modify: `profiles/plurora/tests/routing-policy.spec.ts`
+- Modify: `profiles/plurora/tests/routing.spec.ts`
 
 **Interfaces:**
 - Consumes: `RoutingContext`, `RoutingPolicy`, `RouteDecision`.
 - Produces: fallback resolution that cannot return a route violating a hard workload invariant unless `userOverride` explicitly names the alternate route.
 
-Define a deterministic helper in routing, for example:
+Add a deterministic helper equivalent to:
 
 ```ts
 export function isHeavyWrite(context: RoutingContext): boolean {
@@ -137,11 +130,7 @@ export function isHeavyWrite(context: RoutingContext): boolean {
 }
 ```
 
-For Plurora, the profile/routing policy must reject automatic fallback from OpenCode for `isHeavyWrite(context) === true`.
-
-- [ ] **Step 1: Add RED tests for OpenCode outage under heavy work**
-
-In `profiles/plurora/tests/routing-policy.spec.ts`, cover all three relevant roles:
+- [ ] **Step 1: Add RED heavy-outage tests in `profiles/plurora/tests/routing.spec.ts`**
 
 ```ts
 it.each(['implement', 'repair', 'qa'] as const)(
@@ -157,7 +146,7 @@ it.each(['implement', 'repair', 'qa'] as const)(
 )
 ```
 
-- [ ] **Step 2: Add a RED explicit-override counterpart**
+- [ ] **Step 2: Add RED explicit-override counterpart**
 
 ```ts
 const decision = route(pluroraContext({
@@ -165,7 +154,11 @@ const decision = route(pluroraContext({
   workload: 'heavy',
   writeVolume: 'large',
   degradedExecutors: ['opencode'],
-  userOverride: { executor: 'codex', semanticModelTier: 'codex.balanced', reasoningEffort: 'high' },
+  userOverride: {
+    executor: 'codex',
+    semanticModelTier: 'codex.balanced',
+    reasoningEffort: 'high',
+  },
 }), pluroraPolicy)
 expect(decision.executor).toBe('codex')
 expect(decision.reasonCodes).toContain('override:human')
@@ -174,23 +167,21 @@ expect(decision.reasonCodes).toContain('override:human')
 - [ ] **Step 3: Run RED**
 
 ```bash
-pnpm vitest run profiles/plurora/tests/routing-policy.spec.ts packages/core/routing/tests/availability.spec.ts
+pnpm vitest run profiles/plurora/tests/routing.spec.ts packages/core/routing/tests/availability.spec.ts
 ```
-
-Expected: automatic heavy fallback currently resolves to Codex or otherwise fails the new invariant assertion.
 
 - [ ] **Step 4: Implement hard-invariant fallback validation**
 
-Apply the invariant after identifying the primary route and before accepting a fallback decision. Do not encode model ids inside `WorkflowRunner`.
+Apply the invariant after identifying the primary route and before accepting any automatic fallback decision. Keep concrete model ids out of `WorkflowRunner`.
 
-- [ ] **Step 5: Remove/guard the generic Plurora `opencode-unavailable` fallback for heavy writes**
+- [ ] **Step 5: Guard Plurora `opencode-unavailable` fallback for heavy writes**
 
-Keep automatic fallback for light/medium cases that profile policy authorizes.
+Automatic fallback may remain for light/medium work where profile policy authorizes it.
 
 - [ ] **Step 6: Run GREEN and commit**
 
 ```bash
-pnpm vitest run profiles/plurora/tests/routing-policy.spec.ts packages/core/routing/tests/availability.spec.ts
+pnpm vitest run profiles/plurora/tests/routing.spec.ts packages/core/routing/tests/availability.spec.ts
 git add packages/core/routing profiles/plurora
 git commit -m "fix(plurora): keep heavy fallback on workhorse invariant"
 ```
@@ -203,51 +194,36 @@ git commit -m "fix(plurora): keep heavy fallback on workhorse invariant"
 - Modify: `packages/core/engineering-workflow/src/index.ts`
 - Modify: `packages/core/engineering-workflow/src/types.ts`
 - Modify: `packages/core/engineering-workflow/tests/workflow.spec.ts`
-- Modify: `packages/core/routing/src/index.ts` if a small exported circuit helper is needed.
-- Modify: `packages/core/journal/src/index.ts` only to call existing `circuitBreaker` / `routeFallback` helpers; journal event-shape changes belong to the journal plan.
+- Modify: `packages/core/routing/src/index.ts`
+- Modify: `packages/core/journal/src/index.ts`
 
 **Interfaces:**
 - Consumes: normalized `ExecutorFailure`, `openCircuit`, `recordFailure`, `recordSuccess`, `degradedExecutors`, `route`, `WorkflowJournal`.
-- Produces: one per-workflow circuit map and rerouting loop for the same `StageSpec`.
-
-The workflow-owned state should be equivalent to:
+- Produces: one per-workflow circuit map and a bounded rerouting loop for the same `StageSpec`.
 
 ```ts
 const circuits = new Map<string, ExecutorCircuit>()
 ```
 
-The runner must derive `RoutingContext.degradedExecutors` from current circuit state plus any startup degraded list supplied by composition.
+- [ ] **Step 1: Add RED live availability fallback test**
 
-- [ ] **Step 1: Replace the current “availability error => FAIL” expectation with RED fallback tests**
-
-In `workflow.spec.ts`, add a builder/reviewer fixture where Codex-equivalent provider fails once:
+In `packages/core/engineering-workflow/tests/workflow.spec.ts`, make the primary judging provider fail once:
 
 ```ts
-reviewer.start = vi.fn()
-  .mockResolvedValueOnce({
-    status: 'error',
-    output: '',
-    failure: {
-      category: 'usage-limit-exceeded',
-      availability: true,
-      safeDiagnostic: 'codex quota unavailable',
-    },
-  })
-  .mockResolvedValue({ status: 'completed', output: 'unused' })
+reviewer.start = vi.fn().mockResolvedValueOnce({
+  status: 'error',
+  output: '',
+  failure: {
+    category: 'usage-limit-exceeded',
+    availability: true,
+    safeDiagnostic: 'provider quota unavailable',
+  },
+})
 ```
 
-Register the authorized fallback provider and assert:
+Register the policy-authorized fallback provider and assert completed workflow, increased executor-start count, degraded circuit projection, and a route with `fallbackFrom`.
 
-```ts
-expect(outcome.state).toBe('completed')
-expect(outcome.executorStarts).toBeGreaterThan(3)
-expect(projectWorkflow(session.events, 'wf-1').circuits.reviewer).toBe('DEGRADED')
-expect(projectWorkflow(session.events, 'wf-1').routes.some(route => route.fallbackFrom === 'reviewer')).toBe(true)
-```
-
-Use policy fixture names consistently; do not hard-code Codex semantics into the generic workflow test.
-
-- [ ] **Step 2: Add a RED test that quality failure does not fallback**
+- [ ] **Step 2: Add RED quality-failure non-fallback test**
 
 Return:
 
@@ -259,40 +235,38 @@ failure: {
 }
 ```
 
-Assert fallback provider is never called and the workflow terminates with failure/blocking evidence according to current error semantics.
+Assert the fallback provider is never called.
 
-- [ ] **Step 3: Add a RED test for the start budget**
+- [ ] **Step 3: Add RED bounded-start test**
 
-Make primary and fallback availability-fail until the `maxExecutorStarts` ceiling; assert terminal `BLOCKED`/`FAIL` per workflow budget policy and no unbounded retry.
+Make primary and fallback availability-fail until `maxExecutorStarts`; assert terminal non-PASS and no unbounded retry.
 
 - [ ] **Step 4: Implement same-stage rerouting**
-
-Inside dispatch/drive:
 
 ```text
 start primary
  -> completed/aborted: existing path
- -> error + availability=false: existing failure path
+ -> error + availability=false: terminal failure path
  -> error + availability=true:
       recordFailure(circuit)
       journal circuit transition
       rebuild RoutingContext with degraded executor
       resolve fallback
       journal route fallback
-      increment executorStarts
-      dispatch fresh provider run
+      count the next executor start
+      dispatch a fresh provider run
 ```
 
-Do not reuse the failed provider session/run.
+Do not reuse the failed provider run.
 
-- [ ] **Step 5: Ensure successful bounded probe/manual refresh is the only way to return a degraded circuit to AVAILABLE**
+- [ ] **Step 5: Keep circuit recovery bounded**
 
-Do not guess a reset time from provider text.
+Only an actual successful probe or explicit manual refresh can return a degraded circuit to AVAILABLE. Do not infer reset time from provider prose.
 
-- [ ] **Step 6: Run focused workflow/routing tests GREEN**
+- [ ] **Step 6: Run GREEN**
 
 ```bash
-pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/routing/tests/availability.spec.ts
+pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/routing/tests/availability.spec.ts packages/core/journal/tests/journal.spec.ts
 ```
 
 - [ ] **Step 7: Commit**
@@ -320,7 +294,6 @@ git commit -m "fix(trick): route live availability failures through fallback"
 - Modify: `packages/composition/runtime/tests/harness.spec.ts`
 
 **Interfaces:**
-- Produces:
 
 ```ts
 export interface StageRouteOverride {
@@ -337,33 +310,31 @@ export interface StageRouteOverride {
 readonly routeOverride?: StageRouteOverride
 ```
 
-Control-server `POST /workflows` accepts an optional `routeOverride` sibling to `objective` after strict parsing.
+- [ ] **Step 1: Add RED parser tests**
 
-- [ ] **Step 1: Add RED contract parser tests**
+Reject blank executor, unknown role, arrays/objects where scalar strings are required, and undeclared fields according to the existing contracts parser policy.
 
-Reject blank executor, unknown role, array/object where strings are required, and extra fields if the project parser strips undeclared data by contract.
+- [ ] **Step 2: Add RED single-consumption test**
 
-- [ ] **Step 2: Add RED WorkflowRunner single-consumption test**
-
-Create a workflow with two stages sharing the same role through a custom plan. Assert the override changes only the first matching dispatch and the second returns to policy routing.
+Use a custom plan with two stages of the same role. Assert only the first matching dispatch consumes the override; the second uses normal policy routing.
 
 - [ ] **Step 3: Add RED permission-safety test**
 
-Attempt to route `review` through an executor override while keeping role read-only. Assert the provider request still has `permissionMode: 'read-only'`.
+Override executor/model for `review`; assert the provider request remains `permissionMode: 'read-only'`.
 
 - [ ] **Step 4: Add RED control-server request test**
 
-POST a valid objective + override and assert the starter receives the parsed override; POST malformed override and expect 400 without starting a workflow.
+POST a valid objective + override and assert the starter receives it. POST malformed override and expect 400 with zero workflow starts.
 
-- [ ] **Step 5: Implement parser and workflow plumbing**
+- [ ] **Step 5: Implement workflow plumbing**
 
-The WorkflowRunner injects `userOverride` into exactly one matching `RoutingContext`, marks it consumed only after a route is successfully resolved, and records `override:human` in reason codes.
+Inject `userOverride` into exactly one matching `RoutingContext`; mark it consumed only after route resolution succeeds; record `override:human` in reason codes.
 
 - [ ] **Step 6: Thread the override through `composeHarness()`**
 
-Do not mutate profile routing tables or provider config objects.
+Do not mutate profile routing tables or provider config.
 
-- [ ] **Step 7: Run focused tests GREEN**
+- [ ] **Step 7: Run GREEN**
 
 ```bash
 pnpm vitest run \
@@ -385,28 +356,29 @@ git commit -m "feat(trick): plumb single-run routing override"
 ### Task 5: Verify Routing Runtime as a Real Plurora Composition
 
 **Files:**
-- Modify: `profiles/plurora/tests/routing-policy.spec.ts`
+- Modify: `profiles/plurora/tests/routing.spec.ts`
+- Modify: `profiles/plurora/tests/composition.spec.ts`
 - Modify: `packages/composition/runtime/tests/harness.spec.ts`
 - Modify: `packages/composition/runtime/README.md`
-- Modify: `profiles/plurora/README.md` if it documents routing/fallback behavior.
+- Modify: `profiles/plurora/README.md`
 
 **Interfaces:**
-- Consumes: the real `pluroraProfile` and composed executor runtime.
+- Consumes: real `pluroraProfile` and composed executor runtime.
 - Produces: cross-package evidence that profile policy, live workflow fallback and override agree.
 
-- [ ] **Step 1: Add a real-profile composition test for Codex availability fallback**
+- [ ] **Step 1: Add real-profile Codex availability fallback test**
 
-Use fake providers named `codex` and `opencode`, but use the actual Plurora profile/registry. Make Codex review fail with `usage-limit-exceeded`; assert fresh OpenCode reasoning fallback and explicit `fallbackFrom: 'codex'`.
+Use fake providers named `codex` and `opencode` with the actual Plurora profile/registry. Make Codex review fail with `usage-limit-exceeded`; assert fresh OpenCode reasoning fallback and `fallbackFrom: 'codex'`.
 
-- [ ] **Step 2: Add a real-profile heavy OpenCode outage test**
+- [ ] **Step 2: Add real-profile heavy OpenCode outage test**
 
-Make a heavy implementation objective with OpenCode unavailable. Assert the workflow blocks before starting Codex unless an explicit override is supplied.
+Heavy implementation with OpenCode unavailable must block before starting Codex unless an explicit override is supplied.
 
-- [ ] **Step 3: Add a real-profile override test**
+- [ ] **Step 3: Add real-profile override isolation test**
 
-Assert override is visible in durable route facts and does not persist to the next stage/workflow.
+Assert override is visible in durable route facts and does not persist to the next stage or workflow.
 
-- [ ] **Step 4: Run all routing/runtime package tests and project gates**
+- [ ] **Step 4: Run routing/runtime package tests and gates**
 
 ```bash
 pnpm vitest run packages/core/routing packages/core/engineering-workflow packages/providers/codex profiles/plurora packages/composition/runtime
@@ -415,20 +387,11 @@ pnpm lint
 pnpm build
 ```
 
-Run the repository constraint/doc gates using the scripts documented in the root `package.json`/AGENTS.md.
+Then run the repository constraint/doc gates defined in the root `package.json` and `AGENTS.md`.
 
 - [ ] **Step 5: Independent review gate**
 
-Fresh reviewer must verify specifically:
-
-```text
-heavy invariant
-availability-vs-quality separation
-bounded fallback
-single-consumption override
-permission preservation
-durable fallback/circuit evidence
-```
+Fresh reviewer verifies: heavy invariant, availability-vs-quality separation, bounded fallback, single-consumption override, permission preservation, durable fallback/circuit evidence.
 
 - [ ] **Step 6: Commit docs/test completion**
 
