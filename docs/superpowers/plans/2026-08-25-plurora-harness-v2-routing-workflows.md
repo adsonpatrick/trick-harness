@@ -87,13 +87,13 @@ codex.balanced          -> GPT-5.6 Terra
 codex.frontier          -> GPT-5.6 Sol
 ```
 
-- [ ] Write table-driven RED routing tests covering approved Plurora defaults through `profiles/plurora`.
-- [ ] Add manual override tests proving valid override wins for one run and invalid capability is rejected.
-- [ ] Add independence tests using `implementationExecutor` + risk.
-- [ ] Implement pure `route(context, policy): RouteDecision`; no product/process side effect.
-- [ ] Record `policyVersion` and machine-readable `reasonCodes[]` in every decision.
-- [ ] Add tests proving model registry update changes resolved model without changing workflow mechanism.
-- [ ] Commit: `feat(trick): add deterministic executor routing`.
+- [x] Write table-driven RED routing tests covering approved Plurora defaults through `profiles/plurora`.
+- [x] Add manual override tests proving valid override wins for one run and invalid capability is rejected.
+- [x] Add independence tests using `implementationExecutor` + risk.
+- [x] Implement pure `route(context, policy): RouteDecision`; no product/process side effect.
+- [x] Record `policyVersion` and machine-readable `reasonCodes[]` in every decision.
+- [x] Add tests proving model registry update changes resolved model without changing workflow mechanism.
+- [x] Commit: `feat(trick): add deterministic executor routing`.
 
 ---
 

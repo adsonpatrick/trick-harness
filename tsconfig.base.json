@@ -53,6 +53,8 @@
       "@trick-harness/profile/invariant": ["./packages/core/profile/src/invariant.ts"],
       "@trick-harness/contracts": ["./packages/core/contracts/src/index.ts"],
       "@trick-harness/contracts/invariant": ["./packages/core/contracts/src/invariant.ts"],
+      "@trick-harness/routing": ["./packages/core/routing/src/index.ts"],
+      "@trick-harness/routing/invariant": ["./packages/core/routing/src/invariant.ts"],
       "@deepseek-ai/dsh-tool-call-timeout-policy": ["./packages/guard/timeout-policy/src"],
       "@deepseek-ai/dsh-tool-call-timeout-policy/invariant": ["./packages/guard/timeout-policy/src/invariant.ts"],
       "@deepseek-ai/dsh-typert-registry": ["./packages/typert/registry/src/index.ts"],

@@ -81,11 +81,11 @@ describe('the Plurora deployment composition', () => {
   })
 
   it('makes every routing row dispatchable on the executor it names', async () => {
-    // Plurora states an effort on every row, and OpenCode has no field for one.
-    // The profile's documented promise is that this stays advisory rather than
-    // making those rows unroutable, which is only true if the intent is narrowed
-    // through `dispatchableRoute` before dispatch. This is the test that would
-    // fail if a resolver ever passed a `use` row to the runtime as written.
+    // Every row must be dispatchable on the executor it names, and the
+    // narrowing step is what keeps it so: a stated reasoning effort is advisory,
+    // and a product without the knob still serves the route. This is the test
+    // that would fail if a resolver ever passed a `use` row to the runtime as
+    // written.
     const seams = productSeams()
     const bundle = createHarnessRuntimeBundle({
       opencode: { adapter: seams.adapter },
@@ -113,14 +113,15 @@ describe('the Plurora deployment composition', () => {
       })).resolves.toMatchObject({ status: 'error', failure: { category: 'provider-error' } })
       if (narrowed.dropped.length > 0) dropped.push(rule.id)
     }
-    // Named rather than counted: the OpenCode rows are exactly the rows whose
-    // stated effort survives only in the durable route fact.
-    expect(dropped).toEqual([
-      'routine-review',
-      'repair',
-      'codex-unavailable-critical',
-      'codex-unavailable',
-    ])
+    // Nothing is dropped today, and the reason is stated rather than assumed:
+    // no OpenCode row claims a reasoning effort, because writing a number down
+    // for a knob the product does not have is a claim about a run nobody can
+    // check. If a row ever states one, it lands here as a dropped id rather
+    // than as a silently unhonoured intent.
+    expect(dropped).toEqual([])
+    for (const rule of [...rules, ...fallbackRules]) {
+      if (rule.use['executor'] === 'opencode') expect(rule.use['effort'], rule.id).toBeUndefined()
+    }
     bundle.dispose()
   })
 

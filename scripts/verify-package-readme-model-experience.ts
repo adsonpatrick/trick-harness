@@ -34,6 +34,7 @@ const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/composition/runtime': 'The package registers providers and starts nothing; every model-facing surface belongs to the executed product, reached only through a later dispatch.',
   'packages/core/profile': 'The package is a validated policy-data registry with no model-facing surface; consumers own any rendered use.',
   'packages/core/contracts': 'The package declares the workflow vocabulary and the parsers that read it back; nothing here is rendered into a request, and the stages that do own their own prompts.',
+  'packages/core/routing': 'The package is a pure policy function selecting an executor and a semantic tier; it renders nothing and contacts no product, and the selected executor owns every model-facing surface.',
   'packages/providers/opencode': 'The provider hands one task string to the OpenCode product, which owns every model-facing surface; the bounded final result is returned to the caller rather than rendered into a request.',
   'packages/providers/codex': 'The provider hands one task string to the Codex product, which owns every model-facing surface; the bounded final result is returned to the caller rather than rendered into a request.',
   'packages/core/scope': 'The package is a model-agnostic registration and lifecycle primitive; model-facing consumers own any context selection.',

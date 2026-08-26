@@ -3356,3 +3356,4 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@trick-harness/profile` ([`packages/core/profile/src/index.ts`](../packages/core/profile/src/index.ts))
 - `@trick-harness/provider-codex` ([`packages/providers/codex/src/index.ts`](../packages/providers/codex/src/index.ts))
 - `@trick-harness/provider-opencode` ([`packages/providers/opencode/src/index.ts`](../packages/providers/opencode/src/index.ts))
+- `@trick-harness/routing` ([`packages/core/routing/src/index.ts`](../packages/core/routing/src/index.ts))

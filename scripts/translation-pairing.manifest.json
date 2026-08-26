@@ -21,6 +21,7 @@
     "packages/core/executor/README.md",
     "packages/core/profile/README.md",
     "packages/core/contracts/README.md",
+    "packages/core/routing/README.md",
     "packages/providers/codex/README.md",
     "packages/providers/opencode/README.md",
     "profiles/"
