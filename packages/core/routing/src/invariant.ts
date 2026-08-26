@@ -2,7 +2,13 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
-import { AVAILABILITY_FAILURES, DEFAULT_MODEL_REGISTRY, MATCHABLE_FACTS, QUALITY_FAILURES } from './index.ts'
+import {
+  AVAILABILITY_FAILURES,
+  DEFAULT_MODEL_REGISTRY,
+  DISABLING_FAILURES,
+  MATCHABLE_FACTS,
+  QUALITY_FAILURES,
+} from './index.ts'
 
 const PACKAGE_NAME = '@trick-harness/routing'
 
@@ -68,6 +74,16 @@ const EXPECTED_QUALITY_FAILURES = [
   'other',
 ]
 
+/**
+ * The failures that take an executor out of the pool, restated.
+ *
+ * Membership here is a strong claim - it stops the rest of the workflow from
+ * ever reaching that executor - so it is pinned for the same reason the
+ * availability set is, and from the other direction: an entry added here
+ * quietly turns a single bad run into an executor outage.
+ */
+const EXPECTED_DISABLING_FAILURES = ['unauthorized']
+
 /** Compare a shipped vocabulary against its independently restated expectation. */
 function pin(fail: InvariantFailure, label: string, actual: readonly string[], expected: readonly string[]): void {
   if (actual.length !== expected.length || !actual.every((item, index) => item === expected[index])) {
@@ -99,9 +115,16 @@ const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
   }
   pin(fail, 'the availability failure categories', AVAILABILITY_FAILURES, EXPECTED_AVAILABILITY_FAILURES)
   pin(fail, 'the quality failure categories', QUALITY_FAILURES, EXPECTED_QUALITY_FAILURES)
+  pin(fail, 'the disabling failure categories', DISABLING_FAILURES, EXPECTED_DISABLING_FAILURES)
   for (const failure of AVAILABILITY_FAILURES) {
     if ((QUALITY_FAILURES as readonly string[]).includes(failure)) {
       fail(`failure category ${JSON.stringify(failure)} is classified as both availability and quality`)
+    }
+    if ((DISABLING_FAILURES as readonly string[]).includes(failure)) {
+      // An availability failure already reroutes and already recovers on a
+      // probe. Calling one disabling as well would strand an executor that the
+      // breaker is designed to bring back.
+      fail(`failure category ${JSON.stringify(failure)} both reroutes and disables its executor`)
     }
   }
 }

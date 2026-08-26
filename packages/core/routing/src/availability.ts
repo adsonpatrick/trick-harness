@@ -60,6 +60,33 @@ export const QUALITY_FAILURES = [
   'other',
 ] as const
 
+/**
+ * Failures that say the executor cannot serve *any* run until a human acts.
+ *
+ * These are not availability failures and must never reroute the attempt that
+ * hit one — an `unauthorized` run stops, it does not get a second opinion from
+ * another product. What they additionally mean is narrower and separate: this
+ * executor has nothing to offer the rest of the workflow either, so leaving it
+ * in the candidate pool would send the next stage into the same wall and report
+ * the wall as a stage failure rather than as a missing credential.
+ *
+ * The list is deliberately not "everything that failed twice". An account that
+ * is not authorised is a fact about the product's configuration, knowable from
+ * one answer; a wrong answer is not.
+ */
+export const DISABLING_FAILURES = ['unauthorized'] as const
+
+/**
+ * Whether a failure removes its executor from further consideration.
+ * @param failure - The category the executor runtime reported.
+ * @returns True when no later stage should be routed to that executor.
+ * @throws {RoutingError} when the category is outside both closed sets.
+ */
+export function disablesExecutor(failure: string): boolean {
+  classifyFailure(failure)
+  return (DISABLING_FAILURES as readonly string[]).includes(failure)
+}
+
 /** One recognised failure category. */
 export type FailureClass = typeof AVAILABILITY_FAILURES[number] | typeof QUALITY_FAILURES[number]
 
