@@ -3355,6 +3355,7 @@ export interface Config {
 - `@trick-harness/contracts`（[`packages/core/contracts/src/index.ts`](../packages/core/contracts/src/index.ts)）
 - `@trick-harness/engineering-workflow`（[`packages/core/engineering-workflow/src/index.ts`](../packages/core/engineering-workflow/src/index.ts)）
 - `@trick-harness/executor`（[`packages/core/executor/src/index.ts`](../packages/core/executor/src/index.ts)）
+- `@trick-harness/github-delivery`（[`packages/integrations/github-delivery/src/index.ts`](../packages/integrations/github-delivery/src/index.ts)）
 - `@trick-harness/journal`（[`packages/core/journal/src/index.ts`](../packages/core/journal/src/index.ts)）
 - `@trick-harness/profile`（[`packages/core/profile/src/index.ts`](../packages/core/profile/src/index.ts)）
 - `@trick-harness/provider-codex`（[`packages/providers/codex/src/index.ts`](../packages/providers/codex/src/index.ts)）

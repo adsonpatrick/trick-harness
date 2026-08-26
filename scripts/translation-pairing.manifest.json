@@ -26,6 +26,7 @@
     "packages/core/engineering-workflow/README.md",
     "packages/providers/codex/README.md",
     "packages/providers/opencode/README.md",
+    "packages/integrations/github-delivery/README.md",
     "profiles/"
   ]
 }

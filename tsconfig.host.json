@@ -257,6 +257,7 @@
     { "path": "./packages/composition/runtime" },
     { "path": "./packages/providers/codex" },
     { "path": "./packages/providers/opencode" },
+    { "path": "./packages/integrations/github-delivery" },
     { "path": "./packages/test-support/agent-loop-testkit" },
     { "path": "./packages/acp/acp" },
     { "path": "./packages/examples/acp-demo" },

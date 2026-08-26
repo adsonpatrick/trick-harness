@@ -232,13 +232,13 @@ read CI/PR/commit state
 
 **Denied:** force push, protected/main implementation push, merge, release/deploy, unrelated branch mutation.
 
-- [ ] Write RED tests with a temporary Git repo/fake remote for branch validation, exact staged file set, main denial, force denial, normal push construction, and duplicate PR behavior.
-- [ ] Implement command construction through DSH subprocess service; never shell-concatenate untrusted values.
-- [ ] Validate branch belongs to requested workspace and is non-protected before mutation.
-- [ ] After commit/push/PR, re-read actual git/GitHub state and emit durable delivery event with commit SHA/PR identity.
-- [ ] Keep GitHub auth native to `gh`; never read/token-log credentials.
-- [ ] Cleanup/error reporting separates primary delivery result from teardown/metadata failure.
-- [ ] Commit: `feat(trick): add scoped GitHub delivery`.
+- [x] Write RED tests with a temporary Git repo/fake remote for branch validation, exact staged file set, main denial, force denial, normal push construction, and duplicate PR behavior.
+- [x] Implement command construction through DSH subprocess service; never shell-concatenate untrusted values.
+- [x] Validate branch belongs to requested workspace and is non-protected before mutation.
+- [x] After commit/push/PR, re-read actual git/GitHub state and emit durable delivery event with commit SHA/PR identity.
+- [x] Keep GitHub auth native to `gh`; never read/token-log credentials.
+- [x] Cleanup/error reporting separates primary delivery result from teardown/metadata failure.
+- [x] Commit: `feat(trick): add scoped GitHub delivery`.
 
 ---
 
