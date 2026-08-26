@@ -11,6 +11,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type {
+  ExecutorCleanupFailure,
   ExecutorPermissionMode,
   ExecutorProvider,
   ExecutorRegistration,
@@ -21,6 +22,7 @@ import type {
 } from './types.ts'
 
 export type * from './types.ts'
+export { cleanupFailure } from './cleanup.ts'
 
 /** Thrown when provider registration or selection is invalid. */
 export class ExecutorProviderError extends Error {
@@ -53,6 +55,32 @@ export class ExecutorCapabilityError extends Error {
   }
 }
 
+/**
+ * How many cleanup facts one runtime keeps.
+ *
+ * Bounded because this is evidence held for the lifetime of a runtime that may
+ * dispatch thousands of runs, and unbounded evidence is a leak. The count is
+ * kept separately from the retained facts so the truncation is never the silent
+ * kind: a report of 900 faults with 64 examples still says 900.
+ */
+export const CLEANUP_EVIDENCE_LIMIT = 64
+
+/** What a runtime observed of its providers' teardown, across every run. */
+export interface ExecutorCleanupReport {
+  /**
+   * Whether teardown has been clean for every run this runtime dispatched.
+   *
+   * The only thing that licenses calling a settled disposal quiescent-clean.
+   * Quiescence says the runs came back; this says they came back tidy, and the
+   * two are different claims.
+   */
+  readonly clean: boolean
+  /** Every cleanup fault seen, including ones too old to still be retained. */
+  readonly total: number
+  /** The retained faults, oldest first, capped at {@link CLEANUP_EVIDENCE_LIMIT}. */
+  readonly retained: readonly ExecutorCleanupFailure[]
+}
+
 /** Validated provider registry with capability-checked dispatch. */
 export interface HarnessExecutorRuntime {
   /**
@@ -83,6 +111,15 @@ export interface HarnessExecutorRuntime {
    * @returns the number of active runs.
    */
   activeRuns(): number
+  /**
+   * Report what this runtime has seen of its providers' teardown.
+   *
+   * Readable at any time, and outliving the runs themselves: the point is that
+   * after `dispose()` has resolved a verifier can ask whether quiescence was
+   * also clean, which a per-run result cannot answer once the run is gone.
+   * @returns the standing cleanup evidence.
+   */
+  cleanupReport(): ExecutorCleanupReport
   /**
    * Unregister every provider, abort every run in flight, and wait for them.
    *
@@ -238,6 +275,11 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
   // Doubles as the disposed flag: once it exists no run may start, and every
   // later caller is handed the same settlement rather than a second teardown.
   let disposal: Promise<void> | undefined
+  // Evidence, not state: nothing the runtime does branches on these, and they
+  // are deliberately not cleared by disposal, because the question they answer
+  // is asked after disposal.
+  const retainedCleanup: ExecutorCleanupFailure[] = []
+  let totalCleanup = 0
 
   return {
     register(provider: ExecutorProvider): ExecutorRegistration {
@@ -289,7 +331,15 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
       const run: ActiveRun = { controller, settled: finished.promise }
       inFlight.add(run)
       try {
-        return await provider.start({ ...request, signal: controller.signal })
+        const result = await provider.start({ ...request, signal: controller.signal })
+        // Recorded on the way past, not interpreted: the runtime keeps the fact
+        // so it survives the run, and hands the caller the same result it was
+        // given, with the same status the provider decided.
+        for (const failure of result.cleanup ?? []) {
+          totalCleanup += 1
+          if (retainedCleanup.length < CLEANUP_EVIDENCE_LIMIT) retainedCleanup.push(failure)
+        }
+        return result
       } finally {
         request.signal.removeEventListener('abort', forward)
         // Removed before the settlement is announced, so a disposer waking on
@@ -301,6 +351,14 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
 
     activeRuns(): number {
       return inFlight.size
+    },
+
+    cleanupReport(): ExecutorCleanupReport {
+      return Object.freeze({
+        clean: totalCleanup === 0,
+        total: totalCleanup,
+        retained: Object.freeze([...retainedCleanup]),
+      })
     },
 
     dispose(): Promise<void> {
@@ -380,6 +438,14 @@ export class ExecutorRuntime extends Service implements HarnessExecutorRuntime {
    */
   activeRuns(): number {
     return this.runtime.activeRuns()
+  }
+
+  /**
+   * Report what this runtime has seen of its providers' teardown.
+   * @returns the standing cleanup evidence.
+   */
+  cleanupReport(): ExecutorCleanupReport {
+    return this.runtime.cleanupReport()
   }
 
   /**

@@ -5,10 +5,15 @@ import type {
   SubprocessOutcome,
   SubprocessSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
-import type { ExecutorRoute, ExecutorStartRequest } from '@trick-harness/executor'
+import type {
+  ExecutorResult,
+  ExecutorRoute,
+  ExecutorStartRequest,
+} from '@trick-harness/executor'
 import {
   CODEX_CAPABILITIES,
   CODEX_EXECUTOR,
+  CODEX_RUN_DISPOSE_CLEANUP,
   createCodexProvider,
   isAvailabilityFailure,
   NON_AVAILABILITY_CATEGORIES,
@@ -64,7 +69,12 @@ interface FakeChild {
   readonly terminations: () => number
 }
 
-function fakeChild(): FakeChild {
+interface FakeChildOptions {
+  /** Make process-tree teardown fail, the way an unkillable tree does. */
+  readonly waitForExitFails?: Error
+}
+
+function fakeChild(options: FakeChildOptions = {}): FakeChild {
   const fromChild = new PassThrough()
   const toChild = new PassThrough()
   const stderr = new PassThrough()
@@ -87,6 +97,7 @@ function fakeChild(): FakeChild {
     done,
     terminate: vi.fn(() => { terminations += 1; settle() }),
     waitForExit: vi.fn(async () => {
+      if (options.waitForExitFails !== undefined) throw options.waitForExitFails
       if (!exited) settle()
       return true
     }),
@@ -126,9 +137,14 @@ interface DrivenRun {
  */
 async function drive(
   request: ExecutorStartRequest,
-  options: { readonly env?: Record<string, string> } = {},
+  options: {
+    readonly env?: Record<string, string>
+    readonly waitForExitFails?: Error
+  } = {},
 ): Promise<DrivenRun & { readonly result: Promise<unknown> }> {
-  const child = fakeChild()
+  const child = fakeChild(
+    options.waitForExitFails === undefined ? {} : { waitForExitFails: options.waitForExitFails },
+  )
   const spawn = vi.fn((_spec: SubprocessSpawnSpec) => child.handle)
   const provider = createCodexProvider({
     spawn,
@@ -383,5 +399,70 @@ describe('results and cancellation', () => {
     driven.finish(...answered)
     await driven.result
     expect(driven.child.terminations()).toBeGreaterThan(0)
+  })
+})
+
+describe('teardown failures are observable, not swallowed', () => {
+  /**
+   * Build a teardown error carrying the sort of text a real one carries.
+   * @returns the error, whose message must not survive into the result.
+   */
+  function unkillable(): Error {
+    const error = new Error('kill EPERM pid 4321 CODEX_HOME=/home/dev/.codex token=sk-live-77')
+    error.name = 'TreeTeardownError'
+    return error
+  }
+
+  it('leaves a completed run completed and says the tree would not come down', async () => {
+    const driven = await drive(startRequest(), { waitForExitFails: unkillable() })
+    driven.finish(...answered)
+    const result = await driven.result as ExecutorResult
+    // The turn answered. A leaked process tree is a separate fact from a wrong
+    // answer, and collapsing the two would lose whichever one is reported second.
+    expect(result.status).toBe('completed')
+    expect(result.output).toBe('done')
+    expect(result.cleanup).toEqual([{
+      category: CODEX_RUN_DISPOSE_CLEANUP,
+      safeDiagnostic: 'codex-run-dispose failed (CodexRunFailure)',
+    }])
+  })
+
+  it('never marks a cleanup fault as an availability failure', async () => {
+    const driven = await drive(startRequest(), { waitForExitFails: unkillable() })
+    driven.finish(...answered)
+    const result = await driven.result as ExecutorResult
+    // The whole reason the cleanup fact has no `availability` field: a run that
+    // Codex answered must not be able to file Codex as unreachable and spend a
+    // second run on another product because a `kill` returned EPERM.
+    expect(result.failure).toBeUndefined()
+    expect(Object.keys(result.cleanup?.[0] ?? {})).toEqual(['category', 'safeDiagnostic'])
+  })
+
+  it('carries no byte of the raw exception into the durable fact', async () => {
+    const driven = await drive(startRequest(), { waitForExitFails: unkillable() })
+    driven.finish(...answered)
+    const durable = JSON.stringify(await driven.result)
+    expect(durable).not.toContain('EPERM')
+    expect(durable).not.toContain('CODEX_HOME')
+    expect(durable).not.toContain('sk-live-77')
+  })
+
+  it('reports the fault on an aborted run too, without changing its status', async () => {
+    const controller = new AbortController()
+    const driven = await drive(
+      startRequest({ signal: controller.signal }),
+      { waitForExitFails: unkillable() },
+    )
+    controller.abort()
+    const result = await driven.result as ExecutorResult
+    expect(result.status).toBe('aborted')
+    expect(result.cleanup?.[0]?.category).toBe(CODEX_RUN_DISPOSE_CLEANUP)
+  })
+
+  it('says nothing at all when disposal was clean', async () => {
+    const driven = await drive(startRequest())
+    driven.finish(...answered)
+    const result = await driven.result as ExecutorResult
+    expect(result.cleanup).toBeUndefined()
   })
 })
