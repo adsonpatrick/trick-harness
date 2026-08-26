@@ -77,7 +77,13 @@ AND workload = heavy OR writeVolume = large
 
 Heavy QA execution follows the same throughput rule.
 
-If OpenCode is unavailable, the Harness must **BLOCK** rather than silently route heavy work to Codex. A human may explicitly override that one run; the override must be journaled.
+**Amended 2026-08-26 by the project owner.** The rule was previously: if OpenCode is unavailable, the Harness must BLOCK rather than route heavy work to Codex. It now reads:
+
+If OpenCode is unavailable, heavy work falls back to Codex **provided Codex is actually usable** — credentialed and not itself degraded. If Codex is not usable either, the Harness **BLOCKS**, and that is an expected outcome rather than a defect: with no executor available there is nothing to route to, and stopping is the correct answer.
+
+What survives the amendment is the prohibition on doing this *silently*. A heavy stage that ran on Codex because OpenCode was down must carry that on the route fact — a `fallback:` reason code naming the executor it came from — so a later reader can tell a policy route from a degraded one. And the downstream consequence must not be hidden either: with OpenCode down, a stage that certifies Codex's own implementation has no independent executor left, and records `independence:unsatisfied` rather than presenting itself as an independent review.
+
+A human may still explicitly override one run; the override must be journaled.
 
 ### 4.2 Availability is not quality
 
@@ -154,7 +160,7 @@ The initial Plurora policy is fail-closed: if no explicit safe-auto-repair rule 
 
 **Current defect:** `opencode-unavailable` fallback can route implementation/repair to Codex, including heavy work.
 
-**Required correction:** fallback selection must apply hard invariants after primary-route failure. Heavy/high-volume implementation, repair and QA execution have no automatic cross-executor fallback unless an explicit human override authorizes it.
+**Required correction:** fallback selection must apply hard invariants after primary-route failure. Heavy/high-volume implementation, repair and QA execution fall back cross-executor only to an executor that is usable — credentialed and not degraded — and the fallback is recorded as such on the route fact (see the amendment above). Where no usable executor remains, the run is BLOCKED rather than dispatched.
 
 **Acceptance:** a table-driven test with `workload=heavy`, `role=implement|repair|qa`, `degradedExecutors=['opencode']` never returns Codex without override.
 

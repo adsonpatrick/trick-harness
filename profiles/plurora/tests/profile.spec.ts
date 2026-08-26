@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import type { RoutingContext } from '@trick-harness/contracts'
 import { createProfileRegistry, validateProfile } from '@trick-harness/profile'
-import { DEFAULT_MODEL_REGISTRY, route } from '@trick-harness/routing'
+import { DEFAULT_MODEL_REGISTRY, RoutingError, route } from '@trick-harness/routing'
 import { pluroraProfile } from '../profile.ts'
 
 /** Find one rule by id in a list, failing the test rather than returning undefined. */
@@ -252,9 +252,35 @@ describe('availability fallback preserves what the stage was for', () => {
     // what the change is, not what this stage was asked to do with it.
     ['a review of a refactor', { role: 'review', taskClass: 'refactor' }, 'opencode.reasoning-fast'],
   ] as const)('moves %s off a degraded Codex to the right tier', (_name, facts, tier) => {
-    const decision = routed({ ...facts as Partial<RoutingContext>, degradedExecutors: ['codex'] })
+    const decision = routed({ ...facts, degradedExecutors: ['codex'] })
     expect(decision.executor).toBe('opencode')
     expect(decision.tier).toBe(tier)
+  })
+
+  it.each([
+    ['heavy implementation', { role: 'implement', workload: 'heavy' }],
+    ['large-write repair', { role: 'repair', writeVolume: 'large' }],
+    ['heavy qa execution', { role: 'qa', workload: 'heavy' }],
+  ] as const)('moves %s onto Codex when OpenCode is the degraded one', (_name, facts) => {
+    // The project owner's rule: a degraded OpenCode routes to Codex when Codex
+    // can actually take the work. What is not allowed is doing it quietly, so
+    // the decision has to carry where it fell back from.
+    const decision = route(
+      context({ ...facts, degradedExecutors: ['opencode'] }),
+      policy,
+    )
+    expect(decision.executor).toBe('codex')
+    expect(decision.reasonCodes).toContain('fallback:opencode')
+  })
+
+  it('stops rather than inventing a route when neither executor is usable', () => {
+    // Blocking here is the correct answer, not a defect: with nothing available
+    // to dispatch to, the alternative is a run attributed to an executor that
+    // never took it.
+    expect(() => route(
+      context({ role: 'implement', workload: 'heavy', degradedExecutors: ['opencode', 'codex'] }),
+      policy,
+    )).toThrow(RoutingError)
   })
 
   it('has no Codex-unavailable row that answers judgement work with the workhorse', () => {
