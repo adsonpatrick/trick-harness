@@ -15,7 +15,8 @@
 ## Global Constraints
 
 - Heavy/high-volume implementation, repair and QA execution use OpenCode + MiMo V2.5 unless a human explicitly overrides that executor run.
-- OpenCode outage must not automatically send heavy work to Codex.
+- OpenCode outage may send heavy work to Codex only while Codex is usable; with no usable executor the run BLOCKS, and that block is the expected outcome rather than a defect (amended 2026-08-26 by the project owner).
+- An executor with no usable credential is degraded, so the block above happens for the stated reason and not at dispatch time.
 - Availability failure may reroute; quality/request/policy failure may not.
 - Fallback attempts count against `maxExecutorStarts`.
 - Manual override is single-consumption, stage-scoped, journaled, and cannot widen permission mode.
@@ -107,7 +108,7 @@ git commit -m "fix(trick): normalize executor failure categories"
 
 ---
 
-### Task 2: Enforce the Heavy-Work Invariant Across Fallback Selection
+### Task 2: Restrict Fallback Selection to Usable Executors
 
 **Files:**
 - Modify: `packages/core/routing/src/index.ts`
@@ -117,7 +118,7 @@ git commit -m "fix(trick): normalize executor failure categories"
 
 **Interfaces:**
 - Consumes: `RoutingContext`, `RoutingPolicy`, `RouteDecision`.
-- Produces: fallback resolution that cannot return a route violating a hard workload invariant unless `userOverride` explicitly names the alternate route.
+- Produces: fallback resolution that only ever returns a usable executor, blocks when none is usable, and never resolves silently.
 
 Add a deterministic helper equivalent to:
 
@@ -130,38 +131,46 @@ export function isHeavyWrite(context: RoutingContext): boolean {
 }
 ```
 
+The invariant this task enforces is about the *tier*, not about staying on one
+product. Heavy work must never be answered by a cheap reasoning tier just
+because the workhorse went away; it may be answered by Codex when Codex can
+actually take the work, and it must block when nothing can.
+
 - [ ] **Step 1: Add RED heavy-outage tests in `profiles/plurora/tests/routing.spec.ts`**
 
 ```ts
 it.each(['implement', 'repair', 'qa'] as const)(
-  'does not auto-fallback heavy %s work from OpenCode to Codex',
+  'moves heavy %s work to Codex when only OpenCode is degraded',
   (role) => {
-    expect(() => route(pluroraContext({
+    const decision = route(pluroraContext({
       role,
       workload: 'heavy',
       writeVolume: role === 'qa' ? 'none' : 'large',
       degradedExecutors: ['opencode'],
-    }), pluroraPolicy)).toThrow(expect.objectContaining({ code: 'no-fallback' }))
+    }), pluroraPolicy)
+    expect(decision.executor).toBe('codex')
+    expect(decision.reasonCodes).toContain('fallback:opencode')
   },
 )
+
+it('blocks heavy work when no executor is usable', () => {
+  expect(() => route(pluroraContext({
+    role: 'implement',
+    workload: 'heavy',
+    writeVolume: 'large',
+    degradedExecutors: ['opencode', 'codex'],
+  }), pluroraPolicy)).toThrow(expect.objectContaining({ code: 'no-fallback' }))
+})
 ```
 
-- [ ] **Step 2: Add RED explicit-override counterpart**
+- [ ] **Step 2: Add RED credential-degradation test**
+
+An executor without a usable credential must reach `route` already in
+`degradedExecutors`, so the outcome is a stated block rather than a failed
+dispatch:
 
 ```ts
-const decision = route(pluroraContext({
-  role: 'implement',
-  workload: 'heavy',
-  writeVolume: 'large',
-  degradedExecutors: ['opencode'],
-  userOverride: {
-    executor: 'codex',
-    semanticModelTier: 'codex.balanced',
-    reasoningEffort: 'high',
-  },
-}), pluroraPolicy)
-expect(decision.executor).toBe('codex')
-expect(decision.reasonCodes).toContain('override:human')
+expect(degradedFor({ codexCredential: 'missing' })).toContain('codex')
 ```
 
 - [ ] **Step 3: Run RED**
@@ -170,20 +179,25 @@ expect(decision.reasonCodes).toContain('override:human')
 pnpm vitest run profiles/plurora/tests/routing.spec.ts packages/core/routing/tests/availability.spec.ts
 ```
 
-- [ ] **Step 4: Implement hard-invariant fallback validation**
+- [ ] **Step 4: Implement usable-executor fallback validation**
 
-Apply the invariant after identifying the primary route and before accepting any automatic fallback decision. Keep concrete model ids out of `WorkflowRunner`.
+Apply the check after identifying the primary route and before accepting any
+automatic fallback decision: a fallback candidate is eligible only when it is
+neither degraded nor uncredentialed. Keep concrete model ids out of
+`WorkflowRunner`.
 
-- [ ] **Step 5: Guard Plurora `opencode-unavailable` fallback for heavy writes**
+- [ ] **Step 5: Keep the Plurora `opencode-unavailable` fallback observable**
 
-Automatic fallback may remain for light/medium work where profile policy authorizes it.
+The row stands. What this step adds is that it can never fire silently: the
+decision carries `fallback:opencode`, and `independence:unsatisfied` is recorded
+when the fallback leaves no independent executor.
 
 - [ ] **Step 6: Run GREEN and commit**
 
 ```bash
 pnpm vitest run profiles/plurora/tests/routing.spec.ts packages/core/routing/tests/availability.spec.ts
 git add packages/core/routing profiles/plurora
-git commit -m "fix(plurora): keep heavy fallback on workhorse invariant"
+git commit -m "fix(plurora): fall back only to a usable executor"
 ```
 
 ---
@@ -372,7 +386,7 @@ Use fake providers named `codex` and `opencode` with the actual Plurora profile/
 
 - [ ] **Step 2: Add real-profile heavy OpenCode outage test**
 
-Heavy implementation with OpenCode unavailable must block before starting Codex unless an explicit override is supplied.
+Heavy implementation with OpenCode unavailable routes to Codex and says so in the durable route fact. With Codex also unusable the workflow blocks before any dispatch, and the block is recorded as the outcome.
 
 - [ ] **Step 3: Add real-profile override isolation test**
 

@@ -44,30 +44,62 @@ export function sandboxMode(mode: ExecutorPermissionMode): CodexRoutedSandbox {
 }
 
 /**
- * Error-info variants for which another attempt, here or elsewhere, is valid.
+ * Every Codex error-info variant this provider recognises, and the routing
+ * category it becomes.
  *
- * Every name is an app-server `codexErrorInfo` variant parsed by the upstream
- * wire. The membership question is not "was this bad" but "does the executor's
- * reachability explain it": a quota ceiling, a session budget, an overloaded
- * or erroring server, and the four transport variants are all states that
- * change on their own or on a different executor. Everything else is a
- * property of the request, the workspace, or the account, and would fail the
- * same way on a fallback route — so retrying would waste a second run and
- * report the wrong cause.
+ * This is the whole translation, written as data, because the two vocabularies
+ * belong to different projects. Codex names variants in camelCase and is free
+ * to add more; `@trick-harness/routing` classifies a closed kebab-case set and
+ * refuses anything outside it. Nothing derives one from the other by case
+ * conversion: a rename upstream would then silently produce a category the
+ * classifier rejects at the moment an executor is already failing.
+ *
+ * The membership question for the availability half is not "was this bad" but
+ * "does the executor's reachability explain it": a quota ceiling, a session
+ * budget, an overloaded or erroring server, and the four transport variants are
+ * all states that change on their own or on a different executor. The rest are
+ * properties of the request, the workspace, or the account, and would fail the
+ * same way on a fallback route.
  */
+const CODEX_FAILURE_MAP: Readonly<Record<string, string>> = Object.freeze({
+  usageLimitExceeded: 'usage-limit-exceeded',
+  sessionBudgetExceeded: 'session-budget-exceeded',
+  serverOverloaded: 'server-overloaded',
+  internalServerError: 'internal-server-error',
+  httpConnectionFailed: 'transport-unavailable',
+  responseStreamConnectionFailed: 'transport-unavailable',
+  responseStreamDisconnected: 'transport-unavailable',
+  responseTooManyFailedAttempts: 'transport-unavailable',
+  contextWindowExceeded: 'context-window-exceeded',
+  badRequest: 'bad-request',
+  sandboxError: 'sandbox-denied',
+  activeTurnNotSteerable: 'bad-request',
+  cyberPolicy: 'cyber-policy-refusal',
+  unauthorized: 'unauthorized',
+  threadRollbackFailed: 'other',
+})
+
+/**
+ * What an unrecognised variant becomes.
+ *
+ * Fail-closed on purpose: an unknown fault is reported as a real failure that
+ * may not be routed around. Mapping it to an availability category instead
+ * would let any future upstream variant launder itself into a second run on
+ * another product.
+ */
+const UNRECOGNISED = 'other'
+
+/** The routing categories that mean the executor could not serve the run. */
 const AVAILABILITY_CATEGORIES: ReadonlySet<string> = new Set([
-  'usageLimitExceeded',
-  'sessionBudgetExceeded',
-  'serverOverloaded',
-  'internalServerError',
-  'httpConnectionFailed',
-  'responseStreamConnectionFailed',
-  'responseStreamDisconnected',
-  'responseTooManyFailedAttempts',
+  'usage-limit-exceeded',
+  'session-budget-exceeded',
+  'server-overloaded',
+  'internal-server-error',
+  'transport-unavailable',
 ])
 
 /**
- * Variants that must never be read as an availability problem.
+ * The native variants this provider asserts are never availability failures.
  *
  * Listed explicitly rather than left to the default so the distinction is
  * asserted by the package's tests. `contextWindowExceeded` and `badRequest`
@@ -91,12 +123,21 @@ const QUALITY_CATEGORIES: readonly string[] = [
 export const NON_AVAILABILITY_CATEGORIES = QUALITY_CATEGORIES
 
 /**
+ * Translate one Codex error-info variant into the routing vocabulary.
+ * @param category - the parsed `codexErrorInfo` variant, or any opaque string.
+ * @returns the normalized routing category.
+ */
+export function normalizeFailure(category: string): string {
+  return CODEX_FAILURE_MAP[category] ?? UNRECOGNISED
+}
+
+/**
  * Decide whether a Codex error-info variant means "try again or try elsewhere".
  * @param category - the parsed `codexErrorInfo` variant or stage category.
  * @returns true when the executor's reachability explains the failure.
  */
 export function isAvailabilityFailure(category: string): boolean {
-  return AVAILABILITY_CATEGORIES.has(category)
+  return AVAILABILITY_CATEGORIES.has(normalizeFailure(category))
 }
 
 /**
@@ -110,10 +151,11 @@ export function isAvailabilityFailure(category: string): boolean {
  * @returns the executor-facing failure.
  */
 export function executorFailure(category: string, httpStatus?: number): ExecutorFailure {
+  const normalized = normalizeFailure(category)
   return {
-    category,
-    availability: isAvailabilityFailure(category),
-    safeDiagnostic: `codex run failed (${category})`,
+    category: normalized,
+    availability: AVAILABILITY_CATEGORIES.has(normalized),
+    safeDiagnostic: `codex run failed (${normalized})`,
     ...httpStatus === undefined ? {} : { httpStatus },
   }
 }

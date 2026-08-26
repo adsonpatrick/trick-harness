@@ -272,7 +272,7 @@ describe('a run that goes wrong', () => {
       status: 'error',
       output: '',
       failure: {
-        category: 'executor-unavailable',
+        category: 'transport-unavailable',
         availability: true,
         safeDiagnostic: 'provider did not start',
       },
@@ -282,7 +282,7 @@ describe('a run that goes wrong', () => {
 
     expect(outcome.state).toBe('failed')
     expect(outcome.verdict).toBe('FAIL')
-    expect(JSON.stringify(session.events)).toContain('executor-unavailable')
+    expect(JSON.stringify(session.events)).toContain('transport-unavailable')
   })
 
   it('blocks rather than guessing when a stage returns a product decision', async () => {

@@ -177,7 +177,7 @@ describe('writing and replaying one workflow', () => {
     journal.routeDecision({ stageId: 'review-1', role: 'review', decision })
     await journal.routeFallback(
       { stageId: 'review-1', role: 'review', decision: { ...decision, fallbackFrom: 'codex' } },
-      'rate-limit',
+      'usage-limit-exceeded',
       { independence: 'lost', assurance: 'lowered' },
     )
     expect(replay().routes[0]?.fallbackFrom).toBe('codex')
@@ -195,9 +195,9 @@ describe('writing and replaying one workflow', () => {
   })
 
   it('projects the last circuit state each executor was left in', () => {
-    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:rate-limit')
+    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
     journal.circuitBreaker('codex', 'DEGRADED', 'AVAILABLE', 'manual-refresh')
-    journal.circuitBreaker('opencode', 'AVAILABLE', 'DEGRADED', 'failure:server-capacity')
+    journal.circuitBreaker('opencode', 'AVAILABLE', 'DEGRADED', 'failure:server-overloaded')
     expect(replay().circuits).toStrictEqual({ codex: 'AVAILABLE', opencode: 'DEGRADED' })
   })
 
@@ -246,10 +246,10 @@ describe('what the journal refuses to lose', () => {
     journal.executorStart({ stageId: 'impl-1', role: 'implement', decision })
     journal.executorEnd('impl-1', 'opencode', 'completed', 5)
     journal.finding('review-1', finding)
-    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:rate-limit')
+    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
     expect(flush).not.toHaveBeenCalled()
 
-    await journal.routeFallback({ stageId: 'impl-1', role: 'implement', decision }, 'rate-limit', { independence: 'preserved', assurance: 'unchanged' })
+    await journal.routeFallback({ stageId: 'impl-1', role: 'implement', decision }, 'usage-limit-exceeded', { independence: 'preserved', assurance: 'unchanged' })
     await journal.diagnosis('debug-1', diagnosis)
     await journal.verdict('verify-1', 'verify', 'PASS', 'green', evidence)
     await journal.delivery({ action: 'commit', branch: 'feat/x', commitSha: 'abc' })

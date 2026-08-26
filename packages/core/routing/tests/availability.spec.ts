@@ -88,7 +88,7 @@ describe('telling an outage apart from a wrong answer', () => {
   })
 
   it('classifies the same category the same way every time', () => {
-    expect(classifyFailure('rate-limit')).toBe(classifyFailure('rate-limit'))
+    expect(classifyFailure('server-overloaded')).toBe(classifyFailure('server-overloaded'))
   })
 })
 
@@ -109,7 +109,7 @@ describe('the executor circuit breaker', () => {
     ])
     // A second failure while already degraded is not a second transition: the
     // durable record would otherwise read as repeated outages.
-    expect(recordFailure(first.circuit, 'rate-limit', at + 6).transitions).toStrictEqual([])
+    expect(recordFailure(first.circuit, 'server-overloaded', at + 6).transitions).toStrictEqual([])
   })
 
   it('does not degrade an executor for being wrong', () => {
@@ -121,7 +121,7 @@ describe('the executor circuit breaker', () => {
   })
 
   it('withholds a probe until the cooldown has passed', () => {
-    const degraded = recordFailure(openCircuit('codex', at), 'rate-limit', at).circuit
+    const degraded = recordFailure(openCircuit('codex', at), 'transport-unavailable', at).circuit
     expect(tryProbe(degraded, strict, at + 999).allowed).toBe(false)
     const probe = tryProbe(degraded, strict, at + 1_000)
     expect(probe.allowed).toBe(true)
@@ -137,7 +137,7 @@ describe('the executor circuit breaker', () => {
   })
 
   it('recovers only on a probe that actually succeeded', () => {
-    const degraded = recordFailure(openCircuit('codex', at), 'server-capacity', at).circuit
+    const degraded = recordFailure(openCircuit('codex', at), 'server-overloaded', at).circuit
     const recovered = recordSuccess(degraded, at + 2_000)
     expect(recovered.circuit).toStrictEqual(openCircuit('codex', at + 2_000))
     expect(recovered.transitions).toStrictEqual([
@@ -161,7 +161,7 @@ describe('the executor circuit breaker', () => {
   })
 
   it('names the degraded executors a route should be told about', () => {
-    const codex = recordFailure(openCircuit('codex', at), 'rate-limit', at).circuit
+    const codex = recordFailure(openCircuit('codex', at), 'transport-unavailable', at).circuit
     expect(degradedExecutors([codex, openCircuit('opencode', at)])).toStrictEqual(['codex'])
   })
 })

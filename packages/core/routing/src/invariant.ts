@@ -50,11 +50,10 @@ const EXPECTED_FACTS = [
  */
 const EXPECTED_AVAILABILITY_FAILURES = [
   'usage-limit-exceeded',
-  'rate-limit',
-  'server-capacity',
-  'executor-unavailable',
-  'auth-temporarily-unavailable',
-  'transient-infra',
+  'session-budget-exceeded',
+  'server-overloaded',
+  'internal-server-error',
+  'transport-unavailable',
 ]
 
 /** The failures that may never be routed around; see {@link EXPECTED_AVAILABILITY_FAILURES}. */
@@ -63,8 +62,10 @@ const EXPECTED_QUALITY_FAILURES = [
   'bad-request',
   'sandbox-denied',
   'cyber-policy-refusal',
+  'unauthorized',
   'wrong-answer',
   'failed-verification',
+  'other',
 ]
 
 /** Compare a shipped vocabulary against its independently restated expectation. */

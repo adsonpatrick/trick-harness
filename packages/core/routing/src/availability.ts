@@ -17,18 +17,23 @@ import { RoutingError } from './types.ts'
 /**
  * Failures that mean the executor could not serve the run.
  *
- * Quota exhaustion, rate limiting, capacity, an executor that is not reachable,
- * credentials temporarily unavailable, and supported transient infrastructure
- * faults. Every one of these is a statement about the product's ability to
- * answer, not about the answer.
+ * A quota ceiling, a session budget, an overloaded or erroring server, and a
+ * transport that never carried the request. Every one is a statement about the
+ * product's ability to answer, not about the answer.
+ *
+ * The names are the ones providers normalize onto, and there is exactly one
+ * name per concept. An earlier version of this set carried near-synonyms —
+ * `rate-limit` beside `usage-limit-exceeded`, `transient-infra` beside the
+ * transport faults — which let the same outage be reported under two spellings
+ * depending on which provider saw it, and made the circuit-breaker history
+ * unreadable across executors.
  */
 export const AVAILABILITY_FAILURES = [
   'usage-limit-exceeded',
-  'rate-limit',
-  'server-capacity',
-  'executor-unavailable',
-  'auth-temporarily-unavailable',
-  'transient-infra',
+  'session-budget-exceeded',
+  'server-overloaded',
+  'internal-server-error',
+  'transport-unavailable',
 ] as const
 
 /**
@@ -44,8 +49,15 @@ export const QUALITY_FAILURES = [
   'bad-request',
   'sandbox-denied',
   'cyber-policy-refusal',
+  'unauthorized',
   'wrong-answer',
   'failed-verification',
+  // `other` is what a provider emits when it recognised the failure as real but
+  // not as anything in this vocabulary. It sits here rather than being left
+  // unclassified because the two are different statements: the classifier
+  // refuses to guess, while a provider saying `other` has already decided that
+  // an unrecognised fault is not grounds to send the work somewhere else.
+  'other',
 ] as const
 
 /** One recognised failure category. */
@@ -85,7 +97,7 @@ export interface CircuitTransition {
   readonly executor: string
   readonly from: CircuitState
   readonly to: CircuitState
-  /** Machine-readable cause, e.g. `failure:rate-limit` or `manual-refresh`. */
+  /** Machine-readable cause, e.g. `failure:usage-limit-exceeded` or `manual-refresh`. */
   readonly reason: string
   readonly at: number
 }

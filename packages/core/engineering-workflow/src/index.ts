@@ -533,7 +533,11 @@ export class WorkflowRunner {
 
     journal.routeDecision(dispatch)
     if (decision.fallbackFrom !== undefined) {
-      await journal.routeFallback(dispatch, 'executor-unavailable', {
+      // Not a failure category: at this point the route says only that the
+      // primary executor was already marked degraded, and naming a category
+      // here would invent a cause the run never observed. Task 3 of the routing
+      // runtime plan replaces this with the category that actually degraded it.
+      await journal.routeFallback(dispatch, 'degraded-executor', {
         independence: READ_ONLY_ROLES.includes(stage.role) ? 'reduced' : 'preserved',
         assurance: READ_ONLY_ROLES.includes(stage.role) ? 'lowered' : 'unchanged',
       })

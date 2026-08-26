@@ -409,7 +409,7 @@ export class WorkflowJournal {
    * @param executor - The executor whose circuit moved.
    * @param from - The state it left.
    * @param to - The state it entered.
-   * @param reason - Machine-readable cause, e.g. `failure:rate-limit`.
+   * @param reason - Machine-readable cause, e.g. `failure:usage-limit-exceeded`.
    */
   circuitBreaker(
     executor: string,
