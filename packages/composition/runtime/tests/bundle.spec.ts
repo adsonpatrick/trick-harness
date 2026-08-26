@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createExecutorRuntime, type ExecutorProvider, type ExecutorResult } from '@trick-harness/executor'
+import { ProfileValidationError } from '@trick-harness/profile'
 import type { HarnessProfile, RoutingPolicyDefinition } from '@trick-harness/profile'
 import type { OpencodeAdapter } from '@trick-harness/provider-opencode'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
@@ -200,6 +201,50 @@ describe('the profile seam', () => {
     })
     const bundle = createHarnessRuntimeBundle({ extraProviders: [fakeProvider('claude-code')], profile: covered })
     expect(bundle.executors).toEqual(['claude-code'])
+  })
+})
+
+describe('a profile only the compiler ever checked', () => {
+  /**
+   * Build a profile whose routing rules deliberately leave the type contract.
+   *
+   * These cases are the ones the compiler cannot reach: a profile parsed from
+   * JSON, or handed over from JavaScript. The cast is the test.
+   * @param rules - rule rows as an untrusted caller might supply them.
+   * @returns a profile-shaped value for composition to refuse.
+   */
+  function smuggled(rules: readonly unknown[]): HarnessProfile {
+    return profile({
+      routingPolicy: { rules, fallbackRules: [] } as unknown as RoutingPolicyDefinition,
+    })
+  }
+
+  it('refuses a nested policy value before a provider is constructed', () => {
+    const runtime = createExecutorRuntime()
+    const seams = productSeams()
+    const nested = smuggled([{ id: 'implement', when: {}, use: { executor: { name: 'codex' } } }])
+
+    expect(() => composeHarnessRuntime(runtime, { codex: { spawn: seams.spawn }, profile: nested }))
+      .toThrow(ProfileValidationError)
+    expect(runtime.list()).toEqual([])
+    expect(seams.reached()).toBe(0)
+  })
+
+  it('names the offending policy path rather than the profile as a whole', () => {
+    const runtime = createExecutorRuntime()
+    const nested = smuggled([{ id: 'implement', when: {}, use: { executor: [] } }])
+
+    expect(() => composeHarnessRuntime(runtime, { profile: nested }))
+      .toThrow(/routingPolicy\.rules\[0\]\.use\.executor/)
+  })
+
+  it('reaches no product seam for a profile that routes to nothing', () => {
+    const seams = productSeams()
+    const empty = smuggled([{ id: 'implement', when: {}, use: {} }])
+
+    expect(() => createHarnessRuntimeBundle({ codex: { spawn: seams.spawn }, profile: empty }))
+      .toThrow(ProfileValidationError)
+    expect(seams.reached()).toBe(0)
   })
 })
 

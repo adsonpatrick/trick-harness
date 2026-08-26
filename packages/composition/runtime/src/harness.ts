@@ -39,6 +39,7 @@ import { GitHubDelivery } from '@trick-harness/github-delivery'
 import type { GitHubDeliveryOptions } from '@trick-harness/github-delivery'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { JournalFlush } from '@trick-harness/journal'
+import { validateProfile } from '@trick-harness/profile'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { ModelRegistry, RoutingPolicy } from '@trick-harness/routing'
 import { SupabasePreview } from '@trick-harness/supabase-preview'
@@ -188,6 +189,9 @@ function assertAuthorised(profile: HarnessProfile, options: HarnessCompositionOp
  */
 export function composeHarness(options: HarnessCompositionOptions): ComposedHarness {
   const { profile, session, flush, workflow } = options
+  // Ahead of the trust check, because that check reads the profile too: policy
+  // that is not well-formed data cannot be asked what it authorises.
+  validateProfile(profile)
   assertAuthorised(profile, options)
 
   const runtime = createExecutorRuntime()

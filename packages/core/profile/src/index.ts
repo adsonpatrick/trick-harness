@@ -100,6 +100,40 @@ function requireArray(value: unknown, path: string): readonly unknown[] {
   return value
 }
 
+/**
+ * Validate one flat table of policy values.
+ *
+ * Policy is data a router reads, never behavior it runs, and that distinction
+ * is only real if it is checked at the boundary: a nested object, an array or a
+ * function that reaches a rule is a decision the profile made somewhere the
+ * routing engine cannot see. `Object.entries` is what reads the table, so an
+ * inherited field declares nothing and a symbol key is not policy at all.
+ * @param value - the candidate table, as a caller or a parser produced it.
+ * @param path - dotted path of the table, for attributing a failure.
+ * @param options - whether a table with no entries is a decision or an omission.
+ * @throws {ProfileValidationError} naming the exact entry that fails.
+ */
+function validateScalarTable(value: unknown, path: string, { allowEmpty }: { allowEmpty: boolean }): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ProfileValidationError(path, 'must be a flat object')
+  }
+  const entries = Object.entries(value)
+  if (!allowEmpty && entries.length === 0) {
+    throw new ProfileValidationError(path, 'must declare at least one value')
+  }
+  for (const [key, entry] of entries) {
+    const at = `${path}.${key}`
+    if (typeof entry === 'string' || typeof entry === 'boolean') continue
+    if (typeof entry === 'number') {
+      if (!Number.isFinite(entry)) {
+        throw new ProfileValidationError(at, 'must be a finite number')
+      }
+      continue
+    }
+    throw new ProfileValidationError(at, 'must be a string, a finite number or a boolean')
+  }
+}
+
 /** Validate one rule list and reject ids repeated within it. */
 function validateRules(value: unknown, path: string, { allowEmpty }: { allowEmpty: boolean }): void {
   const rules = requireArray(value, path)
@@ -116,12 +150,10 @@ function validateRules(value: unknown, path: string, { allowEmpty }: { allowEmpt
       throw new ProfileValidationError(`${path}[${index}].id`, `repeats rule id ${JSON.stringify(id)}`)
     }
     seen.add(id)
-    for (const side of ['when', 'use'] as const) {
-      const table = field(rule, side)
-      if (typeof table !== 'object' || table === null || Array.isArray(table)) {
-        throw new ProfileValidationError(`${path}[${index}].${side}`, 'must be a flat object')
-      }
-    }
+    // An empty `when` is the catch-all rule and a real decision; an empty `use`
+    // is a rule that routes to nothing, which is an omission rather than one.
+    validateScalarTable(field(rule, 'when'), `${path}[${index}].when`, { allowEmpty: true })
+    validateScalarTable(field(rule, 'use'), `${path}[${index}].use`, { allowEmpty: false })
   }
 }
 

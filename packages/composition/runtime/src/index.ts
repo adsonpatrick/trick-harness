@@ -18,6 +18,7 @@ import type {
   HarnessExecutorRuntime,
 } from '@trick-harness/executor'
 import { createExecutorRuntime } from '@trick-harness/executor'
+import { validateProfile } from '@trick-harness/profile'
 import type { HarnessProfile, PolicyRuleDefinition } from '@trick-harness/profile'
 import { createCodexProvider, type CodexProviderOptions } from '@trick-harness/provider-codex'
 import { createOpencodeProvider, type OpencodeAdapter } from '@trick-harness/provider-opencode'
@@ -154,6 +155,11 @@ export function composeHarnessRuntime(
   const undo = (): void => {
     for (const registration of [...registrations].reverse()) registration.dispose()
   }
+  // Before anything is constructed, let alone registered. A profile only has to
+  // be well-typed to the compiler, and a deserialized one has not been near a
+  // compiler at all; reading its routing table first would mean a product
+  // provider had already been built for policy that was never policy.
+  if (options.profile !== undefined) validateProfile(options.profile)
   try {
     for (const provider of buildProviders(options)) {
       registrations.push(runtime.register(provider))
