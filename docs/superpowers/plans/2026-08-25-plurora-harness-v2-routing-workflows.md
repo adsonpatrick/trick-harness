@@ -296,12 +296,12 @@ implementation verified
  -> PR READY | BLOCKED | FAIL | PARTIAL | INCONCLUSIVE
 ```
 
-- [ ] Write RED scenario with two injected confirmed bugs and one improvement suggestion; assert both bugs auto-close while improvement is reported and not implemented.
-- [ ] Write scenario where finding is a product decision; assert no repair starts.
-- [ ] Use profile `maxRepairCycles`; each repair push triggers fresh diff/evidence and fresh review.
-- [ ] If bugs remain after ceiling, terminal state cannot be PR READY.
-- [ ] Ensure repair executor routing honors Plurora heavy-MiMo invariant and Codex fallback through profile policy.
-- [ ] Commit: `feat(trick): add bounded PR remediation lifecycle`.
+- [x] Write RED scenario with two injected confirmed bugs and one improvement suggestion; assert both bugs auto-close while improvement is reported and not implemented.
+- [x] Write scenario where finding is a product decision; assert no repair starts.
+- [x] Use profile `maxRepairCycles`; each repair push triggers fresh diff/evidence and fresh review.
+- [x] If bugs remain after ceiling, terminal state cannot be PR READY.
+- [x] Ensure repair executor routing honors Plurora heavy-MiMo invariant and Codex fallback through profile policy.
+- [x] Commit: `feat(trick): add bounded PR remediation lifecycle`.
 
 ---
 

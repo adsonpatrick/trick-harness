@@ -54,6 +54,14 @@ When the diagnosis names a `productDecisionDependency`, the gate returns a `prod
 
 `maxExecutorStarts` and `maxRepairCycles` come from the profile, and reaching either produces a `budget-exhausted` blocker and a terminal `BLOCKED`. A verification that still fails after the last repair cycle is a thing a person has to look at, not a thing to try once more.
 
+## A pull request is certified after it is published, not before
+
+`planPullRequestStages` is the second plan this package ships, and the only thing it changes is where delivery sits: the branch is delivered as soon as implementation verifies, and every certifying stage after that reads the same published diff a person would. A review of an unpublished working tree reviews something nobody can comment on. Risk still decides how much certification is bought — QA above `low`, security at `critical` — and every plan ends on a fresh `verify-final`, so nothing is called ready on a reading taken before the last repair.
+
+A repair inside that plan is followed by a fresh delivery of its own. The runtime re-queues `delivery-N` between the repair and the re-run of the stage that failed, so the next review reads the fix rather than the diff that provoked it.
+
+`assessPullRequest` restates a finished run as `PR_READY`, `BLOCKED`, `FAIL`, `PARTIAL` or `INCONCLUSIVE`. It consults only the last stage of each role: a bug that `review-1` found and a repair fixed is absent from `review-2`, and it is the second reading that describes the branch as it now stands — the run believes the last reading, never the claim of the stage that edited it. An outstanding confirmed defect therefore cannot coexist with `PR_READY`, including when the run reached `maxRepairCycles` and stopped. Improvements are carried in `reportedFindings` and never implemented, because nobody asked for them.
+
 ## What a restart may conclude
 
 `assessRestart` reads a workflow with no recorded end as `interrupted` and `INCONCLUSIVE` — not failed, because nobody observed it fail. When a stage was in flight or a delivery was recorded, it sets `requiresWorldVerification`, because the log cannot settle what the world now looks like. Re-reading the world is the caller's to do; concluding from the record alone is what this refuses.

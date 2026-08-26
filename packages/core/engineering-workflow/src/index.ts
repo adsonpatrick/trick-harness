@@ -34,6 +34,7 @@ import type { RoutingContext } from '@trick-harness/contracts'
 export type * from './types.ts'
 export * from './repair.ts'
 export * from './triage.ts'
+export * from './lifecycle.ts'
 
 import {
   assessRepairCompletion,
@@ -280,7 +281,7 @@ export class WorkflowRunner {
     const { maxRepairCycles, maxExecutorStarts } = profile.workflowPolicy
 
     journal.start(objective)
-    const queue = [...planStages(objective)]
+    const queue = [...(request.plan ?? planStages)(objective)]
     const stages: StageFacts[] = []
     let repairCycles = 0
     let executorStarts = 0
@@ -294,6 +295,10 @@ export class WorkflowRunner {
     // The executor that last wrote to the tree, so the verifier that follows a
     // repair is routed as an independent reader rather than back to the writer.
     let lastMutator: string | undefined
+    // Whether the branch has been published. Once it has, a repair is followed
+    // by a fresh delivery, so the stage that re-reads the work reads the diff a
+    // person would now see rather than the one that provoked the repair.
+    let delivered = false
 
     while (queue.length > 0) {
       const stage = queue.shift() as StageSpec
@@ -328,6 +333,7 @@ export class WorkflowRunner {
       if (permissionModeFor(stage.role) === 'workspace-write' && !dispatched.canceled) {
         lastMutator = dispatched.facts.executor
       }
+      if (stage.role === 'delivery' && !dispatched.canceled && !dispatched.failed) delivered = true
 
       if (dispatched.canceled) {
         return await this.#end(objective, stages, repairCycles, executorStarts, 'canceled', 'INCONCLUSIVE',
@@ -437,6 +443,10 @@ export class WorkflowRunner {
             ? []
             : [{ stageId: `debug-${repairCycles}`, role: 'debug' as const }],
           { stageId: `repair-${repairCycles}`, role: 'repair' },
+          // A published branch is re-delivered before it is re-read: a review
+          // that ran against the pre-repair diff would be certifying a state
+          // the pull request no longer holds.
+          ...delivered ? [{ stageId: `delivery-${repairCycles + 1}`, role: 'delivery' as const }] : [],
           { stageId: `${stage.role}-${retry}`, role: stage.role },
         )
         continue

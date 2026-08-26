@@ -82,6 +82,14 @@ export interface WorkflowRunRequest {
   /** The executor that did the implementing, when a read-only stage must avoid it. */
   readonly implementationExecutor?: string
   readonly interpret: StageInterpreter
+  /**
+   * The stage plan, when the run is not the default working-tree one.
+   *
+   * Supply `planPullRequestStages` to certify a published branch instead. The
+   * plan is still a function of the objective alone, so a replay of the same
+   * objective under the same plan runs the same stages.
+   */
+  readonly plan?: (objective: WorkflowObjective) => readonly StageSpec[]
   /** Prompt text per role; the runtime never composes task text itself. */
   readonly task: (stage: StageSpec, objective: WorkflowObjective) => string
   /**
