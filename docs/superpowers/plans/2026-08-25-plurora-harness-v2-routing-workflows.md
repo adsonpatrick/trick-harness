@@ -319,14 +319,14 @@ GET  /workflows/:id
 POST /workflows/:id/cancel
 ```
 
-- [ ] Write RED HTTP lifecycle tests including invalid objective, run/status/cancel, unavailable workflow, restart projection, and concurrent workflow IDs.
-- [ ] Bind loopback only (`127.0.0.1`/local equivalent). Add ephemeral process-owned bearer if needed; never persist it.
-- [ ] `POST /workflows` starts a Harness-owned workflow and returns durable workflow ID.
-- [ ] Status combines durable journal projection with live-run state.
-- [ ] Server disposal cancels/settles owned runs and waits for quiescence.
-- [ ] Restart surfaces interrupted/inconclusive state instead of silently resuming side effects.
-- [ ] Add bounded user-visible status schema suitable for OpenCode bridge.
-- [ ] Commit: `feat(trick): add local harness control server`.
+- [x] Write RED HTTP lifecycle tests including invalid objective, run/status/cancel, unavailable workflow, restart projection, and concurrent workflow IDs.
+- [x] Bind loopback only (`127.0.0.1`/local equivalent). Add ephemeral process-owned bearer if needed; never persist it.
+- [x] `POST /workflows` starts a Harness-owned workflow and returns durable workflow ID.
+- [x] Status combines durable journal projection with live-run state.
+- [x] Server disposal cancels/settles owned runs and waits for quiescence.
+- [x] Restart surfaces interrupted/inconclusive state instead of silently resuming side effects.
+- [x] Add bounded user-visible status schema suitable for OpenCode bridge.
+- [x] Commit: `feat(trick): add local harness control server`.
 
 ---
 

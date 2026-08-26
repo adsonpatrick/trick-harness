@@ -36,6 +36,7 @@ const NO_MODEL_EXPERIENCE_SECTION: Readonly<Record<string, string>> = {
   'packages/core/contracts': 'The package declares the workflow vocabulary and the parsers that read it back; nothing here is rendered into a request, and the stages that do own their own prompts.',
   'packages/core/routing': 'The package is a pure policy function selecting an executor and a semantic tier; it renders nothing and contacts no product, and the selected executor owns every model-facing surface.',
   'packages/core/journal': 'The package appends and replays durable workflow events; it renders nothing and contacts no product, and by construction stores no model transcript.',
+  'packages/core/control-server': 'The package serves four HTTP endpoints over a loopback socket and projects bounded status; it renders nothing into a request and composes no prompt.',
   'packages/core/engineering-workflow': 'The package plans and dispatches stages and reduces each result to compact facts; it composes no prompt of its own, and the caller supplies both the task text and the interpreter.',
   'packages/integrations/github-delivery': 'The package runs a fixed set of git and gh commands as argv arrays; it renders nothing into a request, and every value it carries is a path, a branch or a message the caller supplied.',
   'packages/integrations/supabase-preview': 'The package runs a fixed set of Supabase CLI commands as argv arrays; it renders nothing into a request, and every value it carries is a project ref, a branch name or a connection string read back from the branch it created.',

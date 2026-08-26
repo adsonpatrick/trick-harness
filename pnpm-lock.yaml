@@ -3752,6 +3752,21 @@ importers:
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
 
+  packages/core/control-server:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+      '@trick-harness/engineering-workflow':
+        specifier: workspace:^
+        version: link:../engineering-workflow
+
   packages/core/engineering-workflow:
     devDependencies:
       '@deepseek-ai/cordis':

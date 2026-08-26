@@ -253,6 +253,7 @@
     { "path": "./packages/core/journal" },
     { "path": "./packages/core/executor" },
     { "path": "./packages/core/profile" },
+    { "path": "./packages/core/control-server" },
     { "path": "./packages/core/engineering-workflow" },
     { "path": "./packages/composition/runtime" },
     { "path": "./packages/providers/codex" },
