@@ -30,6 +30,8 @@ Free text is truncated rather than trusted. A summary is a thing a person glance
 
 A status for a workflow this process is not running is read from the durable journal through `restart`. A workflow with no recorded end comes back `interrupted` with `requiresWorldVerification` set, and nothing is started. The log can say a repair was in flight; it cannot say what that repair did to the branch. Re-reading the world is a person's decision, and silently retrying a side-effectful stage is exactly the failure this refuses to have.
 
+A run this server cancelled, or one that ended by throwing, wrote no terminal state either, so its world check is read from the same durable record rather than assumed. A cancel is not proof that nothing happened, and telling an operator their aborted delivery left no trace is the worse of the two mistakes available here.
+
 An id with neither a live run nor a durable record is a `404`, not an empty status.
 
 ## Disposal waits for quiescence

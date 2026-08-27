@@ -4,7 +4,7 @@ import type { StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import type { ControlWorkflowStatus } from '@trick-harness/control-server'
 import { planPullRequestStages } from '@trick-harness/engineering-workflow'
 import type { ExecutorProvider, ExecutorStartRequest } from '@trick-harness/executor'
-import { projectWorkflow } from '@trick-harness/journal'
+import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import {
@@ -478,5 +478,77 @@ describe('what identifies one execution', () => {
     // would simply continue the first one's history, and its restart assessment
     // would answer for both.
     await expect(harness.run(OBJECTIVE)).rejects.toThrow(BundleCompositionError)
+  })
+})
+
+describe('what survives a composed run losing its process', () => {
+  it('reads two attempts at one objective back as two independent restarts', async () => {
+    const started: ExecutorStartRequest[] = []
+    const session = Session.create(SessionId('composed-restart'))
+    const ids = ['wf-201', 'wf-202']
+    const harness = compose({
+      ...baseOptions(profileEnabling([]), started),
+      session,
+      workflowIdFactory: () => ids.shift() ?? 'exhausted',
+    })
+
+    await harness.run(OBJECTIVE)
+    await harness.run(OBJECTIVE)
+
+    const one = harness.restartOf('wf-201')
+    const two = harness.restartOf('wf-202')
+
+    // Two rows in one Session, each answering for itself. A reader holding only
+    // an execution id can still say which objective it was an attempt at.
+    expect(one?.state).toBe('terminal')
+    expect(two?.state).toBe('terminal')
+    expect(one?.objectiveId).toBe(OBJECTIVE.id)
+    expect(two?.objectiveId).toBe(OBJECTIVE.id)
+    expect(one?.requiresWorldVerification).toBe(false)
+    expect(two?.requiresWorldVerification).toBe(false)
+    expect(harness.restartOf(OBJECTIVE.id)).toBeUndefined()
+  })
+
+  it('starts no provider when the log cannot be made durable before dispatch', async () => {
+    const started: ExecutorStartRequest[] = []
+    const session = Session.create(SessionId('composed-barrier'))
+    const harness = compose({
+      ...baseOptions(profileEnabling([]), started),
+      session,
+      // The first checkpoint this run asks for is the one in front of its first
+      // dispatch. Refusing it is refusing to let anything touch the tree.
+      flush: async () => false,
+      workflowIdFactory: () => 'wf-301',
+    })
+
+    await expect(harness.run(OBJECTIVE)).rejects.toThrow(/durable checkpoint/)
+
+    expect(started).toEqual([])
+  })
+
+  it('reconstructs an interrupted capability window and demands the world be checked', () => {
+    const started: ExecutorStartRequest[] = []
+    const session = Session.create(SessionId('composed-capability'))
+    const harness = compose({
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
+      session,
+    })
+
+    // A run that asked GitHub to push and never heard back, written the way the
+    // Harness writes it and then simply stopping — which is what process loss
+    // looks like from the log's side.
+    const journal = new WorkflowJournal(session, 'wf-lost', async () => true)
+    journal.start(OBJECTIVE)
+    void journal.beginCapability('deliver-1', GITHUB_DELIVERY_CAPABILITY, true)
+
+    const assessment = harness.restartOf('wf-lost')
+
+    expect(assessment?.state).toBe('interrupted')
+    expect(assessment?.verdict).toBe('INCONCLUSIVE')
+    expect(assessment?.openStages).toEqual([])
+    // Nothing in the log says the push failed. Nothing says it succeeded either,
+    // and retrying on that record is how one commit becomes two.
+    expect(assessment?.requiresWorldVerification).toBe(true)
+    expect(assessment?.summary).toContain(`deliver-1:${GITHUB_DELIVERY_CAPABILITY}`)
   })
 })

@@ -28,6 +28,10 @@ Registration is all-or-nothing. A provider the runtime rejects, or a profile the
 
 Disposal is symmetric: a composition removes exactly what it registered, and a bundle that owns its runtime also ends the runs in flight.
 
+## An objective is asked for; an execution is minted
+
+`run` takes the objective a person asked for and mints its own id for this attempt at it. The two are not the same thing: an objective may be attempted again, and a second attempt sharing the first one's id would append its facts onto that history until no reader could say which run a verdict belonged to. `WorkflowOutcome` carries both, `restartOf` addresses the execution, and an id the Session already holds a run under is refused rather than merged. `workflowIdFactory` exists to make ids readable or ordered, never to reuse one.
+
 ## The whole Harness composes from one profile
 
 `composeHarness` assembles the rest of it: routing policy, the durable journal, the workflow runner, the integrations and the loopback control server, from one `HarnessProfile` and the seams a deployment owns. The profile's routing table plus the deployment's model registry become the policy every route resolves against, so a semantic tier is answered in exactly one place.
