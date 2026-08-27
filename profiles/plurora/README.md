@@ -28,6 +28,8 @@ Plurora's policy set: the first production consumer of the reusable Trick Harnes
 
 **Database work is cloud-only.** Migrations run against an isolated Supabase Preview Branch, with no local and no shared-dev fallback. A fallback path is exactly the path that eventually runs a migration against something that matters.
 
-The policy stores no preview branch name. It names the Supabase project and states that a preview branch is required and that its identity is the pull request the work is running under; the integration resolves the actual branch from the current PR and workflow context at run time. If that branch cannot be resolved or created, the workflow is `BLOCKED` — it never falls back to a shared development branch, and never to a local or Docker database.
+The policy stores no preview branch name. It names the Supabase *parent* project and states that a preview branch is required and that its identity is the pull request the work is running under; the integration resolves the actual branch from the current PR and workflow context at run time. If that branch cannot be resolved or created, the workflow is `BLOCKED` — it never falls back to a shared development branch, and never to a local or Docker database.
+
+The capability ids in `enabled` are the ids the composition consumes, spelled the same way. A profile that spells one differently does not fail to load — it turns that capability off and says nothing about having done so, which is the quieter and worse of the two failures available.
 
 **Self-modifying plugins are excluded from trusted composition.** The trusted workflow state machine is what enforces every other rule here. A plugin that can rewrite it at runtime would make the whole policy set advisory, so the exclusion is stated rather than left as an empty list.

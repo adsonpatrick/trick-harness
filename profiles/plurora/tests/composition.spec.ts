@@ -329,3 +329,50 @@ describe('Plurora policy driving a live run', () => {
     expect(next?.reasonCodes).not.toContain('override:user')
   })
 })
+
+describe('the capabilities this project actually turns on', () => {
+  let opened: ComposedHarness[] = []
+
+  afterEach(async () => {
+    const open = opened
+    opened = []
+    await Promise.all(open.map(async harness => harness.dispose()))
+  })
+
+  it('composes both deterministic capabilities and the control server from the real profile', () => {
+    const seams = productSeams()
+    const harness = composeHarness({
+      profile: pluroraProfile,
+      registry: DEFAULT_MODEL_REGISTRY,
+      session: Session.create(SessionId('plurora-capabilities')),
+      flush: async () => true,
+      workflow: {
+        interpret: (stage, executor) => ({
+          role: stage.role,
+          executor,
+          verdict: 'PASS',
+          summary: `${stage.role} passed`,
+          findings: [],
+          evidence: [],
+        }),
+        task: stage => `${stage.role}: do the work`,
+      },
+      providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
+      integrations: {
+        github: { cwd: '/repo', spawn: seams.spawn },
+        supabase: { cwd: '/repo', spawn: seams.spawn, projectRef: 'uljaajwwnygopsyvwsre' },
+      },
+      control: { host: '127.0.0.1', port: 0, token: 'a-token-long-enough' },
+    })
+    opened.push(harness)
+
+    // The composition refuses a capability the profile does not enable, so this
+    // is the check that the two files agree — the one no unit test of either
+    // side alone can make.
+    expect(harness.integrations.github).toBeDefined()
+    expect(harness.integrations.supabase).toBeDefined()
+    expect(harness.server).toBeDefined()
+    // Composing is not running: no process, no server, no client.
+    expect(seams.reached()).toBe(0)
+  })
+})

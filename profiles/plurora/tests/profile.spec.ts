@@ -110,6 +110,22 @@ describe('plurora profile', () => {
     })
   })
 
+  it('names its capabilities in the vocabulary the composition consumes', () => {
+    // Two files disagreeing about what a capability is called is not a naming
+    // quibble: the composition refuses an integration the profile does not
+    // enable, so a profile that spells it differently turns on nothing and
+    // says nothing about having done so.
+    expect([...pluroraProfile.integrationPolicy.enabled]).toStrictEqual([
+      'github-delivery',
+      'supabase-preview',
+      'control-server',
+      'notion-knowledge',
+      'linear-issues',
+    ])
+    expect(JSON.stringify(pluroraProfile.integrationPolicy)).not.toContain('supabase-preview-branches')
+    expect(JSON.stringify(pluroraProfile.integrationPolicy)).not.toContain('neurovia-dev')
+  })
+
   it('declares a rule for every enabled integration', () => {
     const ruled = new Set(pluroraProfile.integrationPolicy.rules.map(entry => String(entry.when.integration)))
     for (const enabled of pluroraProfile.integrationPolicy.enabled) expect(ruled).toContain(enabled)
@@ -302,7 +318,7 @@ describe('supabase preview policy names no standing execution target', () => {
 
   it('requires a preview branch whose identity is the pull request in flight', () => {
     expect(supabase()).toMatchObject({
-      projectRef: 'uljaajwwnygopsyvwsre',
+      parentProjectRef: 'uljaajwwnygopsyvwsre',
       execution: 'cloud-only',
       previewBranchRequired: true,
       previewBranchIdentity: 'pull-request',
