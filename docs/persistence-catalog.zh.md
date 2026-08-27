@@ -443,7 +443,49 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:129`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:156`](../packages/core/journal/src/types.ts)
+
+<a id="harnesscapability-end--log-only"></a>
+
+#### `harness/capability-end` — 仅日志
+
+```ts persistence-catalog
+/** A deterministic capability finished, with its classified failure when it had one. */
+'harness/capability-end': {
+  workflowId: string
+  stageId: string
+  capability: string
+  status: CapabilityOutcome
+  durationMs: number
+  failureClass?: string
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:120`](../packages/core/journal/src/types.ts)
+
+<a id="harnesscapability-start--log-only"></a>
+
+#### `harness/capability-start` — 仅日志
+
+```ts persistence-catalog
+/**
+ * A deterministic capability began work for one stage.
+ *
+ * Written for the same reason an executor start is: the window between
+ * asking GitHub or Supabase to do something and hearing back is the window
+ * in which the world may have changed without this log knowing. A start
+ * with no end is that window, still open, and `mutationPossible` says
+ * whether anything in it could have left a mark.
+ */
+'harness/capability-start': {
+  workflowId: string
+  stageId: string
+  capability: string
+  mutationPossible: boolean
+}
+```
+
+来源：[`packages/core/journal/src/types.ts:113`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscircuit-breaker--log-only"></a>
 
@@ -460,7 +502,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:137`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:164`](../packages/core/journal/src/types.ts)
 
 <a id="harnessdelivery--log-only"></a>
 
@@ -482,7 +524,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:120`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:147`](../packages/core/journal/src/types.ts)
 
 <a id="harnessdiagnosis--log-only"></a>
 
@@ -493,7 +535,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'harness/diagnosis': { workflowId: string; stageId: string; diagnosis: DiagnosisContract }
 ```
 
-来源：[`packages/core/journal/src/types.ts:104`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:131`](../packages/core/journal/src/types.ts)
 
 <a id="harnessexecutor-end--log-only"></a>
 
@@ -511,7 +553,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:93`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:96`](../packages/core/journal/src/types.ts)
 
 <a id="harnessexecutor-start--log-only"></a>
 
@@ -529,7 +571,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:84`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:87`](../packages/core/journal/src/types.ts)
 
 <a id="harnessfinding--log-only"></a>
 
@@ -540,7 +582,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'harness/finding': { workflowId: string; stageId: string; finding: Finding }
 ```
 
-来源：[`packages/core/journal/src/types.ts:102`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:129`](../packages/core/journal/src/types.ts)
 
 <a id="harnessroute-decision--log-only"></a>
 
@@ -566,7 +608,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:54`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:57`](../packages/core/journal/src/types.ts)
 
 <a id="harnessroute-fallback--log-only"></a>
 
@@ -592,7 +634,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:72`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:75`](../packages/core/journal/src/types.ts)
 
 <a id="harnessverdict--log-only"></a>
 
@@ -611,7 +653,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:106`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:133`](../packages/core/journal/src/types.ts)
 
 <a id="harnessworkflow-end--log-only"></a>
 
@@ -627,7 +669,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:145`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:172`](../packages/core/journal/src/types.ts)
 
 <a id="harnessworkflow-start--log-only"></a>
 
@@ -646,7 +688,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/journal/src/types.ts:40`](../packages/core/journal/src/types.ts)
+来源：[`packages/core/journal/src/types.ts:43`](../packages/core/journal/src/types.ts)
 
 ### `hook/*`
 

@@ -23,6 +23,7 @@ import type {
 } from '@trick-harness/contracts'
 import type {
   BlockerKind,
+  CapabilityOutcome,
   DeliveryAction,
   ExecutorOutcome,
   WorkflowEndState,
@@ -44,6 +45,8 @@ export const HARNESS_EVENT_TYPES = [
   'harness/route-fallback',
   'harness/executor-start',
   'harness/executor-end',
+  'harness/capability-start',
+  'harness/capability-end',
   'harness/finding',
   'harness/diagnosis',
   'harness/verdict',
@@ -134,6 +137,14 @@ export interface WorkflowProjection {
   readonly circuits: Readonly<Record<string, 'AVAILABLE' | 'DEGRADED'>>
   /** Executor runs started but never ended — the work a restart must verify. */
   readonly openStages: readonly string[]
+  /**
+   * Capability runs started but never ended, as `stageId:capability`.
+   *
+   * The deterministic half of the same question `openStages` asks. A GitHub
+   * push or a Supabase branch apply that began and never reported back may have
+   * changed the world, and the log's job is to say so rather than to guess.
+   */
+  readonly openCapabilities: readonly string[]
   readonly executorStarts: number
   /** Absent while the workflow is still in flight. */
   readonly end?: { readonly state: WorkflowEndState; readonly verdict: WorkflowVerdict; readonly summary: string }
@@ -335,6 +346,58 @@ export class WorkflowJournal {
   }
 
   /**
+   * Record that a deterministic capability began work, durably.
+   *
+   * Flushed before the capability is allowed to act, for the same reason an
+   * executor start is: a push that happened with no record of having been
+   * started is a mutation a restart cannot attribute, and re-running it is how
+   * one commit becomes two.
+   * @param stageId - The stage the capability is working for.
+   * @param capability - Which capability, e.g. `github-delivery`.
+   * @param mutationPossible - Whether this work could change the world.
+   * @throws {JournalError} when the checkpoint did not happen.
+   */
+  async beginCapability(stageId: string, capability: string, mutationPossible: boolean): Promise<void> {
+    this.#session.append('harness/capability-start', {
+      workflowId: this.#workflowId,
+      stageId,
+      capability,
+      mutationPossible,
+    })
+    await this.#durable()
+  }
+
+  /**
+   * Record that a deterministic capability finished, durably.
+   *
+   * No command output, no connection string, no token: what is kept is that it
+   * ran, how it stopped, and how long it took.
+   * @param stageId - The stage the capability was working for.
+   * @param capability - Which capability finished.
+   * @param status - How it stopped.
+   * @param durationMs - Wall-clock duration.
+   * @param failureClass - The classified failure, when it had one.
+   * @throws {JournalError} when the checkpoint did not happen.
+   */
+  async endCapability(
+    stageId: string,
+    capability: string,
+    status: CapabilityOutcome,
+    durationMs: number,
+    failureClass?: string,
+  ): Promise<void> {
+    this.#session.append('harness/capability-end', {
+      workflowId: this.#workflowId,
+      stageId,
+      capability,
+      status,
+      durationMs,
+      ...failureClass === undefined ? {} : { failureClass },
+    })
+    await this.#durable()
+  }
+
+  /**
    * Record one triaged finding.
    * @param stageId - The stage that raised it.
    * @param finding - The finding, carrying its evidence references.
@@ -517,6 +580,8 @@ interface Projected {
   circuits: Record<string, 'AVAILABLE' | 'DEGRADED'>
   started: string[]
   ended: string[]
+  capabilityStarted: string[]
+  capabilityEnded: string[]
   end?: WorkflowProjection['end']
 }
 
@@ -567,6 +632,16 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
       state.ended.push((data as unknown as { stageId: string }).stageId)
       return
     }
+    case 'harness/capability-start': {
+      const payload = data as unknown as { stageId: string; capability: string }
+      state.capabilityStarted.push(`${payload.stageId}:${payload.capability}`)
+      return
+    }
+    case 'harness/capability-end': {
+      const payload = data as unknown as { stageId: string; capability: string }
+      state.capabilityEnded.push(`${payload.stageId}:${payload.capability}`)
+      return
+    }
     case 'harness/finding': {
       state.findings.push((data as unknown as { finding: Finding }).finding)
       return
@@ -603,6 +678,26 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
 }
 
 /**
+ * The starts no end accounts for, pairing one end to one start.
+ *
+ * Counted rather than set-subtracted, because the same stage may run the same
+ * capability twice: two starts and one end leave one window open, and a set
+ * difference would report none.
+ * @param starts - The start keys, in log order.
+ * @param ends - The end keys, in log order.
+ * @returns The starts still unaccounted for.
+ */
+function unmatched(starts: readonly string[], ends: readonly string[]): string[] {
+  const remaining = [...ends]
+  return starts.filter((key) => {
+    const index = remaining.indexOf(key)
+    if (index === -1) return true
+    remaining.splice(index, 1)
+    return false
+  })
+}
+
+/**
  * Rebuild one workflow's state from a session's event log.
  *
  * The projection reads `harness/*` events and nothing else, so pruning tool
@@ -626,19 +721,16 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     circuits: {},
     started: [],
     ended: [],
+    capabilityStarted: [],
+    capabilityEnded: [],
   }
   for (const event of events) {
     const data = harnessPayload(event)
     if (data === undefined || data.workflowId !== workflowId) continue
     fold(state, event.type as HarnessEventType, data)
   }
-  const ended = [...state.ended]
-  const openStages = state.started.filter((stageId) => {
-    const index = ended.indexOf(stageId)
-    if (index === -1) return true
-    ended.splice(index, 1)
-    return false
-  })
+  const openStages = unmatched(state.started, state.ended)
+  const openCapabilities = unmatched(state.capabilityStarted, state.capabilityEnded)
   return Object.freeze({
     workflowId,
     routes: Object.freeze(state.routes),
@@ -649,6 +741,7 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     blockers: Object.freeze(state.blockers),
     circuits: Object.freeze(state.circuits),
     openStages: Object.freeze(openStages),
+    openCapabilities: Object.freeze(openCapabilities),
     executorStarts: state.started.length,
     ...state.objective === undefined ? {} : { objective: state.objective },
     ...state.end === undefined ? {} : { end: state.end },

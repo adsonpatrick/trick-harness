@@ -609,6 +609,33 @@ describe('what a restart may conclude', () => {
     expect(assessment.requiresWorldVerification).toBe(true)
   })
 
+  it('demands a world check when a capability was in flight', async () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    await journal.beginCapability('deliver-1', 'github-delivery', true)
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    // No stage was open and no delivery was recorded, yet a push may have
+    // landed. Reading this as safe to retry is how one commit becomes two.
+    expect(assessment.openStages).toEqual([])
+    expect(assessment.requiresWorldVerification).toBe(true)
+    expect(assessment.summary).toContain('deliver-1:github-delivery')
+  })
+
+  it('needs no world check once the capability reported back', async () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    await journal.beginCapability('verify-1', 'supabase-preview', false)
+    await journal.endCapability('verify-1', 'supabase-preview', 'completed', 12)
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    expect(assessment.requiresWorldVerification).toBe(false)
+  })
+
   it('demands a world check when a mutation was already recorded', async () => {
     const session = Session.create(SessionId('s'))
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)

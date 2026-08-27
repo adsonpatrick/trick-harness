@@ -26,6 +26,8 @@ const EXPECTED_EVENTS = [
   'harness/route-fallback',
   'harness/executor-start',
   'harness/executor-end',
+  'harness/capability-start',
+  'harness/capability-end',
   'harness/finding',
   'harness/diagnosis',
   'harness/verdict',

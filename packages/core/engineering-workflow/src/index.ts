@@ -152,7 +152,10 @@ function blockerKindOf(findings: readonly Finding[]): BlockerKind {
  */
 export function assessRestart(projection: WorkflowProjection): RestartAssessment {
   const { end } = projection
-  const interrupted = projection.openStages.length > 0
+  // A capability that began and never reported back counts the same as an open
+  // stage: the difference between the two is who was holding the tool, not
+  // whether the world may have moved while nobody was recording it.
+  const interrupted = projection.openStages.length > 0 || projection.openCapabilities.length > 0
   const mutated = projection.deliveries.length > 0
   // An id, not a fallback to the execution id: a projection with no start
   // event is not a workflow this harness can speak for, and `restartOf` refuses
@@ -172,7 +175,10 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
     })
   }
   const reasons: string[] = []
-  if (interrupted) reasons.push(`stages still open: ${projection.openStages.join(', ')}`)
+  if (projection.openStages.length > 0) reasons.push(`stages still open: ${projection.openStages.join(', ')}`)
+  if (projection.openCapabilities.length > 0) {
+    reasons.push(`capabilities still open: ${projection.openCapabilities.join(', ')}`)
+  }
   for (const delivery of projection.deliveries) reasons.push(`recorded ${delivery.action} on ${delivery.branch}`)
   return Object.freeze({
     ...identity,
