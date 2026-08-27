@@ -33,3 +33,7 @@ The policy stores no preview branch name. It names the Supabase *parent* project
 The capability ids in `enabled` are the ids the composition consumes, spelled the same way. A profile that spells one differently does not fail to load — it turns that capability off and says nothing about having done so, which is the quieter and worse of the two failures available.
 
 **Self-modifying plugins are excluded from trusted composition.** The trusted workflow state machine is what enforces every other rule here. A plugin that can rewrite it at runtime would make the whole policy set advisory, so the exclusion is stated rather than left as an empty list.
+
+## The absence of a fallback is asserted, not just intended
+
+Two tests hold this. One reads every string in the profile — not only the Supabase rule — and fails if `--local`, `--linked`, `supabase start`, `db reset`, `test db` or `neurovia-dev` appears anywhere in it, because a fallback added later would be added somewhere and the point is that there is no somewhere it could hide. The other composes this profile for real and runs a whole preview validation through it, then reads back every command the capability issued and asserts the same set is absent, and that the parent project ref appears only where branches are created and asked about.

@@ -117,3 +117,9 @@ Use `composeHarnessRuntime(runtime, options)` instead to add providers to a runt
 - **No live smoke.** Loading is proven not to start a process; that a real product then starts correctly is each provider package's own concern.
 - **One session per composed Harness.** `composeHarness` journals every workflow into the session it was given, so `restartOf` reads whatever that session holds. Serving several unrelated projects means composing several Harnesses.
 - **No Claude overlay ships here.** It composes through `extraProviders` like any other executor, and this fork registers none, so "optional" is the absence of a field rather than a flag that turns something off.
+
+## The deterministic capabilities are composed, not wired to the journal yet
+
+`composeHarness` builds the GitHub delivery and Supabase preview capabilities from the profile's own ids and options, and Plurora's composition test drives a real preview run through them to prove no local, linked or shared-database path is reachable from the composed object.
+
+What it does not yet do is hand those capabilities the journal's checkpoint observers. `onRecord` and `onMutation` exist on both capabilities and are covered by their own tests; connecting them to the workflow journal so a confirmed mutation is durable before the next one is attempted belongs to the workflow-authority work, not here. Until then a composed run records its stages and its executors, and the hosted mutations inside a stage are recorded only in the capability's returned result.

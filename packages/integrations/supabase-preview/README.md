@@ -24,54 +24,25 @@ pgTAP and RLS tests belong to the repository, not here, so the suite is configur
 
 ## A command is settled when its tree is gone
 
-The Supabase CLI starts helpers, and a closed direct child says nothing about
-them. Every command here waits for its whole owned process tree before the next
-one runs: otherwise a migration would be applied while the previous command
-still holds a connection to the branch, and the branch would be deleted out from
-under something still writing to it.
+The Supabase CLI starts helpers, and a closed direct child says nothing about them. Every command here waits for its whole owned process tree before the next one runs: otherwise a migration would be applied while the previous command still holds a connection to the branch, and the branch would be deleted out from under something still writing to it.
 
-A tree that cannot be observed to have exited blocks the run with
-`teardown-failed`. It is never reported as a command that succeeded, whatever
-exit code the child gave, and the underlying cause is dropped rather than
-wrapped — a Supabase failure echoes the connection string it was handed.
+A tree that cannot be observed to have exited blocks the run with `teardown-failed`. It is never reported as a command that succeeded, whatever exit code the child gave, and the underlying cause is dropped rather than wrapped — a Supabase failure echoes the connection string it was handed.
 
-The cancellation signal is not passed to that wait. A cancelled run still owns
-what it started.
+The cancellation signal is not passed to that wait. A cancelled run still owns what it started.
 
 ## The gates are a sequence, not a checklist
 
-A run stops at the first gate it cannot get past. Lint read off a branch whose
-migrations did not apply describes a schema that does not exist, and a project
-suite run against it fails for a reason that has nothing to do with the code, so
-collecting that evidence would not add information — it would add a second
-failure for a run to try to repair.
+A run stops at the first gate it cannot get past. Lint read off a branch whose migrations did not apply describes a schema that does not exist, and a project suite run against it fails for a reason that has nothing to do with the code, so collecting that evidence would not add information — it would add a second failure for a run to try to repair.
 
-The outcome says which gates were passed (`completedGates`), which one stopped
-the run (`primaryFailure`), and which ones were therefore never asked
-(`skippedGates`). A gate that was never configured — the project suite, when
-there is no test command — is not reported as skipped, because it was never
-planned.
+The outcome says which gates were passed (`completedGates`), which one stopped the run (`primaryFailure`), and which ones were therefore never asked (`skippedGates`). A gate that was never configured — the project suite, when there is no test command — is not reported as skipped, because it was never planned.
 
 ## What the run left in the cloud is written down as it happens
 
-Three things a run does outlast the run: it creates a branch, it applies a
-migration history to it, and it takes the branch away. Each is offered to
-`onMutation` after the read that confirmed it and before the next one starts,
-and an observer that rejects stops the run — a branch nobody recorded is a
-branch nobody knows to delete.
+Three things a run does outlast the run: it creates a branch, it applies a migration history to it, and it takes the branch away. Each is offered to `onMutation` after the read that confirmed it and before the next one starts, and an observer that rejects stops the run — a branch nobody recorded is a branch nobody knows to delete.
 
-The record names the child project ref and the branch name, and nothing else. It
-goes to a durable log, and the connection string, the database password and the
-CLI's access token are all values that would be read back by whoever opens that
-log next.
+The record names the child project ref and the branch name, and nothing else. It goes to a durable log, and the connection string, the database password and the CLI's access token are all values that would be read back by whoever opens that log next.
 
-`preview-created` fires at the identity read rather than at the create command,
-because the create command returns an intention and the read is what proves the
-branch is a child project rather than the parent. `migrations-applied` fires
-after the migration list is read back, not after the push exits zero: an unread
-migration is not an applied one. `preview-deleted` fires after the delete is
-confirmed, and a delete nobody could record is reported as a cleanup failure —
-the branch is gone, what failed is the record of it going.
+`preview-created` fires at the identity read rather than at the create command, because the create command returns an intention and the read is what proves the branch is a child project rather than the parent. `migrations-applied` fires after the migration list is read back, not after the push exits zero: an unread migration is not an applied one. `preview-deleted` fires after the delete is confirmed, and a delete nobody could record is reported as a cleanup failure — the branch is gone, what failed is the record of it going.
 
 ## Cleanup is a separate report
 

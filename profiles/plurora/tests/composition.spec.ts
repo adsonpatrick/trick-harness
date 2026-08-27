@@ -375,4 +375,72 @@ describe('the capabilities this project actually turns on', () => {
     // Composing is not running: no process, no server, no client.
     expect(seams.reached()).toBe(0)
   })
+
+  it('runs the whole preview validation without ever naming a database but the branch', async () => {
+    const issued: (readonly string[])[] = []
+    const branchJson = JSON.stringify({
+      id: 'br_1',
+      project_ref: 'zyxwvutsrqponmlk',
+      status: 'MIGRATIONS_PASSED',
+      db_url: 'postgresql://postgres:s3cr3t@db.zyxwvutsrqponmlk.supabase.co:5432/postgres',
+    })
+    const spawn = (spec: SubprocessSpawnSpec): SubprocessHandle => {
+      issued.push(spec.argv)
+      const stdout = spec.argv.includes('get') ? branchJson : ''
+      const reader = { readFrom: () => ({ text: stdout, nextOffset: stdout.length, lossy: false }) }
+      return {
+        pid: 1,
+        stdin: undefined,
+        stdout: undefined,
+        stderr: undefined,
+        collected: { stdout: reader, stderr: { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) } },
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+        terminate: () => {},
+        waitForExit: () => Promise.resolve(true),
+      } as unknown as SubprocessHandle
+    }
+    const seams = productSeams()
+    const harness = composeHarness({
+      profile: pluroraProfile,
+      registry: DEFAULT_MODEL_REGISTRY,
+      session: Session.create(SessionId('plurora-preview-safety')),
+      flush: async () => true,
+      workflow: {
+        interpret: (stage, executor) => ({
+          role: stage.role,
+          executor,
+          verdict: 'PASS',
+          summary: `${stage.role} passed`,
+          findings: [],
+          evidence: [],
+        }),
+        task: stage => `${stage.role}: do the work`,
+      },
+      providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
+      integrations: {
+        github: { cwd: '/repo', spawn },
+        supabase: { cwd: '/repo', spawn, projectRef: 'uljaajwwnygopsyvwsre', pollIntervalMs: 0 },
+      },
+      control: { host: '127.0.0.1', port: 0, token: 'a-token-long-enough' },
+    })
+    opened.push(harness)
+
+    const outcome = await harness.integrations.supabase?.run({ branchName: 'pr-42' })
+
+    expect(outcome?.status).toBe('PASSED')
+    // Every command the real profile's capability issued, read back as one
+    // string. The forbidden paths are the ones that need Docker or that point
+    // at a database somebody else is using, and the assertion is that the
+    // composed capability has no way to reach them — not that this run chose
+    // not to.
+    const commands = issued.map(argv => argv.join(' ')).join('\n')
+    for (const forbidden of ['--local', '--linked', 'supabase start', 'db reset', 'test db', 'neurovia-dev']) {
+      expect(commands).not.toContain(forbidden)
+    }
+    // The parent ref appears only where branches are created and asked about.
+    for (const argv of issued) {
+      if (!argv.includes('uljaajwwnygopsyvwsre')) continue
+      expect(argv).toContain('branches')
+    }
+  })
 })

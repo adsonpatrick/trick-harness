@@ -340,3 +340,24 @@ describe('supabase preview policy names no standing execution target', () => {
     expect(JSON.stringify(supabase())).not.toContain('neurovia-dev')
   })
 })
+
+describe('the database fallbacks this project does not have', () => {
+  /** Every string this profile carries, wherever it is nested. */
+  const serialized = JSON.stringify(pluroraProfile)
+
+  it('names no local, linked or shared database anywhere in its policy', () => {
+    // Written as a search over the whole profile rather than over the one rule
+    // that is supposed to hold the answer. A fallback added later would be
+    // added somewhere, and the point of this assertion is that there is no
+    // somewhere it could hide.
+    for (const forbidden of ['--local', '--linked', 'supabase start', 'db reset', 'test db']) {
+      expect(serialized).not.toContain(forbidden)
+    }
+  })
+
+  it('names no shared development database as anything at all', () => {
+    // `neurovia-dev` is the database everyone else is using. A migration
+    // validated against it is not validated, it is the incident.
+    expect(serialized).not.toContain('neurovia-dev')
+  })
+})

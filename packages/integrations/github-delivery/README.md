@@ -40,19 +40,11 @@ A wait that ends any other way is a tree still standing. A rejection and the sea
 
 ## A confirmed mutation is written down before the next one
 
-Each of the three mutations is re-read from the world before it is believed, and
-`onRecord` is offered that re-read record before the next mutation starts. The
-order matters more than it looks: a push whose commit was never recorded is, on
-restart, indistinguishable from a commit that never happened, and a restart that
-guesses wrong either repeats work that landed or abandons work that did not.
+Each of the three mutations is re-read from the world before it is believed, and `onRecord` is offered that re-read record before the next mutation starts. The order matters more than it looks: a push whose commit was never recorded is, on restart, indistinguishable from a commit that never happened, and a restart that guesses wrong either repeats work that landed or abandons work that did not.
 
-So an observer that rejects stops the delivery. The result is not an error in
-place of a result — it is a `DeliveryOutcome` that reports what did land, with
-`failure.code` of `uncheckpointed-mutation`. A delivery that did less than it was
-asked and said so is a state a run can act on.
+So an observer that rejects stops the delivery. The result is not an error in place of a result — it is a `DeliveryOutcome` that reports what did land, with `failure.code` of `uncheckpointed-mutation`. A delivery that did less than it was asked and said so is a state a run can act on.
 
-Operations that were attempted but not confirmed are never offered. The observer
-sees mutations, not intentions.
+Operations that were attempted but not confirmed are never offered. The observer sees mutations, not intentions.
 
 ## Credentials stay where they live
 
