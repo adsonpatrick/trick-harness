@@ -101,7 +101,7 @@ describe('a run that provisions, validates and tears down', () => {
     const outcome = await capability().run({ branchName: 'preview-run' })
 
     expect(outcome.status).toBe('PASSED')
-    expect(outcome.gates.map(gate => gate.name)).toEqual(['migrations', 'migration-list', 'lint'])
+    expect(outcome.gates.map(gate => gate.name)).toEqual(['migration-push', 'migration-list', 'lint'])
     expect(outcome.cleanup).toEqual({ attempted: true, succeeded: true, message: undefined })
 
     const spoken = argvs().map(argv => argv.join(' '))
@@ -303,5 +303,105 @@ describe('what settling a preview command means', () => {
     expect(outcome.status).toBe('BLOCKED')
     expect(outcome.summary).not.toContain('s3cr3t')
     expect(outcome.summary).not.toContain('postgresql://')
+  })
+})
+
+describe('a run that stops at the first gate it cannot get past', () => {
+  /**
+   * The capability under test, bound to the parent project.
+   * @param testCommand - the project suite to run, when there is one.
+   * @returns the capability.
+   */
+  function preview(testCommand?: readonly string[]): SupabasePreview {
+    return new SupabasePreview({
+      cwd: '/repo',
+      spawn: seam,
+      projectRef: PARENT_REF,
+      pollIntervalMs: 0,
+      ...testCommand === undefined ? {} : { testCommand },
+    })
+  }
+
+  it('asks nothing of a branch whose migrations did not apply', async () => {
+    scripts.push({ match: names('db', 'push'), respond: () => ({ exitCode: 1, stdout: '', stderr: 'relation exists' }) })
+
+    const outcome = await preview(['pnpm', 'test']).run({ branchName: 'pr-7' })
+
+    expect(outcome.status).toBe('FAILED')
+    expect(outcome.primaryFailure?.gate).toBe('migration-push')
+    expect(outcome.gates.map(gate => gate.name)).toEqual(['migration-push'])
+    expect(outcome.skippedGates).toEqual(['migration-list', 'lint', 'project-tests'])
+    expect(outcome.completedGates).toEqual(['create', 'identity', 'health'])
+    // Lint and a test suite read off a schema that was never applied describe a
+    // database that does not exist.
+    expect(issued.some(spec => spec.argv.includes('lint'))).toBe(false)
+    expect(issued.some(spec => spec.argv[0] === 'pnpm')).toBe(false)
+    // The branch still goes away.
+    expect(outcome.cleanup.attempted).toBe(true)
+    expect(outcome.cleanup.succeeded).toBe(true)
+  })
+
+  it('never migrates a branch that reports the parent as its own ref', async () => {
+    scripts.unshift({
+      match: names('branches', 'get'),
+      respond: () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({ id: 'b1', project_ref: PARENT_REF, status: 'ACTIVE_HEALTHY', db_url: PREVIEW_CONNECTION }),
+      }),
+    })
+
+    const outcome = await preview().run({ branchName: 'pr-7' })
+
+    expect(outcome.status).toBe('BLOCKED')
+    expect(outcome.failure?.code).toBe('shared-parent')
+    expect(outcome.primaryFailure?.gate).toBe('identity')
+    expect(outcome.completedGates).toEqual(['create'])
+    expect(outcome.skippedGates).toEqual(['health', 'migration-push', 'migration-list', 'lint'])
+    expect(issued.some(spec => spec.argv.includes('push'))).toBe(false)
+    expect(outcome.cleanup.attempted).toBe(true)
+  })
+
+  it('does not run the project suite against a branch that failed lint', async () => {
+    scripts.push({ match: names('db', 'lint'), respond: () => ({ exitCode: 1, stdout: '', stderr: 'unindexed key' }) })
+
+    const outcome = await preview(['pnpm', 'test']).run({ branchName: 'pr-7' })
+
+    expect(outcome.status).toBe('FAILED')
+    expect(outcome.primaryFailure?.gate).toBe('lint')
+    expect(outcome.skippedGates).toEqual(['project-tests'])
+    expect(issued.some(spec => spec.argv[0] === 'pnpm')).toBe(false)
+    expect(outcome.cleanup.succeeded).toBe(true)
+  })
+
+  it('plans no gate it was never going to run', async () => {
+    scripts.push({ match: names('db', 'push'), respond: () => ({ exitCode: 1, stdout: '', stderr: '' }) })
+
+    const outcome = await preview().run({ branchName: 'pr-7' })
+
+    // No test command was configured, so the suite is not a gate this run
+    // skipped — it is a gate this run never had.
+    expect(outcome.skippedGates).toEqual(['migration-list', 'lint'])
+  })
+
+  it('keeps a branch that would not go away apart from the gates', async () => {
+    scripts.push({ match: names('branches', 'delete'), respond: () => ({ exitCode: 1, stdout: '', stderr: '' }) })
+
+    const outcome = await preview().run({ branchName: 'pr-7' })
+
+    // Every gate passed and the branch leaked. Both are true, and folding
+    // either into the other sends the wrong call to the wrong place.
+    expect(outcome.status).toBe('PASSED')
+    expect(outcome.primaryFailure).toBeUndefined()
+    expect(outcome.cleanupFailure).toContain('deleting the preview branch failed')
+  })
+
+  it('does not let a clean teardown redeem a failed gate', async () => {
+    scripts.push({ match: names('db', 'push'), respond: () => ({ exitCode: 1, stdout: '', stderr: '' }) })
+
+    const outcome = await preview().run({ branchName: 'pr-7' })
+
+    expect(outcome.status).toBe('FAILED')
+    expect(outcome.cleanup.succeeded).toBe(true)
+    expect(outcome.cleanupFailure).toBeUndefined()
   })
 })

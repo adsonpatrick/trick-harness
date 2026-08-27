@@ -38,9 +38,23 @@ wrapped — a Supabase failure echoes the connection string it was handed.
 The cancellation signal is not passed to that wait. A cancelled run still owns
 what it started.
 
+## The gates are a sequence, not a checklist
+
+A run stops at the first gate it cannot get past. Lint read off a branch whose
+migrations did not apply describes a schema that does not exist, and a project
+suite run against it fails for a reason that has nothing to do with the code, so
+collecting that evidence would not add information — it would add a second
+failure for a run to try to repair.
+
+The outcome says which gates were passed (`completedGates`), which one stopped
+the run (`primaryFailure`), and which ones were therefore never asked
+(`skippedGates`). A gate that was never configured — the project suite, when
+there is no test command — is not reported as skipped, because it was never
+planned.
+
 ## Cleanup is a separate report
 
-The branch is deleted whatever happened to the run, including cancellation, and the delete is deliberately not given the run's abort signal — a cancelled run is exactly the case where a hosted branch would otherwise be left behind. Whether the delete worked is reported in `cleanup`, apart from the run's own result, because a leaked branch costs money and needs a person while a failed migration needs a repair cycle.
+The branch is deleted whatever happened to the run, including cancellation, and the delete is deliberately not given the run's abort signal — a cancelled run is exactly the case where a hosted branch would otherwise be left behind. Whether the delete worked is reported in `cleanup`, apart from the run's own result, because a leaked branch costs money and needs a person while a failed migration needs a repair cycle. Cleanup runs in a `finally`, and it is orthogonal in both directions: a branch that would not go away never turns a passing run into a failure, and a branch that went away cleanly never redeems a gate that failed.
 
 ## Usage
 
