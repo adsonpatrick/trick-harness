@@ -18,7 +18,7 @@
 
 - Verification is read-only by default. Confirmed bugs are repaired in separate implementation contexts and independently re-verified.
 - Missing real environment evidence is `PARTIAL`/`INCONCLUSIVE`, never PASS.
-- Completion requires **30/30 base criteria + R1-R5 PASS**.
+- Completion requires **every retained base criterion + R1-R5 PASS**, with each PRO-OPTIONAL criterion carrying an explicit entitlement status and criterion 8 recorded as WITHDRAWN. See the 2026-08-27 scope amendment.
 - Do not expose subscription credentials, API keys, control tokens, Supabase DB URLs/passwords, or private model reasoning in evidence artifacts.
 - Real-provider smokes use native product authentication. Codex smoke must not require/inject `OPENAI_API_KEY` for ChatGPT-plan route.
 - User/global OpenCode and Codex config files are never rewritten. Before/after evidence may record hashes/metadata, never secret contents.
@@ -63,11 +63,11 @@ Primary evidence owners:
 - Create at end: `docs/agents/harness-v2-evidence.md`
 - Temporary only: `.scratch/harness-v2-verification/*`
 
-- [ ] Record exact Trick Harness and `neuro-via` SHAs/status before verification.
-- [ ] Verify GitHub fork parent is `deepseek-ai/deepseek-harness`, `LICENSE` retains MIT notice, upstream relationship is documented/reachable, and current Trick branch descends from recorded baseline.
-- [ ] Create 35-row execution ledger with criterion, observable, best evidence, command/environment, verdict, artifact/ref.
-- [ ] Run secret/security hygiene checks in both repos before real smokes.
-- [ ] Stop/classify baseline contamination instead of retrying until green.
+- [x] Record exact Trick Harness and `neuro-via` SHAs/status before verification. Trick Harness frozen at `f9acbdcfec`; `neuro-via` NOT AVAILABLE, Plan C unrun.
+- [x] Verify GitHub fork parent is `deepseek-ai/deepseek-harness`, `LICENSE` retains MIT notice, upstream relationship is documented/reachable, and current Trick branch descends from recorded baseline. Read from the GitHub API; `LICENSE` blob is byte-identical to upstream.
+- [x] Create 35-row execution ledger with criterion, observable, best evidence, command/environment, verdict, artifact/ref. Created at `docs/verification/2026-08-27-harness-v2-plan-d-evidence.md`; location deviation from the file map is recorded in the ledger.
+- [x] Run secret/security hygiene checks in both repos before real smokes. Trick Harness only: twelve hygiene gates pass, one fails as inherited baseline contamination. The `neuro-via` half is BLOCKED on Plan C.
+- [x] Stop/classify baseline contamination instead of retrying until green. `rescope-vendor:check` fails on two upstream-owned edits whose anchors are already absent at baseline `b150a551b8`; classified, not repaired.
 
 ---
 
