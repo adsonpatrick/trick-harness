@@ -145,4 +145,17 @@ One side effect on the parent is recorded because it is real. Before the run the
 
 The positive canary — preview created, `preview ref != parent ref`, healthy, harmless migration applied, migration history verified, remote lint, project gate, cleanup — remains unrun. It needs the organisation on the Pro plan. Substituting MCP calls or unit tests for it is refused under Task 8 Step 4.
 
+#### The project owner's decision, 2026-08-27
+
+The owner decided not to buy the Pro plan for this canary, and to keep the capability ready for the day the plan changes. The decision is recorded here so a later reader finds a choice rather than an omission.
+
+What "ready" is worth, stated precisely, so the readiness is not read as more than it is:
+
+- The positive path is covered end to end against scripted seams — *creates a branch, waits for it, applies migrations, reads them back, lints and cleans up* — along with the project suite reading its connection from the environment rather than from an argv.
+- The refusals that keep the parent safe are covered: no `--local`, no `--linked`, no command that starts a local stack, no migration of a branch reporting the parent's own ref, no connection string in any evidence or record.
+- The fail-closed path is now confirmed against the real Supabase API rather than a script, as the table above records.
+- What is not proven is the real remote's behaviour on the positive path: that a real preview provisions, reports a ref that is not the parent's, becomes healthy inside the timeout, and accepts a migration. Only a Pro-plan run proves that, and nothing in this file claims it.
+
+When the organisation moves to Pro, the canary is one command: the run needs no code change, only the entitlement.
+
 Until the Supabase canary runs and passes on its positive path, the master plan's exit condition is unmet, and Plan C / NeuroVia stays blocked.

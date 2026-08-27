@@ -238,7 +238,7 @@ git commit -m "docs: record harness v2 remediation evidence"
 
 On a disposable feature branch, use the Harness delivery capability to stage a harmless fixture change, commit, normal-push, open a PR, and re-read commit/remote SHA/PR identity. Do not force-push or merge. Close/delete the canary PR/branch after evidence is captured.
 
-- [ ] **Step 2: Supabase Preview canary**
+- [ ] **Step 2: Supabase Preview canary** — DEFERRED 2026-08-27 by the project owner: the org is on the free plan, branching is Pro-only, and the plan will not be bought for this. The fail-closed half was run and passed against the real API; the positive half waits for the entitlement. See the verification file.
 
 For parent ref `uljaajwwnygopsyvwsre`:
 
