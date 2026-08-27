@@ -18,7 +18,9 @@ import {
   routedExecutors,
 } from '@trick-harness/composition'
 import type { ComposedHarness } from '@trick-harness/composition'
-import type { WorkflowObjective } from '@trick-harness/contracts'
+import type {
+  DiagnosisContract, EvidenceRef, Finding, StageResult, WorkflowObjective,
+} from '@trick-harness/contracts'
 import { dispatchableRoute, type ReasoningEffort } from '@trick-harness/executor'
 import type { ExecutorProvider, ExecutorResult } from '@trick-harness/executor'
 import { projectWorkflow } from '@trick-harness/journal'
@@ -154,7 +156,7 @@ describe('the Plurora deployment composition', () => {
 function scriptedProvider(
   name: string,
   answer: (role: string) => ExecutorResult,
-  seen: { executor: string; model: string; role: string }[],
+  seen: { executor: string; model: string; role: string; task: string }[],
 ): ExecutorProvider {
   return {
     name,
@@ -165,9 +167,48 @@ function scriptedProvider(
     },
     start: async (request) => {
       const role = request.task.split(':')[0] ?? ''
-      seen.push({ executor: name, model: request.route.model ?? '', role })
+      seen.push({ executor: name, model: request.route.model ?? '', role, task: request.task })
       return answer(role)
     },
+  }
+}
+
+/** A parent project and the isolated branch a preview run creates under it. */
+const PARENT_REF = 'abcdefghijklmnop'
+const PREVIEW_REF = 'qrstuvwxyzabcdef'
+
+const EVIDENCE: EvidenceRef = Object.freeze({ kind: 'test', locator: 'thing.spec.ts', summary: 'red' })
+
+const DIAGNOSIS: DiagnosisContract = Object.freeze({
+  symptom: 'the thing is wrong',
+  reproduction: 'vitest run thing.spec.ts',
+  expectedVsActual: 'expected right, got wrong',
+  observedEvidence: Object.freeze([EVIDENCE]),
+  affectedBoundary: 'src/thing.ts',
+  ruledOutHypotheses: Object.freeze(['the caller']),
+  rootCauseHypothesis: 'the thing rounds too early',
+  confidence: 'high',
+  regressionTestSeam: 'thing.spec.ts',
+  minimalRepairSurface: 'thing.ts',
+  unknowns: Object.freeze([]),
+  securityRelevance: 'none',
+})
+
+const REPAIRED = Object.freeze({
+  regressionTest: EVIDENCE,
+  focusedGreen: Object.freeze({ kind: 'test' as const, locator: 'thing.spec.ts', summary: 'green' }),
+  rootCauseAddressed: true,
+})
+
+/**
+ * A confirmed defect of one class, shaped as a stage would report it.
+ * @param id - the finding id.
+ * @param cls - the class the stage assigned it.
+ * @returns the finding.
+ */
+function defect(id: string, cls: Finding['class']): Finding {
+  return {
+    id, class: cls, raisedBy: 'verify', summary: `${id} is wrong`, confirmed: true, evidence: [EVIDENCE],
   }
 }
 
@@ -185,6 +226,8 @@ interface SeenStart {
   executor: string
   model: string
   role: string
+  /** The whole prompt, so a test can prove what authority it does not carry. */
+  task: string
 }
 
 describe('Plurora policy driving a live run', () => {
@@ -201,12 +244,19 @@ describe('Plurora policy driving a live run', () => {
    * @param answer - what each executor returns, by executor and role.
    * @param seen - where each start is recorded.
    * @param degradedExecutors - executors the breaker already knows are out.
+   * @param overrides - what this run reads differently from the default.
+   * @param overrides.interpret - how each stage result is read, when the default all-pass is not what the test needs.
+   * @param overrides.database - whether this run declares a schema change and composes the isolated preview for it.
    * @returns the composed Harness and the session its events land in.
    */
   function live(
     answer: (executor: string, role: string) => ExecutorResult,
     seen: SeenStart[],
     degradedExecutors: readonly string[] = [],
+    overrides: {
+      interpret?: (stage: { role: string; stageId: string }, executor: string) => StageResult
+      database?: boolean
+    } = {},
   ): { harness: ComposedHarness; session: Session } {
     const session = Session.create(SessionId('plurora-live'))
     const harness = composeHarness({
@@ -215,14 +265,14 @@ describe('Plurora policy driving a live run', () => {
       session,
       flush: async () => true,
       workflow: {
-        interpret: (stage, executor) => ({
+        interpret: overrides.interpret ?? ((stage, executor) => ({
           role: stage.role,
           executor,
           verdict: 'PASS',
           summary: `${stage.role} passed`,
           findings: [],
           evidence: [],
-        }),
+        })),
         task: stage => `${stage.role}: do the work`,
         describeDelivery: input => ({
           branch: 'feature',
@@ -230,11 +280,29 @@ describe('Plurora policy driving a live run', () => {
           message: `deliver ${input.stageId}`,
           pullRequest: { title: 'the thing', body: 'what it does', base: 'main' },
         }),
+        ...overrides.database === true
+          ? {
+            describeDatabasePreview: () => ({ branchName: 'preview-run' }),
+            databaseChange: () => ({ required: true, migrationPaths: ['supabase/migrations/0001_thing.sql'] }),
+          }
+          : {},
+        diagnose: () => DIAGNOSIS,
+        repairEvidence: () => REPAIRED,
       },
       // A lifecycle that publishes needs something to publish with, and this
       // deployment's profile enables delivery. The commands are answered here
       // rather than sent anywhere: what this file tests is routing, not GitHub.
-      integrations: { github: { cwd: '/repo', spawn: deliveringSpawn } },
+      integrations: {
+        github: { cwd: '/repo', spawn: deliveringSpawn },
+        ...overrides.database === true
+          ? {
+            supabase: {
+              cwd: '/repo', spawn: previewSpawn, projectRef: PARENT_REF,
+              pollIntervalMs: 1, readyTimeoutMs: 50,
+            },
+          }
+          : {},
+      },
       providers: {
         extraProviders: [
           scriptedProvider('opencode', role => answer('opencode', role), seen),
@@ -277,6 +345,23 @@ describe('Plurora policy driving a live run', () => {
     if (argv.includes('diff --cached')) return answered('src/thing.ts')
     if (argv.includes('rev-parse')) return answered('4b825dc642cb6eb9a060e54bf8d69288fbee4904')
     if (argv.startsWith('gh pr view')) return answered('{"number":7,"url":"https://example.invalid/pr/7","state":"OPEN","headRefName":"feature"}')
+    return answered('')
+  }
+
+  /**
+   * Every command an isolated preview run issues, answered without a cloud.
+   * @param spec - the command the capability constructed.
+   * @returns the handle.
+   */
+  function previewSpawn(spec: SubprocessSpawnSpec): SubprocessHandle {
+    if (spec.argv.includes('branches') && spec.argv.includes('get')) {
+      return answered(JSON.stringify({
+        id: 'br_1',
+        project_ref: PREVIEW_REF,
+        status: 'MIGRATIONS_PASSED',
+        db_url: `postgresql://postgres:s3cr3t@db.${PREVIEW_REF}.supabase.co:5432/postgres`,
+      }))
+    }
     return answered('')
   }
 
@@ -375,6 +460,143 @@ describe('Plurora policy driving a live run', () => {
     expect(next?.executor).toBe('opencode')
     expect(next?.reasonCodes).not.toContain('override:user')
   })
+
+  /**
+   * A live composition with the default all-pass answers from both executors.
+   * @param seen - where each start is recorded.
+   * @param overrides - what this run reads differently from the default.
+   * @returns the composed Harness and its session.
+   */
+  function liveFor(
+    seen: SeenStart[],
+    overrides: Parameters<typeof live>[3] = {},
+  ): { harness: ComposedHarness; session: Session } {
+    return live(executor => passes(executor), seen, [], overrides)
+  }
+
+  /**
+   * The all-pass reading of one stage.
+   * @param role - the stage's role.
+   * @param executor - who ran it.
+   * @returns the result.
+   */
+  function passing(role: string, executor: string): StageResult {
+    return { role, executor, verdict: 'PASS', summary: `${role} passed`, findings: [], evidence: [] } as StageResult
+  }
+
+  describe('authority this deployment does not hand to a model', () => {
+    /**
+     * A prompt carries no authority to mutate anything outside the working tree.
+     * @param seen - every start this run made.
+     */
+    function noMutationAuthorityInPrompts(seen: readonly SeenStart[]): void {
+      for (const start of seen) {
+        expect(start.role, 'no model is ever routed to publish').not.toBe('delivery')
+        for (const forbidden of ['git push', 'gh pr', 'git commit', 'supabase', 'psql', 'postgresql://']) {
+          expect(start.task.toLowerCase(), `start for ${start.role}`).not.toContain(forbidden)
+        }
+      }
+    }
+
+    it('publishes only through the capability, and asks no model to do it', async () => {
+      const seen: SeenStart[] = []
+      const { harness, session } = liveFor(seen)
+
+      const outcome = await harness.run(LIVE_OBJECTIVE)
+      const projection = projectWorkflow(session.events, outcome.workflowId)
+
+      expect(outcome.state).toBe('completed')
+      expect(projection.deliveries.map(record => record.action)).toEqual(['commit', 'push', 'pr-update'])
+      expect(projection.openCapabilities).toEqual([])
+      noMutationAuthorityInPrompts(seen)
+    })
+
+    it('verifies a schema change on an isolated preview, and asks no model to reach a database', async () => {
+      const seen: SeenStart[] = []
+      const { harness, session } = liveFor(seen, { database: true })
+
+      const outcome = await harness.run(LIVE_OBJECTIVE)
+      const ids = outcome.stages.map(stage => stage.stageId)
+
+      expect(outcome.state).toBe('completed')
+      expect(ids.indexOf('delivery-1-database')).toBeLessThan(ids.indexOf('delivery-1'))
+      noMutationAuthorityInPrompts(seen)
+      // The isolated branch is the only execution database, and nothing about it
+      // reaches the durable record.
+      const written = JSON.stringify(session.events)
+      expect(written).toContain('supabase:preview-created')
+      expect(written).not.toContain('postgresql://')
+      expect(written).not.toContain('s3cr3t')
+    })
+
+    it('starts no repair for a security defect, because this profile authorizes none', async () => {
+      const seen: SeenStart[] = []
+      let readings = 0
+      const { harness } = liveFor(seen, {
+        interpret: (stage, executor) => {
+          if (stage.role !== 'verify') return passing(stage.role, executor)
+          readings += 1
+          return readings === 1
+            ? {
+              role: stage.role, executor, verdict: 'FAIL', summary: 'a secret leaks',
+              findings: [defect('f-sec', 'SECURITY_BUG')], evidence: [],
+            }
+            : passing(stage.role, executor)
+        },
+      })
+
+      const outcome = await harness.run(LIVE_OBJECTIVE)
+
+      expect(outcome.state).toBe('blocked')
+      expect(outcome.summary).toContain('security')
+      expect(outcome.stages.map(stage => stage.role)).not.toContain('repair')
+      expect(seen.map(start => start.role)).not.toContain('repair')
+    })
+
+    it('repairs an ordinary defect, republishes it, and reads it again before it closes', async () => {
+      const seen: SeenStart[] = []
+      let reviews = 0
+      const { harness } = liveFor(seen, {
+        interpret: (stage, executor) => {
+          if (stage.role !== 'review') return passing(stage.role, executor)
+          reviews += 1
+          return reviews === 1
+            ? {
+              role: stage.role, executor, verdict: 'FAIL', summary: 'the thing is wrong',
+              findings: [defect('f-bug', 'BUG')], evidence: [],
+            }
+            : passing(stage.role, executor)
+        },
+      })
+
+      const outcome = await harness.run({ ...LIVE_OBJECTIVE, risk: 'high' })
+      const ids = outcome.stages.map(stage => stage.stageId)
+
+      expect(outcome.state).toBe('completed')
+      expect(outcome.repairCycles).toBe(1)
+      expect(ids).toEqual([
+        'implement-1', 'verify-1', 'delivery-1', 'review-1',
+        'debug-1', 'repair-1', 'verify-2', 'delivery-2', 'review-2',
+        'qa-1', 'verify-final',
+      ])
+      noMutationAuthorityInPrompts(seen)
+    })
+
+    it('adds a security reading at critical risk and still closes on a fresh verification', async () => {
+      const seen: SeenStart[] = []
+      const { harness } = liveFor(seen)
+
+      const outcome = await harness.run({ ...LIVE_OBJECTIVE, risk: 'critical' })
+
+      expect(outcome.state).toBe('completed')
+      expect(outcome.stages.map(stage => stage.role)).toEqual([
+        'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'verify',
+      ])
+      expect(outcome.stages.at(-1)?.stageId).toBe('verify-final')
+      noMutationAuthorityInPrompts(seen)
+    })
+  })
+
 })
 
 describe('the capabilities this project actually turns on', () => {
