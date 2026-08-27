@@ -18,6 +18,10 @@ Plurora's policy set: the first production consumer of the reusable Trick Harnes
 
 **Fallbacks cross executors.** When a primary executor is unavailable, work moves to the other one rather than retrying the same executor at a lower tier. An outage is the usual cause, and a same-executor retry would spend the start budget without changing the outcome.
 
+**An OpenCode outage may send heavy work to Codex, and may also stop the run.** The heavy-work invariant binds the primary route. When OpenCode is unavailable the work falls back to Codex while Codex is usable, and the fallback is never silent: the durable route fact names what it fell back from. With no usable executor left the run blocks, and that block is the expected outcome rather than a defect — the alternative is routing heavy mechanical work to a product that cannot take it, or inventing a route to one that is not there. Every reroute is a real start and is charged against the start budget below.
+
+**A person may override one stage's route, and only one.** The override names a role, an executor and a semantic tier for a single run. It is spent on the first stage of that role, recorded in the durable route facts, and carried into nothing else: not the next stage, not the next run, and never into this table. Permission mode still follows the role, so an override cannot give a reviewing stage a writable working tree.
+
 **Bounds are three repair cycles and twenty-four executor starts.** Past three cycles, repeated failure has in practice meant the diagnosis is wrong rather than the fix incomplete; continuing spends budget on the same misunderstanding. The start bound covers a whole workflow including review and QA fan-out, so a stuck run ends as a bounded failure a human can read.
 
 **Delivery automation is deliberately incomplete.** The harness may push the current feature branch and open or update its pull request. It may not force-push, rewrite history, push to the protected default branch, merge, or release. Merge stays a human decision so an automated run is never the last approval on its own work.

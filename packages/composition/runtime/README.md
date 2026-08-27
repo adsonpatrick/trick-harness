@@ -38,6 +38,20 @@ What composition never supplies is a default for a seam a deployment owns: the s
 
 `dispose` unwinds in the order things were handed out, and it waits. The control server goes first, since it owns the runs it started and settles them before anything they are still writing to is taken away. Then the runs a caller started directly: each is canceled and awaited, because unregistering a provider under a run that is still dispatching would fail it with an unregistered-executor error rather than end it as canceled — a disposal that reported a crash instead of a cancellation would be lying about why the work stopped. Only then do the registrations and the runtime go.
 
+## A run may be overridden once, and never the policy
+
+`run(objective, signal, routeOverride)` takes one human routing choice: a role, an executor, a semantic tier, optionally a reasoning effort. It is spent on the first stage of that role and only once a route actually resolved with it, so an override the router refused changes nothing rather than being burnt on a stage nobody ran.
+
+It is handed to the run and nowhere else. The profile's routing table is not edited, no provider is reconfigured, and nothing about it survives into the next run. An override that stayed in force would silently become policy for every later stage of that role — including repair cycles nobody asked about — which is how one person's situational call turns into a project's default. What the stage is allowed to do to the working tree is not part of it: permission mode follows the role, so no override buys a review a writable tree.
+
+The control server accepts the same override on a start request and refuses a malformed one outright, before any workflow id exists. Falling back to the table there would leave a caller who asked for a specific executor with a status poll that never mentions their request was dropped.
+
+## An outage reroutes; a wrong answer does not
+
+A run keeps its own picture of its executors: a circuit per product, the set taken out of the pool entirely, and the starts rerouting has spent. A failure the provider categorised as availability moves the stage to another usable executor and records the move as a durable route fact carrying `fallbackFrom`. A quality failure does not move anywhere — asking a second product the same question and taking its answer would record a second opinion as a recovery.
+
+Every reroute is a real start and is charged against the profile's start budget, so an outage cannot loop for free. Executors this runtime has no provider registered for are degraded from the start, for the same reason: a name with nothing behind it cannot serve a stage, and finding that out at dispatch turns a composition gap into a crash halfway through a run. When nothing usable is left the run blocks, and that block is the expected outcome of an outage with nowhere to go rather than a defect.
+
 ## Usage
 
 ```ts

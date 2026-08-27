@@ -9,13 +9,20 @@
  * rather than about the composition mechanism.
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import {
   BundleCompositionError,
+  composeHarness,
   createHarnessRuntimeBundle,
   routedExecutors,
 } from '@trick-harness/composition'
+import type { ComposedHarness } from '@trick-harness/composition'
+import type { WorkflowObjective } from '@trick-harness/contracts'
 import { dispatchableRoute, type ReasoningEffort } from '@trick-harness/executor'
+import type { ExecutorProvider, ExecutorResult } from '@trick-harness/executor'
+import { projectWorkflow } from '@trick-harness/journal'
+import { DEFAULT_MODEL_REGISTRY } from '@trick-harness/routing'
 import type { OpencodeAdapter } from '@trick-harness/provider-opencode'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { pluroraProfile } from '../profile.ts'
@@ -134,5 +141,188 @@ describe('the Plurora deployment composition', () => {
     })
     await bundle.dispose()
     expect(bundle.runtime.list()).toEqual([])
+  })
+})
+
+/**
+ * A product boundary that answers whatever the test told it to.
+ * @param name - the executor name.
+ * @param answer - what it returns for a given stage role.
+ * @param seen - where each start is recorded.
+ * @returns the provider.
+ */
+function scriptedProvider(
+  name: string,
+  answer: (role: string) => ExecutorResult,
+  seen: { executor: string; model: string; role: string }[],
+): ExecutorProvider {
+  return {
+    name,
+    capabilities: {
+      modelOverride: true,
+      reasoningEffort: true,
+      permissionModes: ['read-only', 'workspace-write'],
+    },
+    start: async (request) => {
+      const role = request.task.split(':')[0] ?? ''
+      seen.push({ executor: name, model: request.route.model ?? '', role })
+      return answer(role)
+    },
+  }
+}
+
+const LIVE_OBJECTIVE: WorkflowObjective = Object.freeze({
+  id: 'wf-plurora-live',
+  cwd: '/repo',
+  requirement: 'add the thing',
+  risk: 'low',
+  workload: 'medium',
+  profileId: 'plurora',
+})
+
+/** One start, as the scripted providers record it. */
+interface SeenStart {
+  executor: string
+  model: string
+  role: string
+}
+
+describe('Plurora policy driving a live run', () => {
+  let harnesses: ComposedHarness[] = []
+
+  afterEach(async () => {
+    const open = harnesses
+    harnesses = []
+    await Promise.all(open.map(async harness => harness.dispose()))
+  })
+
+  /**
+   * Compose the real Plurora profile onto scripted product boundaries.
+   * @param answer - what each executor returns, by executor and role.
+   * @param seen - where each start is recorded.
+   * @param degradedExecutors - executors the breaker already knows are out.
+   * @returns the composed Harness and the session its events land in.
+   */
+  function live(
+    answer: (executor: string, role: string) => ExecutorResult,
+    seen: SeenStart[],
+    degradedExecutors: readonly string[] = [],
+  ): { harness: ComposedHarness; session: Session } {
+    const session = Session.create(SessionId('plurora-live'))
+    const harness = composeHarness({
+      profile: pluroraProfile,
+      registry: DEFAULT_MODEL_REGISTRY,
+      session,
+      flush: async () => true,
+      workflow: {
+        interpret: (stage, executor) => ({
+          role: stage.role,
+          executor,
+          verdict: 'PASS',
+          summary: `${stage.role} passed`,
+          findings: [],
+          evidence: [],
+        }),
+        task: stage => `${stage.role}: do the work`,
+      },
+      providers: {
+        extraProviders: [
+          scriptedProvider('opencode', role => answer('opencode', role), seen),
+          scriptedProvider('codex', role => answer('codex', role), seen),
+        ],
+      },
+      ...degradedExecutors.length === 0 ? {} : { degradedExecutors },
+    })
+    harnesses.push(harness)
+    return { harness, session }
+  }
+
+  const passes = (executor: string): ExecutorResult => ({ status: 'completed', output: `${executor} ran` })
+
+  it('moves a Codex judgement stage to OpenCode reasoning when Codex runs out of quota', async () => {
+    const seen: SeenStart[] = []
+    const { harness, session } = live(
+      (executor, role) => executor === 'codex' && role === 'verify'
+        ? {
+          status: 'error',
+          output: '',
+          failure: {
+            category: 'usage-limit-exceeded',
+            availability: true,
+            safeDiagnostic: 'codex run failed (usage-limit-exceeded)',
+          },
+        }
+        : passes(executor),
+      seen,
+    )
+
+    const outcome = await harness.run(LIVE_OBJECTIVE)
+
+    expect(outcome.state).toBe('completed')
+    // Losing Codex costs assurance, not throughput, so the substitute for
+    // judgement work is the reasoning tier rather than the workhorse.
+    const rerun = seen.filter(start => start.role === 'verify')
+    expect(rerun.map(start => start.executor)).toEqual(['codex', 'opencode'])
+    expect(rerun[1]?.model).toBe(DEFAULT_MODEL_REGISTRY['opencode.reasoning-fast'])
+    const routes = projectWorkflow(session.events, LIVE_OBJECTIVE.id).routes
+    const fell = routes.filter(record => record.fallbackFrom === 'codex')
+    expect(fell.length).toBe(1)
+    expect(fell[0]?.executor).toBe('opencode')
+  })
+
+  it('sends heavy work to Codex when OpenCode is out, and says so durably', async () => {
+    const seen: SeenStart[] = []
+    const { harness, session } = live(executor => passes(executor), seen, ['opencode'])
+
+    const outcome = await harness.run({ ...LIVE_OBJECTIVE, workload: 'heavy' })
+
+    expect(outcome.state).toBe('completed')
+    expect(seen.every(start => start.executor === 'codex')).toBe(true)
+    const implemented = projectWorkflow(session.events, LIVE_OBJECTIVE.id).routes
+      .find(record => record.role === 'implement')
+    expect(implemented?.executor).toBe('codex')
+    expect(implemented?.fallbackFrom).toBe('opencode')
+  })
+
+  it('blocks heavy work rather than inventing a route when neither product is usable', async () => {
+    const seen: SeenStart[] = []
+    const { harness } = live(executor => passes(executor), seen, ['opencode', 'codex'])
+
+    const outcome = await harness.run({ ...LIVE_OBJECTIVE, workload: 'heavy' })
+
+    // The amended invariant: with no usable executor the run stops, and that is
+    // the expected outcome rather than a defect. Nothing was dispatched.
+    expect(outcome.state).toBe('blocked')
+    expect(seen).toEqual([])
+  })
+
+  it('spends a human override on one stage and carries none into the next run', async () => {
+    const seen: SeenStart[] = []
+    const { harness, session } = live(executor => passes(executor), seen)
+
+    const first = await harness.run(LIVE_OBJECTIVE, undefined, {
+      role: 'implement',
+      executor: 'codex',
+      semanticModelTier: 'codex.frontier',
+      reasoningEffort: 'xhigh',
+    })
+    const second = await harness.run({ ...LIVE_OBJECTIVE, id: 'wf-plurora-live-2' })
+
+    expect(first.state).toBe('completed')
+    const overridden = projectWorkflow(session.events, LIVE_OBJECTIVE.id).routes
+      .find(record => record.role === 'implement')
+    expect(overridden?.executor).toBe('codex')
+    expect(overridden?.reasonCodes).toContain('override:user')
+    // The next stage of the same run, and the next run entirely, are routed by
+    // the table. An override that outlived its stage would have made one
+    // person's situational call into this project's policy.
+    const verified = projectWorkflow(session.events, LIVE_OBJECTIVE.id).routes
+      .find(record => record.role === 'verify')
+    expect(verified?.reasonCodes).not.toContain('override:user')
+    expect(second.state).toBe('completed')
+    const next = projectWorkflow(session.events, 'wf-plurora-live-2').routes
+      .find(record => record.role === 'implement')
+    expect(next?.executor).toBe('opencode')
+    expect(next?.reasonCodes).not.toContain('override:user')
   })
 })

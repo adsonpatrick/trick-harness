@@ -312,6 +312,20 @@ describe('what a status is allowed to carry', () => {
   })
 })
 
+/**
+ * Wait for the server to hand a start to its starter.
+ *
+ * The POST answers 202 before the run begins, so a fixed sleep would be a
+ * guess about scheduling that fails under load rather than a wait.
+ * @param seen - where the starter records what it was given.
+ */
+async function started(seen: readonly unknown[]): Promise<void> {
+  const deadline = Date.now() + 2000
+  while (seen.length === 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
 describe('a start request that carries a human route override', () => {
   it('hands the override to the starter alongside the objective', async () => {
     const seen: (StageRouteOverride | undefined)[] = []
@@ -335,7 +349,7 @@ describe('a start request that carries a human route override', () => {
     })
 
     expect(response.status).toBe(202)
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await started(seen)
     expect(seen).toEqual([routeOverride])
   })
 
@@ -369,7 +383,7 @@ describe('a start request that carries a human route override', () => {
 
     await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
 
-    await new Promise(resolve => setTimeout(resolve, 20))
+    await started(seen)
     expect(seen).toEqual([undefined])
   })
 })
