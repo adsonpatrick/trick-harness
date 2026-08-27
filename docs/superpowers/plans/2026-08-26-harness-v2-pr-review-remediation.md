@@ -234,7 +234,7 @@ git commit -m "docs: record harness v2 remediation evidence"
 
 ### Task 8: Run Real GitHub and Supabase Canaries
 
-- [ ] **Step 1: GitHubDelivery canary**
+- [x] **Step 1: GitHubDelivery canary**
 
 On a disposable feature branch, use the Harness delivery capability to stage a harmless fixture change, commit, normal-push, open a PR, and re-read commit/remote SHA/PR identity. Do not force-push or merge. Close/delete the canary PR/branch after evidence is captured.
 

@@ -9,9 +9,9 @@ Recorded 2026-08-27 against the correction branch below. This file states what w
 | Correction branch | `fix/harness-v2-pr-review-remediation` |
 | Branch base | `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e` (merge-base with `master`) |
 | Branch head | `49368eb5072758096d05a6ac531fea1588928d2b` |
-| Reviewed PR #2 base/head | not retrievable: pull requests are disabled on this fork's remote, so `gh pr view 2` returns `Pull requests are disabled for this repository`. The reviewed state is the branch base above. |
-| Supabase parent project ref used for canary | none — see [Canaries not run](#canaries-not-run) |
-| GitHub canary branch/PR identity | none — see [Canaries not run](#canaries-not-run) |
+| Reviewed PR #2 base/head | `docs/harness-v2-bootstrap` / `feat/harness-v2-routing-workflows` at `b0d2f308f8849c6ffaff3bc6f713b1bb923c56b4` |
+| Supabase parent project ref used for canary | none — see [Canaries](#canaries) |
+| GitHub canary branch/PR identity | `canary/github-delivery-20260827`, pull request #3, closed unmerged and deleted — see [Canaries](#canaries) |
 
 ### Child-plan commits on the correction branch
 
@@ -100,14 +100,34 @@ No Harness-owned package failed, and no gate was classified as external: every g
 | R2-11 | Supabase fail-fast gates | `packages/integrations/supabase-preview/tests/preview.spec.ts` — *creates a branch, waits for it, applies migrations, reads them back, lints and cleans up*, *asks nothing of a branch whose migrations did not apply*, *never migrates a branch that reports the parent as its own ref*, *does not run the project suite against a branch that failed lint*, *plans no gate it was never going to run* | PASS | `977e438129` |
 | R2-12 | Profile identity binding | `packages/composition/runtime/tests/harness.spec.ts` — the objective/profile mismatch preflight: no run id minted, no journal write, no executor start | PASS | `d25549689d` |
 
-## Canaries not run
+## Canaries
 
-Task 8 of the master plan requires a real `GitHubDelivery` canary against a disposable branch and a real Supabase Preview canary against a parent project. Neither has run yet, for different reasons.
+Task 8 of the master plan requires a real `GitHubDelivery` canary against a disposable branch and a real Supabase Preview canary against a parent project. The GitHub canary ran and passed. The Supabase canary has not run.
 
-The GitHub half is credentialed: `gh auth status` reports an active login with `repo` scope. It is blocked on the remote instead — pull requests are disabled on this repository, so the capability's `pr-view`/`pr-update` path has nothing to talk to. The commit-and-push half could run today; the canary is being held until pull requests are enabled so the whole path is proven in one pass rather than half of it twice.
+### GitHub delivery canary — PASS
 
-The Supabase half is not credentialed. The CLI is installed (2.106.0) and no access token is present in this environment. The security constraints governing this program forbid extracting or reusing subscription credentials to obtain one, so this canary waits for a token supplied through the CLI's own login.
+Run on 2026-08-27 against `github.com/adsonpatrick/trick-harness` through the real `GitHubDelivery` class, with a subprocess seam over `node:child_process` and no scripted answers: every `git` and `gh` command below was really executed against the real remote. A disposable branch `canary/github-delivery-20260827` was cut from the correction branch and carried a single harmless fixture file.
 
-Meanwhile both capabilities are exercised end to end against scripted subprocess seams — every command the real path constructs is issued and answered, and the argv is asserted (*refuses to push main even when the workspace really is on main*, *constructs a push that names its own branch and carries no force flag*, *refuses a push that anyone widened with a force flag*). That proves the command construction and the control flow. It does not prove the remote's behaviour, and this file does not claim it does.
+| Step | Command the capability constructed | Result |
+| --- | --- | --- |
+| Branch validation | `git rev-parse --abbrev-ref HEAD` | on the disposable branch, not protected |
+| Stage | `git add -- <one fixture path>`, `git -c core.quotePath=false diff --cached --name-only` | exactly the requested path staged |
+| Commit | `git commit -m <message>`, then `git rev-parse --verify HEAD` | `c48b1c433ef5cd4f8a150d96d447da015fe006f9` |
+| Push | `git push -u origin refs/heads/canary/github-delivery-20260827:refs/heads/canary/github-delivery-20260827` | no force flag, own branch only |
+| Push confirmation | `git rev-parse --verify refs/remotes/origin/canary/github-delivery-20260827` | equal to the commit, so the push is confirmed rather than assumed |
+| Open pull request | `gh pr create --head … --base fix/harness-v2-pr-review-remediation …`, then `gh pr view … --json number,url,state,headRefName` | pull request #3, `created: true` |
+| Re-delivery | second `deliver()` on the same branch | `gh pr edit 3 …`, `created: false`, action `pr-update` — one pull request, not a second |
 
-Until both canaries run and pass with real credentials, the master plan's exit condition is unmet, and Plan C / NeuroVia stays blocked.
+The identities were then re-read independently of the capability, through the REST API rather than through the local repository: `repos/adsonpatrick/trick-harness/git/ref/heads/canary/github-delivery-20260827` returned the same object SHA as local `HEAD`, and `pulls/3` returned `head` `canary/github-delivery-20260827`, `base` `fix/harness-v2-pr-review-remediation`, `merged: false`.
+
+No merge, no release, no deploy and no force-push occurred, and no command targeted a protected branch. Cleanup: pull request #3 was closed unmerged and its branch deleted on both sides; `git ls-remote --heads origin` returns no `canary` ref, and the fixture file exists nowhere on the correction branch.
+
+One earlier attempt failed and is recorded because it is a real property of the capability: with `base` set to a branch that had never been pushed, `gh pr create` exited non-zero and `deliver()` returned `delivered: false` with the `commit` and `push` records already checkpointed and no `pr-open` record. It did not report success for a delivery that had not completed, and it did not unmake the commit and push that had.
+
+### Supabase preview canary — not run
+
+Not credentialed. The CLI is installed (2.106.0) and no access token is present in this environment. The security constraints governing this program forbid extracting or reusing subscription credentials to obtain one, so this canary waits for a token supplied through the CLI's own login.
+
+Its command construction and control flow are exercised end to end against scripted subprocess seams — every command the real path constructs is issued and answered, and the argv is asserted. That does not prove the remote's behaviour, and this file does not claim it does.
+
+Until the Supabase canary runs and passes with real credentials, the master plan's exit condition is unmet, and Plan C / NeuroVia stays blocked.
