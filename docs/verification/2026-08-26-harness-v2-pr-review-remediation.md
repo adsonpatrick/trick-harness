@@ -102,8 +102,12 @@ No Harness-owned package failed, and no gate was classified as external: every g
 
 ## Canaries not run
 
-Task 8 of the master plan requires a real `GitHubDelivery` canary against a disposable branch and a real Supabase Preview canary against a parent project. Neither was run: this environment holds no credentials for either service, and the security constraints governing this program forbid extracting or reusing subscription credentials to obtain them.
+Task 8 of the master plan requires a real `GitHubDelivery` canary against a disposable branch and a real Supabase Preview canary against a parent project. Neither has run yet, for different reasons.
 
-Both capabilities are exercised end to end against scripted subprocess seams — every command the real path constructs is issued and answered, and the argv is asserted (*refuses to push main even when the workspace really is on main*, *constructs a push that names its own branch and carries no force flag*, *refuses a push that anyone widened with a force flag*). That proves the command construction and the control flow. It does not prove the remote's behaviour, and this file does not claim it does.
+The GitHub half is credentialed: `gh auth status` reports an active login with `repo` scope. It is blocked on the remote instead — pull requests are disabled on this repository, so the capability's `pr-view`/`pr-update` path has nothing to talk to. The commit-and-push half could run today; the canary is being held until pull requests are enabled so the whole path is proven in one pass rather than half of it twice.
+
+The Supabase half is not credentialed. The CLI is installed (2.106.0) and no access token is present in this environment. The security constraints governing this program forbid extracting or reusing subscription credentials to obtain one, so this canary waits for a token supplied through the CLI's own login.
+
+Meanwhile both capabilities are exercised end to end against scripted subprocess seams — every command the real path constructs is issued and answered, and the argv is asserted (*refuses to push main even when the workspace really is on main*, *constructs a push that names its own branch and carries no force flag*, *refuses a push that anyone widened with a force flag*). That proves the command construction and the control flow. It does not prove the remote's behaviour, and this file does not claim it does.
 
 Until both canaries run and pass with real credentials, the master plan's exit condition is unmet, and Plan C / NeuroVia stays blocked.
