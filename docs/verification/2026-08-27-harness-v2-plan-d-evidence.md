@@ -168,6 +168,16 @@ So there is no toggle to flip. The whole deterministic suite has always run with
 
 The independence property is not silently satisfied when only one executor is usable. `packages/core/routing/src/index.ts:309` appends the reason code `independence:unsatisfied` to the decision rather than failing the run or pretending the requirement was met, and `packages/core/routing/src/availability.ts:311` treats a decision carrying it as weakened. `packages/core/engineering-workflow/src/index.ts:762` reads the same code when deciding what a stage may certify. Three suites assert both directions — that the code appears when independence cannot be had, and that it does not appear when it can.
 
+### A representative OpenCode→Codex workflow, run against both real products
+
+The independence claim above is about what is composed; this is the run that exercises it. A single Harness was composed with both real providers — the OpenCode SDK adapter and the Codex subprocess provider — over a two-stage workflow at `risk: high`, which the independence policy resolves to `cross-executor-required`. Routing sent `implement-1` to OpenCode at `workspace-write` and `verify-1` to Codex at `read-only`.
+
+Both stages reached their products and answered. The run completed with `verdict: PASS` in 22.9s; `distinctExecutorsUsed` is `["opencode","codex"]`, and the two products returned the distinct strings each was asked for — `IMPLEMENTED` from OpenCode, `VERIFIED` from Codex — which is what distinguishes a real model reply from a stub. Neither task read files nor ran commands, so the run mutated nothing.
+
+The OpenCode model was resolved from the host's own authenticated provider list rather than guessed: `opencode-go/mimo-v2.5`, the `provider/model` pair the SDK's `/config/providers` route reports for an account already signed in through the official product flow. No API key was injected into either process; Codex ran on the ChatGPT-plan route as under Task 4.
+
+This is the step the plan calls "run a representative OpenCode→Codex workflow". It had briefly been ticked on the strength of the two executors having been driven separately under Tasks 3 and 4, which is a weaker fact than the checkbox claims. The run above is the actual evidence, and the tick now stands on it.
+
 ## Task 9 — restart, replay and process quiescence
 
 A workflow was driven to a durable nonterminal stage through the real control server, with a provider that starts a genuine OS process and blocks until the run is cancelled. Everything below is read from the world or from the durable log, never from the run's own memory.
@@ -271,7 +281,7 @@ Verdict vocabulary: **PASS** direct evidence exists; **PARTIAL** partly evidence
 | 13 | Codex quota exhaustion triggers approved fallback without silent degradation | `packages/core/routing/tests/availability.spec.ts` fixture; a real unroutable model also failed loudly | PASS — fixture, as Task 4 Step 6 directs |
 | 14 | Circuit breaker prevents repeated known-failing Codex quota attempts | Same suite, green | PASS |
 | 15 | Fresh-context review enforced | `packages/core/engineering-workflow/tests/lifecycle.spec.ts`, green | PASS |
-| 16 | Cross-executor independence enforced, or assurance impact explicit | `independence:unsatisfied` recording, green; both executors now demonstrably usable | PASS |
+| 16 | Cross-executor independence enforced, or assurance impact explicit | A `cross-executor-required` run put implement on real OpenCode and verify on real Codex in one workflow; `independence:unsatisfied` recording green for the case where it cannot be had | PASS |
 | 17 | Read-only diagnosis produces a Diagnosis Contract before repair | `packages/core/engineering-workflow`, green | PASS |
 | 18 | Confirmed bugs repaired, retested and independently re-reviewed | Workflow suite green; the repair half of the real loop is the second delivery only | PARTIAL |
 | 19 | Product/design decisions never auto-fixed for green status | Workflow suite, green | PASS |
