@@ -18,8 +18,9 @@
  * @module @trick-harness/composition
  */
 
+import { randomUUID } from 'node:crypto'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { WorkflowObjective } from '@trick-harness/contracts'
+import type { EvidenceRef, StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import { HarnessControlServer } from '@trick-harness/control-server'
 import type { ControlServerOptions, ControlWorkflowStatus } from '@trick-harness/control-server'
 import {
@@ -27,22 +28,28 @@ import {
   assessRestart,
 } from '@trick-harness/engineering-workflow'
 import type {
+  DatabasePreviewCapabilityPort,
+  DeliveryCapabilityPort,
   RestartAssessment,
   StageInterpreter,
   StageSpec,
+  WorkflowDatabaseChange,
+  WorkflowDatabasePreviewInput,
+  WorkflowDeliveryInput,
   WorkflowOutcome,
   WorkflowRunRequest,
 } from '@trick-harness/engineering-workflow'
 import { createExecutorRuntime } from '@trick-harness/executor'
 import type { ExecutorResult, HarnessExecutorRuntime } from '@trick-harness/executor'
 import { GitHubDelivery } from '@trick-harness/github-delivery'
-import type { GitHubDeliveryOptions } from '@trick-harness/github-delivery'
+import type { DeliveryRequest, GitHubDeliveryOptions } from '@trick-harness/github-delivery'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { JournalFlush } from '@trick-harness/journal'
+import { validateProfile } from '@trick-harness/profile'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { ModelRegistry, RoutingPolicy } from '@trick-harness/routing'
 import { SupabasePreview } from '@trick-harness/supabase-preview'
-import type { SupabasePreviewOptions } from '@trick-harness/supabase-preview'
+import type { PreviewRunRequest, SupabasePreviewOptions } from '@trick-harness/supabase-preview'
 import { BundleCompositionError, composeHarnessRuntime } from './index.ts'
 import type { HarnessRuntimeBundleOptions } from './index.ts'
 
@@ -69,6 +76,34 @@ export interface HarnessWorkflowHandlers {
   readonly plan?: (objective: WorkflowObjective) => readonly StageSpec[]
   readonly diagnose?: (stage: StageSpec, executor: string, result: ExecutorResult) => unknown
   readonly repairEvidence?: WorkflowRunRequest['repairEvidence']
+  /**
+   * What the run should publish, when it reaches delivery.
+   *
+   * No default, for the same reason `task` has none: the objective names a
+   * requirement, not a branch, a write set or a pull request body, and this
+   * package inventing those would be it deciding on a deployment's behalf what
+   * goes on the remote. Composed only when GitHub delivery is enabled; without
+   * it a lifecycle that must publish is blocked rather than improvised.
+   */
+  readonly describeDelivery?: (input: WorkflowDeliveryInput) => Omit<DeliveryRequest, 'signal'>
+  /**
+   * Which isolated branch a schema change is verified on.
+   *
+   * Names a branch and nothing else. Where that branch lives and what
+   * authenticates to it stay in the CLI's own configuration, because a
+   * connection string that passed through here would be one a status poll or an
+   * error summary could later repeat.
+   */
+  readonly describeDatabasePreview?: (input: WorkflowDatabasePreviewInput) => Pick<PreviewRunRequest, 'branchName'>
+  /**
+   * Whether this objective changes a database, answered before the run starts.
+   *
+   * A function of the objective alone, like the plan, so a replay of the same
+   * objective is gated the same way. Answering `undefined` means the run touches
+   * no schema; answering `required` means it may not publish until an isolated
+   * preview says the migrations survive.
+   */
+  readonly databaseChange?: (objective: WorkflowObjective) => WorkflowDatabaseChange | undefined
 }
 
 /** Integration seams a profile may enable. */
@@ -104,6 +139,16 @@ export interface HarnessCompositionOptions {
   readonly control?: HarnessControlOptions
   /** Executors the breaker has already marked degraded. */
   readonly degradedExecutors?: readonly string[]
+  /**
+   * Mints the id of one execution attempt.
+   *
+   * Defaults to `randomUUID`. An objective is a thing a person asks for and may
+   * ask for again; an execution is one attempt at it, and the two cannot share
+   * an id without the second attempt appending its facts onto the first one's
+   * history. A deployment overrides this only to make ids readable or ordered,
+   * never to reuse one: a repeat is refused rather than merged.
+   */
+  readonly workflowIdFactory?: () => string
 }
 
 /** One assembled Harness and everything it owns. */
@@ -125,8 +170,13 @@ export interface ComposedHarness {
    * Run one objective to a terminal state.
    * @param objective - What to run.
    * @param signal - Cancels the run and everything it owns.
+   * @param routeOverride - One human routing choice, spent on a single stage.
    */
-  run(objective: WorkflowObjective, signal?: AbortSignal): Promise<WorkflowOutcome>
+  run(
+    objective: WorkflowObjective,
+    signal?: AbortSignal,
+    routeOverride?: StageRouteOverride,
+  ): Promise<WorkflowOutcome>
   /** Read durable state for a workflow no longer running here. */
   restartOf(workflowId: string): RestartAssessment | undefined
   /** End everything this composition owns, and wait for it. */
@@ -179,6 +229,28 @@ function assertAuthorised(profile: HarnessProfile, options: HarnessCompositionOp
 }
 
 /**
+ * Refuse an objective that was written for a different deployment.
+ *
+ * The objective carries the profile it was authored against, and this Harness
+ * was composed from exactly one. When the two disagree, every rule the run is
+ * about to be held to — which executors it may reach, which integrations are
+ * enabled, what delivery is allowed to touch — comes from a policy the
+ * objective never agreed to. Checked before an id is minted so that a
+ * mismatched objective leaves nothing behind: no durable start, no executor,
+ * no hosted mutation.
+ * @param objective - What was asked for.
+ * @param profile - The profile this Harness was composed from.
+ * @throws {BundleCompositionError} when the two name different profiles.
+ */
+function assertObjectiveProfile(objective: WorkflowObjective, profile: HarnessProfile): void {
+  if (objective.profileId !== profile.id) {
+    throw new BundleCompositionError(
+      `objective profile ${JSON.stringify(objective.profileId)} does not match composed profile ${JSON.stringify(profile.id)}`,
+    )
+  }
+}
+
+/**
  * Compose one Harness from one profile.
  *
  * @param options - The profile, the seams, and what the profile is allowed to enable.
@@ -188,6 +260,9 @@ function assertAuthorised(profile: HarnessProfile, options: HarnessCompositionOp
  */
 export function composeHarness(options: HarnessCompositionOptions): ComposedHarness {
   const { profile, session, flush, workflow } = options
+  // Ahead of the trust check, because that check reads the profile too: policy
+  // that is not well-formed data cannot be asked what it authorises.
+  validateProfile(profile)
   assertAuthorised(profile, options)
 
   const runtime = createExecutorRuntime()
@@ -197,9 +272,93 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   const github = options.integrations?.github === undefined
     ? undefined
     : new GitHubDelivery(options.integrations.github)
+  // The capability exists only when both halves are there: something to deliver
+  // with, and something that says what to deliver. Half of it is not a weaker
+  // delivery, it is a push with nothing decided about what goes in it.
   const supabase = options.integrations?.supabase === undefined
     ? undefined
     : new SupabasePreview(options.integrations.supabase)
+  const supabaseOptions = options.integrations?.supabase
+  const describePreview = workflow.describeDatabasePreview
+
+  /**
+   * Build the database preview capability for one run.
+   *
+   * Built per run for the same reason delivery is: what the run left in the
+   * cloud is recorded against the run that left it. Each confirmed mutation
+   * becomes a gate evidence line on the stage's verdict, naming the action and
+   * the child project ref the run already proved is not the parent — never a
+   * connection string, and never anything that authenticates.
+   * @returns The capability, or nothing when this deployment cannot verify one.
+   */
+  const databasePreviewFor = (): DatabasePreviewCapabilityPort | undefined => {
+    if (supabaseOptions === undefined || describePreview === undefined) return undefined
+    return {
+      verify: async (input, signal) => {
+        const mutations: EvidenceRef[] = []
+        const client = new SupabasePreview({
+          ...supabaseOptions,
+          onMutation: async (record) => {
+            mutations.push({
+              kind: 'gate',
+              locator: `supabase:${record.action}`,
+              summary: `${record.action} on preview project ${record.previewProjectRef}`,
+            })
+            await Promise.resolve()
+          },
+        })
+        const outcome = await client.run({ ...describePreview(input), signal })
+        const gates = outcome.gates.map((gate): EvidenceRef => ({
+          kind: 'gate',
+          locator: `supabase:${gate.name}`,
+          summary: gate.passed ? `the ${gate.name} gate passed` : `the ${gate.name} gate failed`,
+        }))
+        return {
+          status: outcome.status,
+          summary: outcome.primaryFailure === undefined
+            ? `every preview gate passed: ${outcome.completedGates.join(', ')}`
+            : `the ${outcome.primaryFailure.gate} gate stopped the run: ${outcome.primaryFailure.message}`,
+          evidence: [...gates, ...mutations],
+          findings: [],
+        }
+      },
+    }
+  }
+  const databasePreview = databasePreviewFor()
+
+  const describeDelivery = workflow.describeDelivery
+  const githubOptions = options.integrations?.github
+  /**
+   * Build the delivery capability for one run, bound to that run's journal.
+   *
+   * Built per run rather than once, because the observer that writes each
+   * confirmed mutation down is the journal of the run that caused it. A shared
+   * instance would either checkpoint into the wrong run's history or into none.
+   *
+   * The capability exists only when both halves are there: something to deliver
+   * with, and something that says what to deliver. Half of it is not a weaker
+   * delivery, it is a push with nothing decided about what goes in it.
+   * @param journal - the journal of the run asking to publish.
+   * @returns The capability, or nothing when this deployment cannot publish.
+   */
+  const deliveryFor = (journal: WorkflowJournal): DeliveryCapabilityPort | undefined => {
+    if (githubOptions === undefined || describeDelivery === undefined) return undefined
+    const client = new GitHubDelivery({
+      ...githubOptions,
+      onRecord: async (record) => { await journal.delivery(record) },
+    })
+    return {
+      deliver: async (input, signal) => {
+        const outcome = await client.deliver({ ...describeDelivery(input), signal })
+        return {
+          delivered: outcome.delivered,
+          summary: outcome.summary,
+          evidence: [],
+          findings: [],
+        }
+      },
+    }
+  }
 
   // Each in-flight run is held with the promise that settles it, because
   // disposal has to wait for that promise rather than for the runner object:
@@ -207,19 +366,63 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   // an unregistered-executor error instead of ending it as canceled.
   const runners = new Map<WorkflowRunner, Promise<unknown>>()
 
-  const run = async (objective: WorkflowObjective, signal?: AbortSignal): Promise<WorkflowOutcome> => {
-    const journal = new WorkflowJournal(session, objective.id, flush)
-    const runner = new WorkflowRunner(objective.id, {
+  // The override is handed to the run and nowhere else. It never edits the
+  // profile's routing table and never touches a provider's configuration: the
+  // authority a person granted is for this run, and a composition that wrote it
+  // down anywhere durable would have turned one decision into a default.
+  const mintWorkflowId = options.workflowIdFactory ?? randomUUID
+  // Ids handed out this process, kept beyond the run that used them. The
+  // durable log answers for a previous process; this set answers for a factory
+  // that repeats an id within one, which the log cannot yet see because the
+  // first run may not have flushed its start.
+  const minted = new Set<string>()
+
+  /**
+   * Mint one execution id, refusing a repeat rather than appending to it.
+   * @returns The id this attempt is recorded under.
+   */
+  const nextWorkflowId = (): string => {
+    const workflowId = mintWorkflowId()
+    const taken = minted.has(workflowId)
+      || projectWorkflow(session.events, workflowId).objective !== undefined
+    if (taken) {
+      throw new BundleCompositionError(`workflow id ${JSON.stringify(workflowId)} already exists`)
+    }
+    minted.add(workflowId)
+    return workflowId
+  }
+
+  /**
+   * Start one execution and hand back its identity immediately.
+   *
+   * Synchronous up to the id on purpose: a caller — the control server above
+   * all — has to be able to name the run it just asked for before the run has
+   * done anything, and an id that only appeared in the outcome would leave a
+   * status poll with nothing to address in between.
+   * @param objective - What to run.
+   * @param routeOverride - One human routing choice, spent on a single stage.
+   * @returns The minted id, the promise it settles on, and how to end it.
+   */
+  const begin = (
+    objective: WorkflowObjective,
+    routeOverride?: StageRouteOverride,
+  ): { workflowId: string; outcome: Promise<WorkflowOutcome>; cancel: (reason: string) => void } => {
+    assertObjectiveProfile(objective, profile)
+    const workflowId = nextWorkflowId()
+    const journal = new WorkflowJournal(session, workflowId, flush)
+    const delivery = deliveryFor(journal)
+    const runner = new WorkflowRunner(workflowId, {
       profile,
       policy,
       executors: runtime,
       journal,
       ...options.degradedExecutors === undefined ? {} : { degradedExecutors: options.degradedExecutors },
+      capabilities: {
+        ...delivery === undefined ? {} : { delivery },
+        ...databasePreview === undefined ? {} : { databasePreview },
+      },
     })
-    const stop = (): void => {
-      runner.cancel('the caller canceled this workflow')
-    }
-    signal?.addEventListener('abort', stop, { once: true })
+    const change = workflow.databaseChange?.(objective)
     const settled = runner.run({
       objective,
       interpret: workflow.interpret,
@@ -227,14 +430,38 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       ...workflow.plan === undefined ? {} : { plan: workflow.plan },
       ...workflow.diagnose === undefined ? {} : { diagnose: workflow.diagnose },
       ...workflow.repairEvidence === undefined ? {} : { repairEvidence: workflow.repairEvidence },
+      ...routeOverride === undefined ? {} : { routeOverride },
+      ...change === undefined ? {} : { databaseChange: change },
     })
     runners.set(runner, settled)
-    try {
-      return await settled
-    } finally {
-      signal?.removeEventListener('abort', stop)
+    const outcome = settled.finally(() => {
       runners.delete(runner)
       runner.dispose()
+    })
+    return {
+      workflowId,
+      outcome,
+      cancel: (reason: string): void => {
+        runner.cancel(reason)
+      },
+    }
+  }
+
+  const run = async (
+    objective: WorkflowObjective,
+    signal?: AbortSignal,
+    routeOverride?: StageRouteOverride,
+  ): Promise<WorkflowOutcome> => {
+    const started = begin(objective, routeOverride)
+    const stop = (): void => {
+      started.cancel('the caller canceled this workflow')
+    }
+    if (signal?.aborted === true) stop()
+    signal?.addEventListener('abort', stop, { once: true })
+    try {
+      return await started.outcome
+    } finally {
+      signal?.removeEventListener('abort', stop)
     }
   }
 
@@ -245,7 +472,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   }
 
   const serverOptions: ControlServerOptions = {
-    start: run,
+    start: begin,
     restart: (workflowId: string): Promise<RestartAssessment | undefined> =>
       Promise.resolve(restartOf(workflowId)),
     ...options.control?.host === undefined ? {} : { host: options.control.host },
@@ -280,7 +507,10 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       for (const [runner] of inFlight) runner.dispose()
       runners.clear()
       composition.dispose()
-      runtime.dispose()
+      // Last, and awaited: the runtime is what owns the process trees, and a
+      // composition that resolved before they were down would be telling its
+      // caller the machine was quiet while it was still running.
+      await runtime.dispose()
     },
   }
 }

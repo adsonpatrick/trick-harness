@@ -17,18 +17,23 @@ import { RoutingError } from './types.ts'
 /**
  * Failures that mean the executor could not serve the run.
  *
- * Quota exhaustion, rate limiting, capacity, an executor that is not reachable,
- * credentials temporarily unavailable, and supported transient infrastructure
- * faults. Every one of these is a statement about the product's ability to
- * answer, not about the answer.
+ * A quota ceiling, a session budget, an overloaded or erroring server, and a
+ * transport that never carried the request. Every one is a statement about the
+ * product's ability to answer, not about the answer.
+ *
+ * The names are the ones providers normalize onto, and there is exactly one
+ * name per concept. An earlier version of this set carried near-synonyms —
+ * `rate-limit` beside `usage-limit-exceeded`, `transient-infra` beside the
+ * transport faults — which let the same outage be reported under two spellings
+ * depending on which provider saw it, and made the circuit-breaker history
+ * unreadable across executors.
  */
 export const AVAILABILITY_FAILURES = [
   'usage-limit-exceeded',
-  'rate-limit',
-  'server-capacity',
-  'executor-unavailable',
-  'auth-temporarily-unavailable',
-  'transient-infra',
+  'session-budget-exceeded',
+  'server-overloaded',
+  'internal-server-error',
+  'transport-unavailable',
 ] as const
 
 /**
@@ -44,9 +49,43 @@ export const QUALITY_FAILURES = [
   'bad-request',
   'sandbox-denied',
   'cyber-policy-refusal',
+  'unauthorized',
   'wrong-answer',
   'failed-verification',
+  // `other` is what a provider emits when it recognised the failure as real but
+  // not as anything in this vocabulary. It sits here rather than being left
+  // unclassified because the two are different statements: the classifier
+  // refuses to guess, while a provider saying `other` has already decided that
+  // an unrecognised fault is not grounds to send the work somewhere else.
+  'other',
 ] as const
+
+/**
+ * Failures that say the executor cannot serve *any* run until a human acts.
+ *
+ * These are not availability failures and must never reroute the attempt that
+ * hit one — an `unauthorized` run stops, it does not get a second opinion from
+ * another product. What they additionally mean is narrower and separate: this
+ * executor has nothing to offer the rest of the workflow either, so leaving it
+ * in the candidate pool would send the next stage into the same wall and report
+ * the wall as a stage failure rather than as a missing credential.
+ *
+ * The list is deliberately not "everything that failed twice". An account that
+ * is not authorised is a fact about the product's configuration, knowable from
+ * one answer; a wrong answer is not.
+ */
+export const DISABLING_FAILURES = ['unauthorized'] as const
+
+/**
+ * Whether a failure removes its executor from further consideration.
+ * @param failure - The category the executor runtime reported.
+ * @returns True when no later stage should be routed to that executor.
+ * @throws {RoutingError} when the category is outside both closed sets.
+ */
+export function disablesExecutor(failure: string): boolean {
+  classifyFailure(failure)
+  return (DISABLING_FAILURES as readonly string[]).includes(failure)
+}
 
 /** One recognised failure category. */
 export type FailureClass = typeof AVAILABILITY_FAILURES[number] | typeof QUALITY_FAILURES[number]
@@ -85,7 +124,7 @@ export interface CircuitTransition {
   readonly executor: string
   readonly from: CircuitState
   readonly to: CircuitState
-  /** Machine-readable cause, e.g. `failure:rate-limit` or `manual-refresh`. */
+  /** Machine-readable cause, e.g. `failure:usage-limit-exceeded` or `manual-refresh`. */
   readonly reason: string
   readonly at: number
 }

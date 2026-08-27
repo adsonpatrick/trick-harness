@@ -4,7 +4,13 @@ import { createExecutorRuntime } from '@trick-harness/executor'
 import type { ExecutorStartRequest } from '@trick-harness/executor'
 import { describe, expect, it } from 'vitest'
 import { permissionConfig, parseModel } from '../src/config.ts'
-import { createOpencodeProvider, OPENCODE_CAPABILITIES, OPENCODE_EXECUTOR } from '../src/index.ts'
+import {
+  createOpencodeProvider,
+  OPENCODE_CAPABILITIES,
+  OPENCODE_EXECUTOR,
+  OPENCODE_SERVER_CLOSE_CLEANUP,
+  OPENCODE_SESSION_ABORT_CLEANUP,
+} from '../src/index.ts'
 import { OpencodeRouteError } from '../src/config.ts'
 import { EXPECTED_EXECUTOR, EXPECTED_PERMISSION_MODES } from '../src/invariant.ts'
 import type {
@@ -28,6 +34,10 @@ interface FakeOptions {
   readonly parts?: readonly OpencodeMessagePart[]
   readonly onPrompt?: (request: OpencodePromptRequest) => Promise<void>
   readonly startServerFails?: Error
+  /** Make the scoped server refuse to close, the way a wedged port does. */
+  readonly closeFails?: Error
+  /** Make the session abort fail, the way an already-torn-down transport does. */
+  readonly abortFails?: Error
 }
 
 /**
@@ -46,7 +56,11 @@ function fakeAdapter(options: FakeOptions = {}): { adapter: OpencodeAdapter; see
       if (options.startServerFails !== undefined) throw options.startServerFails
       return Promise.resolve({
         url: 'http://127.0.0.1:49512',
-        close: () => { seen.closes += 1 },
+        close: () => {
+          seen.closes += 1
+          if (options.closeFails !== undefined) return Promise.reject(options.closeFails)
+          return undefined
+        },
       })
     },
     connect(url, directory) {
@@ -60,6 +74,7 @@ function fakeAdapter(options: FakeOptions = {}): { adapter: OpencodeAdapter; see
         },
         abortSession: (sessionId) => {
           seen.aborted.push(sessionId)
+          if (options.abortFails !== undefined) return Promise.reject(options.abortFails)
           return Promise.resolve()
         },
       }
@@ -271,5 +286,99 @@ describe('cancellation and teardown', () => {
     const { adapter, seen } = fakeAdapter()
     await createOpencodeProvider(adapter).start(request({ signal: controller.signal }))
     expect(seen.servers[0]?.signal).toBe(controller.signal)
+  })
+})
+
+/**
+ * Build a teardown error carrying the sort of text a real one carries.
+ * @param name - the error class name the product would use.
+ * @returns the error, whose message must not survive into the result.
+ */
+function wedged(name: string): Error {
+  const error = new Error('listen EADDRINUSE 127.0.0.1:49512 authorization=Bearer sk-live-77')
+  error.name = name
+  return error
+}
+
+describe('teardown failures are observable, not swallowed', () => {
+  it('leaves a completed run completed and says the server would not close', async () => {
+    const { adapter } = fakeAdapter({ closeFails: wedged('ServerCloseError') })
+    const result = await createOpencodeProvider(adapter).start(request())
+    // The run answered. Downgrading it would lose a correct answer to report a
+    // janitorial problem, and the caller needs both facts, not one of them.
+    expect(result.status).toBe('completed')
+    expect(result.output).toBe('done')
+    expect(result.cleanup).toEqual([{
+      category: OPENCODE_SERVER_CLOSE_CLEANUP,
+      safeDiagnostic: 'opencode-server-close failed (ServerCloseError)',
+    }])
+  })
+
+  it('carries no byte of the raw exception into the durable fact', async () => {
+    const { adapter } = fakeAdapter({ closeFails: wedged('ServerCloseError') })
+    const result = await createOpencodeProvider(adapter).start(request())
+    const durable = JSON.stringify(result)
+    expect(durable).not.toContain('EADDRINUSE')
+    expect(durable).not.toContain('49512')
+    expect(durable).not.toContain('sk-live-77')
+  })
+
+  it('quotes nothing at all when the error class name is prose', async () => {
+    // `name` is writable, so it is only conventionally a class name. A product
+    // that assigned its message to it would otherwise smuggle that message
+    // through the one field this fact does read.
+    const { adapter } = fakeAdapter({
+      closeFails: wedged('failed to close http://127.0.0.1:49512'),
+    })
+    const result = await createOpencodeProvider(adapter).start(request())
+    expect(result.cleanup?.[0]?.safeDiagnostic).toBe('opencode-server-close failed (Error)')
+  })
+
+  it('gives a cleanup fault no availability field, so it cannot reroute a run', async () => {
+    const { adapter } = fakeAdapter({ closeFails: wedged('ServerCloseError') })
+    const result = await createOpencodeProvider(adapter).start(request())
+    // Not `availability: false` — absent. A field that is not there cannot be
+    // read by fallback routing under any later refactor of that routing.
+    expect(Object.keys(result.cleanup?.[0] ?? {})).toEqual(['category', 'safeDiagnostic'])
+    expect(result.failure).toBeUndefined()
+  })
+
+  it('records both faults when a cancelled run cannot abort or close either', async () => {
+    const controller = new AbortController()
+    const { adapter } = fakeAdapter({
+      abortFails: wedged('SessionAbortError'),
+      closeFails: wedged('ServerCloseError'),
+      onPrompt: async () => {
+        controller.abort()
+        await Promise.resolve()
+      },
+    })
+    const result = await createOpencodeProvider(adapter).start(
+      request({ signal: controller.signal }),
+    )
+    expect(result.status).toBe('aborted')
+    expect(result.cleanup?.map(fault => fault.category))
+      .toEqual([OPENCODE_SESSION_ABORT_CLEANUP, OPENCODE_SERVER_CLOSE_CLEANUP])
+  })
+
+  it('says nothing at all when teardown was clean', async () => {
+    const { adapter } = fakeAdapter()
+    const result = await createOpencodeProvider(adapter).start(request())
+    // Absent rather than empty: the presence of the field is the fact, and an
+    // empty list would make every clean run carry evidence of nothing.
+    expect(result.cleanup).toBeUndefined()
+  })
+
+  it('still closes the server after a session abort that failed', async () => {
+    const controller = new AbortController()
+    const { adapter, seen } = fakeAdapter({
+      abortFails: wedged('SessionAbortError'),
+      onPrompt: async () => {
+        controller.abort()
+        await Promise.resolve()
+      },
+    })
+    await createOpencodeProvider(adapter).start(request({ signal: controller.signal }))
+    expect(seen.closes).toBe(1)
   })
 })

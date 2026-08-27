@@ -18,7 +18,7 @@ import {
   permissionModeFor,
   planStages,
 } from '../src/index.ts'
-import type { StageSpec } from '../src/index.ts'
+import type { DatabasePreviewCapabilityPort, DeliveryCapabilityPort, StageSpec } from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
   policyVersion: 'test-v1.0.0',
@@ -48,7 +48,17 @@ const PROFILE: HarnessProfile = Object.freeze({
     critical: 'cross-executor-required',
   }),
   qaPolicy: Object.freeze({ rules: Object.freeze([]) }),
-  securityPolicy: Object.freeze({ rules: Object.freeze([]) }),
+  securityPolicy: Object.freeze({
+    rules: Object.freeze([]),
+    // Narrow on purpose: the cart is the only ground a security defect may be
+    // repaired on unattended in this fixture, and the tests below lean on the
+    // fact that everywhere else is refused.
+    repairRules: Object.freeze([Object.freeze({
+      id: 'cart-only',
+      findingClass: 'SECURITY_BUG',
+      allowedBoundaries: Object.freeze(['packages/cart/**']),
+    })]),
+  }),
   integrationPolicy: Object.freeze({ enabled: Object.freeze([]), rules: Object.freeze([]) }),
   trustedComposition: Object.freeze({ excludedPluginIds: Object.freeze([]) }),
 })
@@ -128,20 +138,27 @@ const REPAIRED = Object.freeze({
 })
 
 describe('the stage plan', () => {
-  it('runs implement, verify and delivery for an ordinary objective', () => {
-    expect(planStages(OBJECTIVE).map(stage => stage.role)).toEqual(['implement', 'verify', 'delivery'])
+  it('delivers before it certifies, and ends on a fresh verification', () => {
+    expect(planStages(OBJECTIVE).map(stage => stage.role))
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'verify'])
+    expect(planStages(OBJECTIVE).at(-1)?.stageId).toBe('verify-final')
   })
 
-  it('inserts an independent review before delivery when risk is high', () => {
+  it('buys QA from medium risk upwards', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'high' })
-    expect(stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'review', 'qa', 'delivery'])
+    expect(stages.map(stage => stage.role))
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'qa', 'verify'])
   })
 
   it('adds a security stage for a critical objective', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'critical' })
     expect(stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'review', 'qa', 'security', 'delivery',
+      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'verify',
     ])
+  })
+
+  it('reviews every objective, whatever its risk, because the branch is published either way', () => {
+    expect(planStages({ ...OBJECTIVE, risk: 'low' }).map(stage => stage.role)).toContain('review')
   })
 
   it('names every stage uniquely so the journal can pair starts with ends', () => {
@@ -149,6 +166,24 @@ describe('the stage plan', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 })
+
+/**
+ * A delivery capability that publishes without touching a remote.
+ *
+ * Every run in this file that reaches delivery gets one, because the runtime
+ * refuses to publish without a capability and there is no executor path left
+ * for it to take instead.
+ */
+function deliveryStub(stageIds?: string[]): DeliveryCapabilityPort {
+  return {
+    deliver: async (input) => {
+      stageIds?.push(input.stageId)
+      return { delivered: true, summary: 'the branch was pushed and its pull request updated', evidence: [], findings: [] }
+    },
+  }
+}
+
+const DELIVERY = deliveryStub()
 
 describe('role-specific permission modes', () => {
   it('gives every read-only role a read-only provider mode', () => {
@@ -174,7 +209,7 @@ describe('a normal run', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
   it('walks implement to verify to delivery and completes', async () => {
@@ -192,8 +227,13 @@ describe('a normal run', () => {
 
     expect(outcome.state).toBe('completed')
     expect(outcome.verdict).toBe('PASS')
-    expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'delivery'])
-    expect(seen).toEqual(['builder:workspace-write', 'reviewer:read-only', 'builder:workspace-write'])
+    expect(outcome.stages.map(stage => stage.role))
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'verify'])
+    // No executor was asked for delivery: publishing is a bounded command
+    // sequence, not a question put to a model.
+    expect(seen).toEqual([
+      'builder:workspace-write', 'reviewer:read-only', 'reviewer:read-only', 'reviewer:read-only',
+    ])
   })
 
   it('hands back compact facts and never the executor output', async () => {
@@ -217,8 +257,12 @@ describe('a normal run', () => {
     const projection = projectWorkflow(session.events, 'wf-1')
 
     expect(projection.objective?.id).toBe('obj-1')
-    expect(projection.routes).toHaveLength(3)
-    expect(projection.verdicts).toHaveLength(3)
+    // Four routed stages, five verdicts: delivery reports one without being routed.
+    expect(projection.routes).toHaveLength(4)
+    expect(projection.verdicts).toHaveLength(5)
+    // The capability window opened and closed, so nothing is left open.
+    expect(projection.openCapabilities).toEqual([])
+    expect(JSON.stringify(session.events)).toContain('github-delivery')
     expect(projection.openStages).toEqual([])
     expect(projection.end?.state).toBe('completed')
   })
@@ -249,7 +293,7 @@ describe('a run that goes wrong', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
   it('stops on a cancelled run and reports it as inconclusive, not failed', async () => {
@@ -267,12 +311,12 @@ describe('a run that goes wrong', () => {
     expect(projectWorkflow(session.events, 'wf-1').openStages).toEqual([])
   })
 
-  it('ends the run when an executor errors and records the safe diagnostic only', async () => {
+  it('stops with no usable executor left, and records the safe diagnostic only', async () => {
     executors.register(provider('builder', async () => ({
       status: 'error',
       output: '',
       failure: {
-        category: 'executor-unavailable',
+        category: 'transport-unavailable',
         availability: true,
         safeDiagnostic: 'provider did not start',
       },
@@ -280,9 +324,12 @@ describe('a run that goes wrong', () => {
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
 
-    expect(outcome.state).toBe('failed')
-    expect(outcome.verdict).toBe('FAIL')
-    expect(JSON.stringify(session.events)).toContain('executor-unavailable')
+    // The single registered executor cannot serve, and there is nobody to
+    // reroute to. Blocking is the expected outcome of that, not a defect: the
+    // alternative is inventing a route to a product this runtime does not have.
+    expect(outcome.state).toBe('blocked')
+    expect(JSON.stringify(session.events)).toContain('transport-unavailable')
+    expect(JSON.stringify(session.events)).toContain('provider did not start')
   })
 
   it('blocks rather than guessing when a stage returns a product decision', async () => {
@@ -349,10 +396,10 @@ describe('a run that goes wrong', () => {
     expect(outcome.state).toBe('completed')
     expect(outcome.repairCycles).toBe(1)
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'debug', 'repair', 'verify', 'delivery',
+      'implement', 'verify', 'debug', 'repair', 'verify', 'delivery', 'review', 'verify',
     ])
     expect(outcome.stages.find(stage => stage.role === 'debug')?.permissionMode).toBe('read-only')
-    expect(modes).toEqual(['read-only', 'read-only', 'read-only'])
+    expect(modes).toEqual(['read-only', 'read-only', 'read-only', 'read-only', 'read-only'])
     for (const stage of outcome.stages) expect(stage.permissionMode).toBe(permissionModeFor(stage.role))
     expect(JSON.stringify(session.events)).toContain('harness/diagnosis')
   })
@@ -460,7 +507,7 @@ describe('a run that goes wrong', () => {
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'repair', 'verify', 'delivery',
+      'implement', 'verify', 'repair', 'verify', 'delivery', 'review', 'verify',
     ])
   })
 
@@ -490,6 +537,7 @@ describe('a run that goes wrong', () => {
       policy: POLICY,
       executors,
       journal,
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
@@ -506,7 +554,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async (request) => {
       await new Promise((resolve) => { request.signal.addEventListener('abort', resolve, { once: true }) })
       return { status: 'aborted', output: '' }
@@ -523,7 +571,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     const aborted = vi.fn()
     let announce: () => void = () => {}
     const started = new Promise<void>((resolve) => { announce = resolve })
@@ -548,7 +596,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     runner.dispose()
 
     await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
@@ -561,7 +609,7 @@ describe('what a restart may conclude', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
     await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
@@ -606,6 +654,70 @@ describe('what a restart may conclude', () => {
     expect(assessment.requiresWorldVerification).toBe(true)
   })
 
+  it('demands a world check when even a read-only stage was in flight', () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    journal.executorStart({
+      stageId: 'review-1',
+      role: 'review',
+      decision: {
+        executor: 'reviewer',
+        semanticModelTier: 'reasoning',
+        resolvedModel: 'mimo-v2.5',
+        permissionMode: 'read-only',
+        reasonCodes: [],
+        policyVersion: 'test-v1.0.0',
+      },
+    })
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    // Deliberately conservative. The log records the permission the route
+    // carried, not what the process on the other end actually did with it, and
+    // a restart that trusts the label is trusting the wrong record.
+    expect(assessment.requiresWorldVerification).toBe(true)
+  })
+
+  it('demands a world check when a preview-branch capability was in flight', async () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    await journal.beginCapability('verify-1', 'supabase-preview', true)
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    expect(assessment.requiresWorldVerification).toBe(true)
+    expect(assessment.summary).toContain('verify-1:supabase-preview')
+  })
+
+  it('demands a world check when a capability was in flight', async () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    await journal.beginCapability('deliver-1', 'github-delivery', true)
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    // No stage was open and no delivery was recorded, yet a push may have
+    // landed. Reading this as safe to retry is how one commit becomes two.
+    expect(assessment.openStages).toEqual([])
+    expect(assessment.requiresWorldVerification).toBe(true)
+    expect(assessment.summary).toContain('deliver-1:github-delivery')
+  })
+
+  it('needs no world check once the capability reported back', async () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    await journal.beginCapability('verify-1', 'supabase-preview', false)
+    await journal.endCapability('verify-1', 'supabase-preview', 'completed', 12)
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    expect(assessment.requiresWorldVerification).toBe(false)
+  })
+
   it('demands a world check when a mutation was already recorded', async () => {
     const session = Session.create(SessionId('s'))
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
@@ -629,7 +741,7 @@ describe('triage inside a run', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
   })
@@ -694,7 +806,9 @@ describe('triage inside a run', () => {
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'qa', 'debug', 'repair', 'qa', 'delivery',
+      'implement', 'verify', 'delivery', 'review', 'qa',
+      'debug', 'repair', 'verify', 'delivery', 'qa',
+      'verify',
     ])
     expect(outcome.stages.filter(stage => stage.role === 'qa').map(stage => stage.stageId))
       .toEqual(['qa-1', 'qa-2'])
@@ -727,6 +841,39 @@ describe('triage inside a run', () => {
     expect(outcome.stages.map(stage => stage.role)).toContain('debug')
     expect(outcome.state).toBe('completed')
   })
+
+  it('stops rather than repairing a security defect outside the boundaries the policy names', async () => {
+    let verifications = 0
+    const repairs: string[] = []
+    executors.register(provider('repairer', async () => {
+      repairs.push('started')
+      return passing('builder')
+    }))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => {
+        if (stage.role !== 'verify') return interpretAllPass(stage, executor)
+        verifications += 1
+        return {
+          role: stage.role,
+          executor,
+          verdict: verifications === 1 ? 'FAIL' : 'PASS',
+          summary: 'suite',
+          findings: verifications === 1 ? [{ ...bug('f-sec', 'SECURITY_BUG') }] : [],
+          evidence: [],
+        }
+      },
+      // The diagnosis is complete and honest; it simply names ground no rule covers.
+      diagnose: () => ({ ...DIAGNOSIS, affectedBoundary: 'packages/billing/src/charge.ts' }),
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('security:boundary-not-allowed')
+    expect(repairs).toEqual([])
+  })
 })
 
 describe('independence the profile actually requires', () => {
@@ -745,6 +892,7 @@ describe('independence the profile actually requires', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: SOLO_POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
     })
     const starts: string[] = []
     executors.register(provider('builder', async (request) => {
@@ -770,6 +918,7 @@ describe('independence the profile actually requires', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: SOLO_POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
 
@@ -790,6 +939,7 @@ describe('a pass the route it ran on cannot support', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['reviewer'],
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('spare', async () => passing('spare')))
@@ -811,6 +961,7 @@ describe('a pass the route it ran on cannot support', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['reviewer'],
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('spare', async () => passing('spare')))
@@ -835,6 +986,7 @@ describe('a stage the policy cannot answer for', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: NO_FALLBACK, executors, journal, degradedExecutors: ['builder'],
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
 
@@ -855,7 +1007,7 @@ describe('a plan that asks for a repair with nothing to repair', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
 
     const outcome = await runner.run({
@@ -867,5 +1019,463 @@ describe('a plan that asks for a repair with nothing to repair', () => {
 
     expect(outcome.state).toBe('blocked')
     expect(outcome.summary).toContain('no confirmed defect')
+  })
+})
+
+describe('an executor that stops serving mid-run', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+  let runner: WorkflowRunner
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+  })
+
+  function failing(name: string, category: string, availability: boolean, seen: string[]): ExecutorProvider {
+    return provider(name, async () => {
+      seen.push(name)
+      return { status: 'error', output: '', failure: { category, availability, safeDiagnostic: `${name} declined` } }
+    })
+  }
+
+  it('moves the stage to another product when the first one cannot serve', async () => {
+    const seen: string[] = []
+    executors.register(failing('builder', 'usage-limit-exceeded', true, seen))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('completed')
+    expect(seen).toContain('spare')
+    // The reroute is a real start against a real product, so the budget sees it:
+    // two executor stages, three starts.
+    expect(outcome.executorStarts).toBeGreaterThan(2)
+    const events = JSON.stringify(session.events)
+    expect(events).toContain('harness/route-fallback')
+    expect(events).toContain('usage-limit-exceeded')
+    expect(projectWorkflow(session.events, 'wf-1').circuits['builder']).toBe('DEGRADED')
+  })
+
+  it('does not ask a second product the same question after a wrong answer', async () => {
+    const seen: string[] = []
+    executors.register(failing('builder', 'bad-request', false, seen))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    // A quality failure is an answer, not an outage. Rerouting it would record a
+    // second opinion as a recovery, so the run ends on what the first one said.
+    expect(seen).toEqual(['builder'])
+    expect(outcome.state).not.toBe('completed')
+    expect(JSON.stringify(session.events)).not.toContain('harness/route-fallback')
+  })
+
+  it('counts every reroute against the start budget the run was given', async () => {
+    const seen: string[] = []
+    executors.register(failing('builder', 'server-overloaded', true, seen))
+    executors.register(failing('spare', 'server-overloaded', true, seen))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(seen).toEqual(['builder', 'spare'])
+    expect(outcome.executorStarts).toBe(2)
+    expect(outcome.state).toBe('blocked')
+  })
+})
+
+describe('a human route override', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+  let runner: WorkflowRunner
+  let seen: { executor: string; permissionMode: string; model: string }[]
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    seen = []
+    for (const name of ['builder', 'reviewer', 'spare']) {
+      executors.register(provider(name, async (request) => {
+        seen.push({
+          executor: name,
+          permissionMode: request.route.permissionMode,
+          model: request.route.model ?? '',
+        })
+        return passing(name)
+      }))
+    }
+  })
+
+  const twoReviews = () => [
+    { stageId: 'implement-1', role: 'implement' as const },
+    { stageId: 'review-1', role: 'review' as const },
+    { stageId: 'review-2', role: 'review' as const },
+  ]
+
+  it('is spent on the first stage of its role and not the next one', async () => {
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      plan: twoReviews,
+      routeOverride: { role: 'review', executor: 'spare', semanticModelTier: 'implementation' },
+    })
+
+    expect(outcome.state).toBe('completed')
+    // A person overrode one review, not the role. The second one is routed by
+    // the table exactly as it would have been had nobody asked.
+    expect(seen.map(start => start.executor)).toEqual(['builder', 'spare', 'reviewer'])
+    const routes = projectWorkflow(session.events, 'wf-1').routes
+    expect(routes[1]?.reasonCodes).toContain('override:user')
+    expect(routes[2]?.reasonCodes).not.toContain('override:user')
+  })
+
+  it('does not reach a stage of another role', async () => {
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      plan: twoReviews,
+      routeOverride: { role: 'qa', executor: 'spare', semanticModelTier: 'implementation' },
+    })
+
+    expect(seen.map(start => start.executor)).toEqual(['builder', 'reviewer', 'reviewer'])
+  })
+
+  it('cannot buy a review a writable working tree', async () => {
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      plan: twoReviews,
+      routeOverride: { role: 'review', executor: 'builder', semanticModelTier: 'implementation' },
+    })
+
+    // The override says which product reads the work. What a reading stage is
+    // allowed to do to the tree is not a routing question, and no override
+    // reaches it: a review that could write would be certifying its own edits.
+    const overridden = seen[1]
+    expect(overridden?.executor).toBe('builder')
+    expect(overridden?.model).toBe('mimo-v2.5')
+    expect(overridden?.permissionMode).toBe('read-only')
+  })
+})
+
+describe('the durable barrier in front of a dispatch', () => {
+  it('does not start a provider until the start fact has reached the log', async () => {
+    const session = Session.create(SessionId('barrier'))
+    const executors = createExecutorRuntime()
+    let release = (): void => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let flushes = 0
+    const journal = new WorkflowJournal(session, 'wf-barrier', async () => {
+      flushes += 1
+      if (flushes === 1) await held
+      return true
+    })
+    const runner = new WorkflowRunner('wf-barrier', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
+    })
+    const starts: string[] = []
+    executors.register(provider('builder', async () => {
+      starts.push('builder')
+      return passing('builder')
+    }))
+    executors.register(provider('reviewer', async () => {
+      starts.push('reviewer')
+      return passing('reviewer')
+    }))
+
+    const running = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve()
+
+    // The implementing stage is the one that may rewrite the working tree. Its
+    // authority is on disk before the process holding that authority exists,
+    // so a restart that finds it open knows what it was allowed to do.
+    expect(starts).toEqual([])
+    release()
+    const outcome = await running
+    expect(starts[0]).toBe('builder')
+    expect(outcome.state).toBe('completed')
+  })
+
+  it('mutates nothing when the log cannot be made durable', async () => {
+    const session = Session.create(SessionId('barrier-failed'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-barrier-failed', async () => false)
+    const runner = new WorkflowRunner('wf-barrier-failed', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
+    })
+    const starts: string[] = []
+    executors.register(provider('builder', async () => {
+      starts.push('builder')
+      return passing('builder')
+    }))
+
+    // A checkpoint that did not happen stops the run. Downgrading it to a
+    // warning would let an implementation stage rewrite a tree with no durable
+    // record that it was ever authorised to.
+    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
+      .rejects.toThrow(/durable checkpoint/)
+    expect(starts).toEqual([])
+  })
+
+  it('holds a read-only stage to the same barrier as a mutating one', async () => {
+    const session = Session.create(SessionId('barrier-read'))
+    const executors = createExecutorRuntime()
+    let flushes = 0
+    const journal = new WorkflowJournal(session, 'wf-barrier-read', async () => {
+      flushes += 1
+      // Passes the implementing stage, refuses the verifying one.
+      return flushes < 2
+    })
+    const runner = new WorkflowRunner('wf-barrier-read', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
+    })
+    const starts: string[] = []
+    executors.register(provider('builder', async () => {
+      starts.push('builder')
+      return passing('builder')
+    }))
+    executors.register(provider('reviewer', async () => {
+      starts.push('reviewer')
+      return passing('reviewer')
+    }))
+
+    // One rule for every start. A barrier that read the role first would make
+    // the role classification itself a durability decision, and a stage
+    // misclassified once would dispatch unrecorded forever after.
+    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
+      .rejects.toThrow(/durable checkpoint/)
+    expect(starts).toEqual(['builder'])
+  })
+})
+
+describe('who is allowed to publish the work', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  })
+
+  it('asks the capability once and asks no executor to deliver anything', async () => {
+    const delivered: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: deliveryStub(delivered) },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('completed')
+    expect(delivered).toEqual(['delivery-1'])
+    // Nothing named delivery was ever put to a model.
+    for (const route of projectWorkflow(session.events, 'wf-1').routes) {
+      expect(route.role).not.toBe('delivery')
+    }
+  })
+
+  it('blocks a lifecycle that must publish when nothing was composed to publish with', async () => {
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no delivery capability')
+    // No substitute was reached for: the run stops rather than handing the
+    // remote to whatever executor happened to be routable.
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+    expect(JSON.stringify(session.events)).not.toContain('github-delivery')
+  })
+
+  it('fails the run when the capability reports it did not publish', async () => {
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: {
+        delivery: {
+          deliver: async () => ({ delivered: false, summary: 'the branch was rejected by the remote', evidence: [], findings: [] }),
+        },
+      },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('failed')
+    expect(outcome.verdict).toBe('FAIL')
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+
+  it('closes the capability window even when the capability throws', async () => {
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: {
+        delivery: {
+          deliver: async () => { throw new Error('the pull request could not be opened') },
+        },
+      },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('failed')
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+
+  it('spends no executor-start budget on publishing', async () => {
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.stages).toHaveLength(5)
+    // Implement, verify, review and the final verify. The budget bounds how
+    // often a model is asked, and a bounded command sequence is not one of
+    // those times.
+    expect(outcome.executorStarts).toBe(4)
+  })
+})
+
+describe('a run that changes a database', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+  const CHANGE = { required: true, migrationPaths: ['supabase/migrations/0001_thing.sql'] } as const
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  })
+
+  /**
+   * A runner with a scripted preview.
+   * @param databasePreview - the preview capability, if any.
+   * @param delivered - where delivery stage ids are recorded.
+   * @returns the runner.
+   */
+  function runnerWith(
+    databasePreview: DatabasePreviewCapabilityPort | undefined,
+    delivered: string[],
+  ): WorkflowRunner {
+    return new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: {
+        delivery: deliveryStub(delivered),
+        ...databasePreview === undefined ? {} : { databasePreview },
+      },
+    })
+  }
+
+  it('blocks before publishing when no isolated preview was composed', async () => {
+    const delivered: string[] = []
+    const outcome = await runnerWith(undefined, delivered).run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no isolated preview')
+    expect(delivered).toEqual([])
+    // Nothing stood in for it: no executor was asked to touch a database.
+    expect(JSON.stringify(session.events)).not.toContain('supabase')
+  })
+
+  it('never publishes a schema change whose migrations did not survive the preview', async () => {
+    const delivered: string[] = []
+    const outcome = await runnerWith({
+      verify: async () => ({
+        status: 'FAILED',
+        summary: 'the lint gate failed on the preview branch',
+        evidence: [],
+        findings: [],
+      }),
+    }, delivered).run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    expect(outcome.state).toBe('failed')
+    expect(outcome.verdict).toBe('FAIL')
+    expect(delivered).toEqual([])
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+
+  it('blocks rather than fails when the preview could not be reached at all', async () => {
+    const delivered: string[] = []
+    const outcome = await runnerWith({
+      verify: async () => ({
+        status: 'BLOCKED',
+        summary: 'no preview branch could be created for this run',
+        evidence: [],
+        findings: [],
+      }),
+    }, delivered).run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(delivered).toEqual([])
+  })
+
+  it('verifies the schema after the work is read and before the branch is published', async () => {
+    const order: string[] = []
+    const delivered: string[] = []
+    executors = createExecutorRuntime()
+    executors.register(provider('builder', async () => { order.push('implement'); return passing('builder') }))
+    executors.register(provider('reviewer', async () => { order.push('verify'); return passing('reviewer') }))
+    const runner = runnerWith({
+      verify: async () => {
+        order.push('supabase-preview')
+        return { status: 'PASSED', summary: 'the migrations applied and every gate passed', evidence: [], findings: [] }
+      },
+    }, delivered)
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(order.slice(0, 3)).toEqual(['implement', 'verify', 'supabase-preview'])
+    expect(delivered).toEqual(['delivery-1'])
+    expect(outcome.stages.map(stage => stage.stageId)).toContain('delivery-1-database')
+    // A bounded command sequence, so the budget that counts questions to models
+    // is untouched by it.
+    expect(outcome.executorStarts).toBe(4)
+  })
+
+  it('leaves a run that changes no database alone', async () => {
+    const delivered: string[] = []
+    let asked = 0
+    const outcome = await runnerWith({
+      verify: async () => {
+        asked += 1
+        return { status: 'PASSED', summary: 'never reached', evidence: [], findings: [] }
+      },
+    }, delivered).run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('completed')
+    expect(asked).toBe(0)
+    expect(delivered).toEqual(['delivery-1'])
   })
 })

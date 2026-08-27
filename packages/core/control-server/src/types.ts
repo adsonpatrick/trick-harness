@@ -4,7 +4,7 @@
  * @module @trick-harness/control-server
  */
 
-import type { WorkflowObjective, WorkflowVerdict } from '@trick-harness/contracts'
+import type { StageRouteOverride, WorkflowObjective, WorkflowVerdict } from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 
 /** The address family the server is permitted to bind. */
@@ -57,11 +57,35 @@ export interface ControlWorkflowStatus {
   readonly requiresWorldVerification: boolean
 }
 
-/** What starts one workflow on behalf of an HTTP caller. */
+/** One workflow the Harness has started and this server now owns. */
+export interface ControlStartedWorkflow {
+  /** The execution id the Harness minted, known before the run has done anything. */
+  readonly workflowId: string
+  /** Settles with what the run finished as. */
+  readonly outcome: Promise<WorkflowOutcome>
+  /**
+   * End the run.
+   * @param reason - Why, recorded as the reason the executor sees.
+   */
+  readonly cancel: (reason: string) => void
+}
+
+/**
+ * What starts one workflow on behalf of an HTTP caller.
+ *
+ * Synchronous, and returning the id: `POST /workflows` answers with the
+ * execution it just created, and a caller cannot be handed an id the Harness
+ * has not committed to. The objective's own id is not that identity — the same
+ * objective may be run again — so nothing here derives one from the payload.
+ *
+ * The override is passed rather than applied: the server's part is to refuse a
+ * malformed one before any durable record exists, and the workflow's part is to
+ * decide which single stage it reaches.
+ */
 export type ControlWorkflowStarter = (
   objective: WorkflowObjective,
-  signal: AbortSignal,
-) => Promise<WorkflowOutcome>
+  routeOverride?: StageRouteOverride,
+) => ControlStartedWorkflow
 
 /**
  * What the durable journal can say about a workflow this process is not running.

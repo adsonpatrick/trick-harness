@@ -21,8 +21,8 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { RISKS, WORKLOADS } from '@trick-harness/contracts'
-import type { WorkflowObjective } from '@trick-harness/contracts'
+import { ContractError, RISKS, WORKLOADS, parseStageRouteOverride } from '@trick-harness/contracts'
+import type { StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 import { ControlError, LOOPBACK_HOSTS } from './types.ts'
 import type {
@@ -65,6 +65,31 @@ function requiredString(body: Record<string, unknown>, key: string): string {
     throw new ControlError('invalid-objective', 400, `the objective must state a non-empty ${key}`)
   }
   return value
+}
+
+/**
+ * Read the human route override a start request may carry.
+ *
+ * Absent is the ordinary case and means the profile's table decides. Present
+ * and malformed is a refusal, not a silent fall back to the table: a caller who
+ * asked for a specific executor and got a different one would have no way to
+ * tell from the status that their request was dropped.
+ * @param payload - The decoded request body.
+ * @returns The override, or `undefined` when the request carries none.
+ * @throws {ControlError} when an override is present but not usable.
+ */
+export function readRouteOverride(payload: unknown): StageRouteOverride | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new ControlError('invalid-objective', 400, 'the request body must be a JSON object')
+  }
+  const value = (payload as Record<string, unknown>)['routeOverride']
+  if (value === undefined) return undefined
+  try {
+    return parseStageRouteOverride(value)
+  } catch (error) {
+    const detail = error instanceof ContractError ? error.path : 'routeOverride'
+    throw new ControlError('invalid-objective', 400, `the route override is not usable: ${detail}`)
+  }
 }
 
 /**
@@ -128,7 +153,7 @@ function statusOfRestart(
 ): ControlWorkflowStatus {
   return Object.freeze({
     workflowId,
-    objectiveId: workflowId,
+    objectiveId: assessment.objectiveId,
     state: assessment.state === 'interrupted' ? 'interrupted' : 'completed',
     verdict: assessment.verdict,
     summary: bounded(assessment.summary),
@@ -142,8 +167,11 @@ function statusOfRestart(
 /** One workflow this process owns. */
 interface LiveRun {
   readonly objectiveId: string
-  readonly controller: AbortController
+  /** Ends the run; the server holds this rather than the runner that obeys it. */
+  readonly cancel: (reason: string) => void
   readonly settled: Promise<ControlWorkflowStatus>
+  /** Set when this server asked for the stop, so a cancel is not read as a failure. */
+  canceled: boolean
   status: ControlWorkflowStatus
 }
 
@@ -228,7 +256,10 @@ export class HarnessControlServer {
     // the abort and the wait retires itself out of the live set, and disposal
     // would then return without having waited for the one it just canceled.
     const live = [...this.#runs.values()]
-    for (const run of live) run.controller.abort()
+    for (const run of live) {
+      run.canceled = true
+      run.cancel('the control server is being disposed')
+    }
     await Promise.allSettled(live.map(run => run.settled))
     await new Promise<void>((resolve) => {
       this.#server.close(() => {
@@ -239,37 +270,60 @@ export class HarnessControlServer {
 
   /**
    * Start one workflow this server will own.
+   *
+   * The identity comes back from the Harness, never from the payload. A caller
+   * that could name its own workflow id could address somebody else's run, or
+   * quietly continue a finished one's history; the objective it posts is what
+   * it gets to decide.
    * @param objective - The objective to run.
-   * @returns The status the caller sees immediately.
-   * @throws {ControlError} when a workflow of that id is already running here.
+   * @param routeOverride - One human routing choice for a single stage, if given.
+   * @returns The status the caller sees immediately, naming the minted id.
+   * @throws {ControlError} when the Harness hands back an id already running here.
    */
-  startWorkflow(objective: WorkflowObjective): ControlWorkflowStatus {
-    if (this.#runs.has(objective.id)) {
+  startWorkflow(objective: WorkflowObjective, routeOverride?: StageRouteOverride): ControlWorkflowStatus {
+    const started = this.#options.start(objective, routeOverride)
+    const { workflowId } = started
+    if (this.#runs.has(workflowId)) {
+      // The Harness handed back an id this server is already running under,
+      // which means its factory repeated one. The run it just started is ended
+      // and its rejection absorbed rather than left to surface as an unhandled
+      // one somewhere with no request to attribute it to.
+      started.cancel('the control server was handed a workflow id already in use')
+      started.outcome.catch(() => undefined)
       throw new ControlError('duplicate-workflow', 409, 'a workflow of that id is already running')
     }
-    const controller = new AbortController()
-    const settled = Promise.resolve()
-      .then(async () => statusOfOutcome(await this.#options.start(objective, controller.signal)))
-      .catch((error: unknown) => Object.freeze({
-        ...runningStatus(objective.id, objective.id),
-        state: controller.signal.aborted ? ('canceled' as const) : ('failed' as const),
-        summary: controller.signal.aborted
-          ? 'the workflow was canceled'
-          : `the workflow ended without a result: ${bounded(error instanceof Error ? error.message : 'unknown failure')}`,
-      }))
+    const settled = started.outcome
+      .then(outcome => statusOfOutcome(outcome))
+      .catch(async (error: unknown) => {
+        const canceled = this.#runs.get(workflowId)?.canceled === true
+        // A run that threw or was cancelled wrote no terminal end, so what it
+        // may have left behind is a question only the durable log can answer.
+        // Reading it back here rather than assuming `false` is what keeps a
+        // cancelled delivery from being reported as having touched nothing.
+        const assessment = await this.#options.restart?.(workflowId).catch(() => undefined)
+        return Object.freeze({
+          ...runningStatus(workflowId, objective.id),
+          state: canceled ? ('canceled' as const) : ('failed' as const),
+          summary: canceled
+            ? 'the workflow was canceled'
+            : `the workflow ended without a result: ${bounded(error instanceof Error ? error.message : 'unknown failure')}`,
+          requiresWorldVerification: assessment?.requiresWorldVerification ?? false,
+        })
+      })
       .then((status) => {
-        const stored = this.#runs.get(objective.id)
+        const stored = this.#runs.get(workflowId)
         if (stored !== undefined) stored.status = status
-        this.#retire(objective.id, status)
+        this.#retire(workflowId, status)
         return status
       })
     const run: LiveRun = {
       objectiveId: objective.id,
-      controller,
+      cancel: started.cancel,
       settled,
-      status: runningStatus(objective.id, objective.id),
+      canceled: false,
+      status: runningStatus(workflowId, objective.id),
     }
-    this.#runs.set(objective.id, run)
+    this.#runs.set(workflowId, run)
     return run.status
   }
 
@@ -327,7 +381,8 @@ export class HarnessControlServer {
       if (finished !== undefined) return finished
       throw new ControlError('unknown-workflow', 404, 'no workflow of that id is running here')
     }
-    run.controller.abort()
+    run.canceled = true
+    run.cancel('the caller canceled this workflow')
     return await run.settled
   }
 
@@ -357,8 +412,13 @@ export class HarnessControlServer {
     this.#authorize(request)
 
     if (method === 'POST' && path === '/workflows') {
-      const objective = readObjective(await readBody(request))
-      send(response, 202, this.startWorkflow(objective))
+      const body = await readBody(request)
+      // Both reads happen before a workflow id exists, so a malformed override
+      // refuses the request outright rather than starting a run that would then
+      // be routed by a table the caller did not ask for.
+      const objective = readObjective(body)
+      const override = readRouteOverride(body)
+      send(response, 202, this.startWorkflow(objective, override))
       return
     }
 

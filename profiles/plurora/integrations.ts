@@ -23,11 +23,25 @@ import type { IntegrationPolicyDefinition } from '@trick-harness/profile'
  * Database work is cloud-only against an isolated Supabase Preview Branch, with
  * no local or shared-dev fallback: a fallback path is exactly the path that
  * eventually runs a migration against something that matters.
+ *
+ * The names here are the names the composition consumes, exactly. A capability
+ * this file spells differently is a capability nothing turns on, and the run
+ * that needed it does not fail loudly — it simply never had it.
+ *
+ * The Supabase rule names the parent project and no branch. A branch name written down
+ * here would be a standing execution target — the integration would have every
+ * reason to read it as "run the migration against this" — and the only branch
+ * worth naming is the ephemeral one belonging to the pull request currently in
+ * flight, which no file checked into the repository can know. So the policy
+ * states the requirement instead: the branch is the current PR's, and if one
+ * cannot be resolved or created the workflow is BLOCKED rather than pointed at
+ * whatever else happens to be reachable.
  */
 export const integrationPolicy: IntegrationPolicyDefinition = {
   enabled: [
     'github-delivery',
-    'supabase-preview-branches',
+    'supabase-preview',
+    'control-server',
     'notion-knowledge',
     'linear-issues',
   ],
@@ -47,14 +61,23 @@ export const integrationPolicy: IntegrationPolicyDefinition = {
     },
     {
       id: 'supabase-preview',
-      when: { integration: 'supabase-preview-branches' },
+      when: { integration: 'supabase-preview' },
       use: {
-        projectRef: 'uljaajwwnygopsyvwsre',
-        branch: 'neurovia-dev',
+        // The parent, and only ever the parent: this ref is what branches are
+        // created under and asked about, never what a migration is run against.
+        parentProjectRef: 'uljaajwwnygopsyvwsre',
         execution: 'cloud-only',
+        previewBranchRequired: true,
+        previewBranchIdentity: 'pull-request',
+        onPreviewUnavailable: 'blocked',
         allowLocalFallback: false,
         allowSharedDevFallback: false,
       },
+    },
+    {
+      id: 'control-server',
+      when: { integration: 'control-server' },
+      use: { bind: 'loopback', auth: 'bearer-token', resume: 'never-automatic' },
     },
     {
       id: 'notion-knowledge',

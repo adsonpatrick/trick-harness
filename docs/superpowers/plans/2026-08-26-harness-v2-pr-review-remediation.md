@@ -160,7 +160,7 @@ PR READY
 **File:**
 - Create: `docs/verification/2026-08-26-harness-v2-pr-review-remediation.md`
 
-- [ ] **Step 1: Record exact execution provenance**
+- [x] **Step 1: Record exact execution provenance**
 
 The verification file must record:
 
@@ -174,7 +174,7 @@ GitHub canary branch/PR identity
 
 Do not record secrets or connection strings.
 
-- [ ] **Step 2: Run affected package suites together**
+- [x] **Step 2: Run affected package suites together**
 
 ```bash
 pnpm vitest run \
@@ -192,13 +192,13 @@ pnpm vitest run \
   profiles/plurora
 ```
 
-- [ ] **Step 3: Run full repository gates**
+- [x] **Step 3: Run full repository gates**
 
 Run the exact current root scripts for workspace constraints, typecheck, lint, build, full tests, coverage where configured, doc-sync, hygiene/invariants, and real entry-path/keyless snapshots.
 
 A Harness-owned failing package blocks completion. An upstream/environmental timeout may be classified as external only after a fresh isolated rerun proves it is not caused by the correction branch.
 
-- [ ] **Step 4: Complete this exact closure table in the verification file**
+- [x] **Step 4: Complete this exact closure table in the verification file**
 
 | ID | Finding | Required evidence |
 | --- | --- | --- |
@@ -223,7 +223,7 @@ A Harness-owned failing package blocks completion. An upstream/environmental tim
 
 Each row must cite a current test name, result, and commit SHA.
 
-- [ ] **Step 5: Commit verification evidence**
+- [x] **Step 5: Commit verification evidence**
 
 ```bash
 git add docs/verification/2026-08-26-harness-v2-pr-review-remediation.md
@@ -234,11 +234,11 @@ git commit -m "docs: record harness v2 remediation evidence"
 
 ### Task 8: Run Real GitHub and Supabase Canaries
 
-- [ ] **Step 1: GitHubDelivery canary**
+- [x] **Step 1: GitHubDelivery canary**
 
 On a disposable feature branch, use the Harness delivery capability to stage a harmless fixture change, commit, normal-push, open a PR, and re-read commit/remote SHA/PR identity. Do not force-push or merge. Close/delete the canary PR/branch after evidence is captured.
 
-- [ ] **Step 2: Supabase Preview canary**
+- [ ] **Step 2: Supabase Preview canary** — DEFERRED 2026-08-27 by the project owner: the org is on the free plan, branching is Pro-only, and the plan will not be bought for this. The fail-closed half was run and passed against the real API; the positive half waits for the entitlement. See the verification file.
 
 For parent ref `uljaajwwnygopsyvwsre`:
 
@@ -269,13 +269,15 @@ Do not substitute unit tests for failed external proof.
 
 ### Task 9: Independent Final Review
 
-- [ ] Review the exact correction branch diff against the reviewed PR #2 head.
-- [ ] Re-read the remediation Spec and all ten child plans.
-- [ ] Verify the 18-finding closure matrix against code/tests, not checkboxes.
-- [ ] Review model-executor vs deterministic-capability vs human-only authority boundaries.
-- [ ] Review Supabase parent/Preview isolation and GitHub protected-branch constraints.
-- [ ] Review journal payloads for secret/transcript leakage.
-- [ ] Return `PASS | PARTIAL | FAIL | INCONCLUSIVE | BLOCKED` with evidence.
+- [x] Review the exact correction branch diff against the reviewed PR #2 head.
+- [x] Re-read the remediation Spec and all ten child plans.
+- [x] Verify the 18-finding closure matrix against code/tests, not checkboxes.
+- [x] Review model-executor vs deterministic-capability vs human-only authority boundaries.
+- [x] Review Supabase parent/Preview isolation and GitHub protected-branch constraints.
+- [x] Review journal payloads for secret/transcript leakage.
+- [x] Return `PASS | PARTIAL | FAIL | INCONCLUSIVE | BLOCKED` with evidence.
+
+Completed 2026-08-27. Verdict **PARTIAL**: every closure holds against code and executed tests, the full certification chain passes, and the one defect this review found — the force-push guard matching whole arguments — is closed with regression cover at `518b921622`. It is not PASS solely because the Supabase Preview positive canary remains deferred for want of the Pro entitlement. See the verification file.
 
 No PR-ready claim is allowed unless this review is PASS and both real canaries are PASS.
 

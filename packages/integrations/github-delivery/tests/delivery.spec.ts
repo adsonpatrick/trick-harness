@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import type { DeliveryRecord } from '@trick-harness/journal'
 import { GitHubDelivery } from '../src/index.ts'
 
 /** One scripted answer for a `gh` command this test does not want to really run. */
@@ -361,5 +362,168 @@ describe('the environment the commands are given', () => {
     for (const spec of issued) expect(spec.env).toBeUndefined()
     // And every command is an argv array, so no constructed value is syntax.
     for (const spec of issued) expect(Array.isArray(spec.argv)).toBe(true)
+  })
+})
+
+describe('what settling a command means', () => {
+  /**
+   * A handle whose direct child has settled while its tree has not.
+   * @param quiescence - resolves/rejects when the owned tree is accounted for.
+   * @returns the handle.
+   */
+  function lingering(quiescence: Promise<boolean>): SubprocessHandle {
+    const reader = { readFrom: () => ({ text: 'feat/delivery', nextOffset: 13, lossy: false }) }
+    return {
+      pid: -1,
+      stdin: undefined,
+      stdout: undefined,
+      stderr: undefined,
+      collected: { stdout: reader, stderr: { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) } },
+      done: Promise.resolve({ exitCode: 0, signal: null }),
+      terminate: () => {},
+      waitForExit: () => quiescence,
+    }
+  }
+
+  it('does not return while a helper the command started is still running', async () => {
+    let release: (quiet: boolean) => void = () => undefined
+    const quiescence = new Promise<boolean>((resolve) => { release = resolve })
+    const capability = new GitHubDelivery({ cwd: work, spawn: () => lingering(quiescence) })
+    let settledYet = false
+
+    const reading = capability.inspect().then((value) => {
+      settledYet = true
+      return value
+    })
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve()
+
+    // The direct child is gone and its output is readable, which is exactly the
+    // state in which a delivery would happily start the next command — while a
+    // git helper still holds the index lock.
+    expect(settledYet).toBe(false)
+    release(true)
+    await expect(reading).resolves.toMatchObject({ branch: 'feat/delivery' })
+  })
+
+  it('reports a tree that would not come down instead of a clean command', async () => {
+    const capability = new GitHubDelivery({
+      cwd: work,
+      spawn: () => lingering(Promise.reject(new Error('the process tree could not be reaped'))),
+    })
+
+    await expect(capability.inspect()).rejects.toMatchObject({ code: 'teardown-failed' })
+  })
+
+  it('treats a wait cut short by cancellation as a tree still standing', async () => {
+    const capability = new GitHubDelivery({ cwd: work, spawn: () => lingering(Promise.resolve(false)) })
+
+    // `false` is not an error and not a success: it is the seam saying it stopped
+    // waiting, which is the one answer that must not be read as quiescence.
+    await expect(capability.inspect()).rejects.toMatchObject({ code: 'teardown-failed' })
+  })
+
+  it('names no command output in the failure it reports', async () => {
+    const leak = new Error('gh: token ghp_secretsecretsecret rejected')
+    const capability = new GitHubDelivery({ cwd: work, spawn: () => lingering(Promise.reject(leak)) })
+
+    let message = ''
+    try {
+      await capability.inspect()
+    }
+    catch (caught) {
+      message = (caught as Error).message
+    }
+
+    // The cause is dropped rather than wrapped: this message reaches a durable
+    // event, and a rejection out of `gh` can carry an authentication hint.
+    expect(message).not.toContain('ghp_')
+    expect(message).toContain('could not be reaped')
+  })
+})
+
+describe('checkpointing a mutation before making the next one', () => {
+  /**
+   * A delivery whose verified mutations are handed to an observer.
+   * @param onRecord - what the observer does with each record.
+   * @returns the capability under test.
+   */
+  function observed(onRecord: (record: DeliveryRecord) => Promise<void>): GitHubDelivery {
+    return new GitHubDelivery({ cwd: work, spawn: seam, onRecord })
+  }
+
+  /** The request every test here delivers. */
+  const request = {
+    branch: 'feat/delivery',
+    files: ['a.txt'],
+    message: 'feat: deliver a',
+    pullRequest: { title: 't', body: 'b', base: 'main' },
+  } as const
+
+  it('hands over each mutation only once the world has confirmed it', async () => {
+    scriptNewPullRequest()
+    writeFileSync(join(work, 'a.txt'), 'a\n')
+    const seen: { action: string; commandsBefore: number }[] = []
+
+    const outcome = await observed(async (record) => {
+      seen.push({ action: record.action, commandsBefore: issued.length })
+    }).deliver(request)
+
+    expect(seen.map(entry => entry.action)).toEqual(['commit', 'push', 'pr-open'])
+    // Each one arrives after the re-read that confirmed it, not after the
+    // command that was supposed to cause it.
+    const revParse = argvs().findIndex(argv => argv[1] === 'rev-parse' && argv[2] === 'HEAD')
+    expect(seen[0]?.commandsBefore).toBeGreaterThan(revParse)
+    // And what was handed over is exactly what was returned, in order.
+    expect(seen.map(entry => entry.action)).toEqual(outcome.records.map(record => record.action))
+  })
+
+  it('does not push a commit whose record could not be made durable', async () => {
+    scriptNewPullRequest()
+    writeFileSync(join(work, 'a.txt'), 'a\n')
+
+    const outcome = await observed(async (record) => {
+      if (record.action === 'commit') throw new Error('the journal could not reach a durable checkpoint')
+    }).deliver(request)
+
+    // The commit happened and is reported. The push did not start: a mutation
+    // nobody can prove was made is the one a restart repeats.
+    expect(outcome.delivered).toBe(false)
+    expect(outcome.failure?.code).toBe('uncheckpointed-mutation')
+    expect(outcome.records.map(record => record.action)).toEqual(['commit'])
+    expect(argvs().some(argv => argv[1] === 'push')).toBe(false)
+  })
+
+  it('never offers a mutation it could not confirm', async () => {
+    // The push exits zero but the remote does not hold the commit, which is the
+    // case the re-read exists for. No push record may be checkpointed.
+    scriptNewPullRequest()
+    writeFileSync(join(work, 'a.txt'), 'a\n')
+    const seen: string[] = []
+    const capability = new GitHubDelivery({
+      cwd: work,
+      spawn: (spec) => {
+        if (spec.argv[1] === 'push') {
+          issued.push(spec)
+          return settled(0, '')
+        }
+        return seam(spec)
+      },
+      onRecord: async (record) => { seen.push(record.action) },
+    })
+
+    const outcome = await capability.deliver(request)
+
+    expect(outcome.failure?.code).toBe('unverified-push')
+    expect(seen).toEqual(['commit'])
+  })
+
+  it('delivers exactly as before when nobody is observing', async () => {
+    scriptNewPullRequest()
+    writeFileSync(join(work, 'a.txt'), 'a\n')
+
+    const outcome = await delivery().deliver(request)
+
+    expect(outcome.delivered).toBe(true)
+    expect(outcome.records.map(record => record.action)).toEqual(['commit', 'push', 'pr-open'])
   })
 })

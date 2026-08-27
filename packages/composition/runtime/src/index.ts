@@ -18,6 +18,7 @@ import type {
   HarnessExecutorRuntime,
 } from '@trick-harness/executor'
 import { createExecutorRuntime } from '@trick-harness/executor'
+import { validateProfile } from '@trick-harness/profile'
 import type { HarnessProfile, PolicyRuleDefinition } from '@trick-harness/profile'
 import { createCodexProvider, type CodexProviderOptions } from '@trick-harness/provider-codex'
 import { createOpencodeProvider, type OpencodeAdapter } from '@trick-harness/provider-opencode'
@@ -85,8 +86,15 @@ export interface HarnessRuntimeBundle {
   readonly runtime: HarnessExecutorRuntime
   /** The registered executor names, in registration order. */
   readonly executors: readonly string[]
-  /** Unregister everything this composition registered and end runs in flight. */
-  dispose(): void
+  /**
+   * Unregister everything this composition registered and end runs in flight.
+   *
+   * The bundle owns its runtime, so disposing it is disposing that runtime:
+   * the promise settles only once every run has come back through its
+   * provider's teardown.
+   * @returns Nothing; resolves when the runtime is quiet.
+   */
+  dispose(): Promise<void>
 }
 
 /** What a composition added to a runtime it does not own. */
@@ -154,6 +162,11 @@ export function composeHarnessRuntime(
   const undo = (): void => {
     for (const registration of [...registrations].reverse()) registration.dispose()
   }
+  // Before anything is constructed, let alone registered. A profile only has to
+  // be well-typed to the compiler, and a deserialized one has not been near a
+  // compiler at all; reading its routing table first would mean a product
+  // provider had already been built for policy that was never policy.
+  if (options.profile !== undefined) validateProfile(options.profile)
   try {
     for (const provider of buildProviders(options)) {
       registrations.push(runtime.register(provider))
@@ -195,9 +208,9 @@ export function createHarnessRuntimeBundle(
   return {
     runtime,
     executors: composition.executors,
-    dispose(): void {
+    async dispose(): Promise<void> {
       composition.dispose()
-      runtime.dispose()
+      await runtime.dispose()
     },
   }
 }

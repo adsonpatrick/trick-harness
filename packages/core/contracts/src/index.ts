@@ -33,6 +33,7 @@ import type {
   Finding,
   RouteDecision,
   StageResult,
+  StageRouteOverride,
   WorkflowObjective,
 } from './types.ts'
 
@@ -232,6 +233,30 @@ export function parseStageResult(value: unknown, path = 'stage'): StageResult {
     summary: text(source, 'summary', path),
     findings: list(source, 'findings', path, parseFinding),
     evidence: list(source, 'evidence', path, parseEvidenceRef),
+  })
+}
+
+/**
+ * Read one human routing override back.
+ *
+ * The semantic tier is required even though `RouteOverride` types it as
+ * optional: the router refuses an override that does not name one, so accepting
+ * it here would only move the rejection to a point where the caller is no
+ * longer around to be told. The reasoning effort stays optional, and is held to
+ * the same non-empty-string rule when it is present.
+ * @param value - The serialized override.
+ * @param path - Field path to report a rejection under.
+ * @returns The override, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing or outside its vocabulary.
+ */
+export function parseStageRouteOverride(value: unknown, path = 'routeOverride'): StageRouteOverride {
+  const source = asRecord(value, path)
+  const effort = source['reasoningEffort']
+  return Object.freeze({
+    role: member(source, 'role', ROLES, path),
+    executor: text(source, 'executor', path),
+    semanticModelTier: text(source, 'semanticModelTier', path),
+    ...effort === undefined ? {} : { reasoningEffort: text(source, 'reasoningEffort', path) },
   })
 }
 

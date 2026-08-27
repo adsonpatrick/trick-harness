@@ -9,6 +9,16 @@ import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-sub
 import type { DeliveryRecord } from '@trick-harness/journal'
 import type { DeliveryError, PullRequestSpec } from './commands.ts'
 
+/**
+ * Somewhere durable for one confirmed mutation to be written down.
+ *
+ * Called after the world has been re-read and before the next mutation is
+ * attempted, and awaited. A rejection stops the delivery: the alternative is a
+ * push whose commit no record accounts for, which is exactly the state a
+ * restart cannot reason about.
+ */
+export type DeliveryRecordObserver = (record: DeliveryRecord) => Promise<void>
+
 /** How one delivery capability is bound to one workspace. */
 export interface GitHubDeliveryOptions {
   /** Absolute path of the working tree this capability may write. */
@@ -26,6 +36,8 @@ export interface GitHubDeliveryOptions {
    * here would put a credential on a command line's environment for no gain.
    */
   readonly env?: NodeJS.ProcessEnv | undefined
+  /** Where each confirmed mutation is checkpointed before the next one starts. */
+  readonly onRecord?: DeliveryRecordObserver | undefined
 }
 
 /** One run's request to deliver its work. */

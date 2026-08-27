@@ -262,6 +262,20 @@ export interface RoutingContext {
   readonly userOverride?: RouteOverride
 }
 
+/**
+ * A human's routing choice, aimed at the first stage of one role.
+ *
+ * Carried across a process boundary — a control-server request, a composed
+ * runtime — where `RouteOverride` alone would not say which stage it meant. It
+ * names a role rather than a stage id because the caller is answering "send the
+ * review somewhere else this time", not addressing a stage the plan has not
+ * produced yet.
+ */
+export interface StageRouteOverride extends RouteOverride {
+  /** The role whose first dispatch this override applies to. */
+  readonly role: Role
+}
+
 /** A human's explicit routing choice for one run. */
 export interface RouteOverride {
   /** The executor to use. */

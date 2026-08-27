@@ -9,8 +9,10 @@
  * @module @trick-harness/provider-opencode
  */
 
+import { cleanupFailure } from '@trick-harness/executor'
 import type {
   ExecutorCapabilities,
+  ExecutorCleanupFailure,
   ExecutorFailure,
   ExecutorProvider,
   ExecutorResult,
@@ -91,19 +93,108 @@ function classify(error: unknown): ExecutorFailure {
   }
 }
 
+/** Cleanup category for a session this run could not abort. */
+export const OPENCODE_SESSION_ABORT_CLEANUP = 'opencode-session-abort'
+
+/** Cleanup category for a scoped server this run could not close. */
+export const OPENCODE_SERVER_CLOSE_CLEANUP = 'opencode-server-close'
+
 /**
- * Close a server, swallowing a teardown error.
+ * Run one teardown step, reporting a failure instead of raising or hiding it.
  *
- * A failure to close cannot change the run's outcome and must not mask it, but
- * it also must not be silent, so it surfaces on the context's diagnostics path
- * rather than as a thrown value.
- * @param server - the server this run owns.
+ * Raising is wrong because teardown runs after the outcome is decided and would
+ * replace a real answer with the story of the cleanup; hiding is wrong because
+ * a server that would not close is a leaked port and a live process, and the
+ * only party that can act on that is the one reading the result.
+ * @param category - the fixed cleanup class for this step.
+ * @param step - the teardown to attempt.
+ * @returns the cleanup fact, or `undefined` when the step succeeded.
  */
-async function closeQuietly(server: OpencodeServerHandle): Promise<void> {
+async function teardown(
+  category: string,
+  step: () => unknown,
+): Promise<ExecutorCleanupFailure | undefined> {
   try {
-    await server.close()
-  } catch {
-    // Teardown failure is reported by the owning runtime's disposal path.
+    await step()
+    return undefined
+  } catch (error) {
+    return cleanupFailure(category, error)
+  }
+}
+
+/**
+ * Drive one run to its outcome, appending any teardown fault to `cleanup`.
+ *
+ * Split out from `start` because the outcome and the teardown record are
+ * produced at different moments: this function's `finally` is where cleanup
+ * happens, and a `finally` cannot amend the value being returned through it
+ * without swallowing what that value was.
+ * @param adapter - the OpenCode surface to drive.
+ * @param request - the resolved request.
+ * @param cleanup - collector the teardown path appends its faults to.
+ * @returns the primary outcome, decided without reference to teardown.
+ */
+async function runOnce(
+  adapter: OpencodeAdapter,
+  request: ExecutorStartRequest,
+  cleanup: ExecutorCleanupFailure[],
+): Promise<ExecutorResult> {
+  let server: OpencodeServerHandle | undefined
+  let client: OpencodeClientHandle | undefined
+  let sessionId: string | undefined
+  let settled = false
+  // Read through a call so the compiler cannot narrow the flag and conclude
+  // a later check is dead: the signal is aborted by the caller between
+  // these statements, which is exactly the case being checked.
+  const aborted = (): boolean => request.signal.aborted
+  try {
+    // Translate before spawning anything: a route this provider cannot
+    // express should cost no process.
+    const permission = permissionConfig(request.route.permissionMode)
+    const model = request.route.model === undefined ? undefined : parseModel(request.route.model)
+
+    server = await adapter.startServer({
+      hostname: LOOPBACK,
+      port: EPHEMERAL_PORT,
+      signal: request.signal,
+      config: { permission },
+    })
+    client = adapter.connect(server.url, request.cwd)
+    sessionId = await client.createSession(request.cwd)
+
+    if (aborted()) return { status: 'aborted', output: '' }
+
+    const result = await client.prompt({
+      sessionId,
+      directory: request.cwd,
+      ...(model === undefined ? {} : { model }),
+      text: request.task,
+    })
+    if (aborted()) return { status: 'aborted', output: '' }
+    settled = true
+    return { status: 'completed', output: finalText(result.parts) }
+  } catch (error) {
+    if (aborted()) return { status: 'aborted', output: '' }
+    return { status: 'error', output: '', failure: classify(error) }
+  } finally {
+    // Ownership is explicit and unconditional. A turn that did not finish
+    // on its own is aborted first, so the product stops working rather than
+    // losing its transport mid-run; a turn that already returned needs no
+    // abort. The server closes on every path either way.
+    if (!settled && client !== undefined && sessionId !== undefined) {
+      const boundClient = client
+      const boundSession = sessionId
+      const fault = await teardown(
+        OPENCODE_SESSION_ABORT_CLEANUP,
+        () => boundClient.abortSession(boundSession),
+      )
+      if (fault !== undefined) cleanup.push(fault)
+    }
+    if (server !== undefined) {
+      const boundServer = server
+      const fault = await teardown(OPENCODE_SERVER_CLOSE_CLEANUP, () => boundServer.close())
+      if (fault !== undefined) cleanup.push(fault)
+    }
   }
 }
 
@@ -118,57 +209,11 @@ export function createOpencodeProvider(adapter: OpencodeAdapter): ExecutorProvid
     capabilities: OPENCODE_CAPABILITIES,
 
     async start(request: ExecutorStartRequest): Promise<ExecutorResult> {
-      let server: OpencodeServerHandle | undefined
-      let client: OpencodeClientHandle | undefined
-      let sessionId: string | undefined
-      let settled = false
-      // Read through a call so the compiler cannot narrow the flag and conclude
-      // a later check is dead: the signal is aborted by the caller between
-      // these statements, which is exactly the case being checked.
-      const aborted = (): boolean => request.signal.aborted
-      try {
-        // Translate before spawning anything: a route this provider cannot
-        // express should cost no process.
-        const permission = permissionConfig(request.route.permissionMode)
-        const model = request.route.model === undefined ? undefined : parseModel(request.route.model)
-
-        server = await adapter.startServer({
-          hostname: LOOPBACK,
-          port: EPHEMERAL_PORT,
-          signal: request.signal,
-          config: { permission },
-        })
-        client = adapter.connect(server.url, request.cwd)
-        sessionId = await client.createSession(request.cwd)
-
-        if (aborted()) return { status: 'aborted', output: '' }
-
-        const result = await client.prompt({
-          sessionId,
-          directory: request.cwd,
-          ...(model === undefined ? {} : { model }),
-          text: request.task,
-        })
-        if (aborted()) return { status: 'aborted', output: '' }
-        settled = true
-        return { status: 'completed', output: finalText(result.parts) }
-      } catch (error) {
-        if (aborted()) return { status: 'aborted', output: '' }
-        return { status: 'error', output: '', failure: classify(error) }
-      } finally {
-        // Ownership is explicit and unconditional. A turn that did not finish
-        // on its own is aborted first, so the product stops working rather than
-        // losing its transport mid-run; a turn that already returned needs no
-        // abort. The server closes on every path either way.
-        if (!settled && client !== undefined && sessionId !== undefined) {
-          try {
-            await client.abortSession(sessionId)
-          } catch {
-            // A session that is already gone needs no abort.
-          }
-        }
-        if (server !== undefined) await closeQuietly(server)
-      }
+      const cleanup: ExecutorCleanupFailure[] = []
+      const result = await runOnce(adapter, request, cleanup)
+      // Attached, never merged into the outcome: a completed run whose server
+      // would not close stays completed, and carries the fact that it did not.
+      return cleanup.length === 0 ? result : { ...result, cleanup: Object.freeze([...cleanup]) }
     },
   }
 }

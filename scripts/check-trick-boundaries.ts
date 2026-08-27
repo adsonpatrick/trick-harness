@@ -18,6 +18,7 @@
 import { globSync, readFileSync } from 'node:fs'
 import { posix, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import ts from 'typescript'
 
 const root = resolve(import.meta.dirname, '..')
 
@@ -87,11 +88,68 @@ export const PROJECT_POLICY_IDENTIFIERS = [
   'Plurora Design System',
 ] as const
 
+/** One literal dependency the file declares, and where its specifier is written. */
+interface ModuleReference {
+  /** Module specifier exactly as it appears in source. */
+  readonly specifier: string
+  /** 1-based line the specifier's string literal starts on. */
+  readonly line: number
+}
+
+/** The parser mode an authored file is read in, chosen from its extension. */
+function scriptKindOf(file: string): ts.ScriptKind {
+  const extension = file.split('.').at(-1)
+  if (extension === 'tsx') return ts.ScriptKind.TSX
+  if (extension === 'jsx') return ts.ScriptKind.JSX
+  if (extension === 'js' || extension === 'mjs' || extension === 'cjs') return ts.ScriptKind.JS
+  return ts.ScriptKind.TS
+}
+
 /**
- * Module specifier of a static import/export, a dynamic import, or a require
- * call. The optional paren covers `import('…')` alongside bare `import '…'`.
+ * Read the literal module specifiers a source file declares.
+ *
+ * Syntax rather than text, because the boundary is a property of the program
+ * and not of its formatting: a specifier split across lines is the same
+ * dependency, and the same words inside a comment or a string are not a
+ * dependency at all. Both facts are invisible to a line-by-line scan, which is
+ * what made a load-bearing architecture gate depend on where a formatter chose
+ * to wrap.
+ *
+ * Only literal specifiers are reported. A computed `import(`${base}/x`)` names
+ * a module this gate cannot know statically, so it is left outside the rule
+ * rather than guessed at from the fragments that happen to be spelled out.
+ * @param file - Repo-relative path of the file, used to pick the parser mode.
+ * @param source - The file's full text.
+ * @returns One record per literal specifier, in source order.
  */
-const SPECIFIER_PATTERN = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/g
+function moduleReferences(file: string, source: string): readonly ModuleReference[] {
+  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKindOf(file))
+  const references: ModuleReference[] = []
+
+  const record = (node: ts.Node | undefined): void => {
+    if (node === undefined || !ts.isStringLiteralLike(node)) return
+    const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
+    references.push({ specifier: node.text, line: line + 1 })
+  }
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      record(node.moduleSpecifier)
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      record(node.moduleReference.expression)
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      record(node.argument.literal)
+    } else if (ts.isCallExpression(node)) {
+      const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword
+      const isRequire = ts.isIdentifier(node.expression) && node.expression.text === 'require'
+      if (isDynamicImport || (isRequire && node.arguments.length === 1)) record(node.arguments[0])
+    }
+    ts.forEachChild(node, visit)
+  }
+
+  ts.forEachChild(sourceFile, visit)
+  return references
+}
 
 /**
  * Whether one repo-relative path is authored source inside a generic package.
@@ -174,31 +232,28 @@ export function collectSourceViolations(
   groups: ReadonlyMap<string, string> = new Map(),
 ): string[] {
   const violations: { line: number; detail: string }[] = []
-  const lines = source.split('\n')
   const from = groupOf(file)
 
-  for (const [index, line] of lines.entries()) {
-    for (const match of line.matchAll(SPECIFIER_PATTERN)) {
-      // The capture group is guaranteed by the pattern, but the compiler cannot
-      // see that under `noUncheckedIndexedAccess`.
-      const specifier = match[1]
-      if (specifier === undefined) continue
-      const resolved = resolveSpecifier(file, specifier)
-      if (reachesProfiles(resolved)) {
-        violations.push({
-          line: index + 1,
-          detail: `generic package must not import project policy (${resolved})`,
-        })
-        continue
-      }
-      const scope = FORK_LOCAL_SPECIFIER.exec(specifier)
-      const imported = scope === null ? undefined : groups.get(`@trick-harness/${scope[1] ?? ''}`)
-      if (from === undefined || imported === undefined || layerAllows(from, imported)) continue
-      violations.push({
-        line: index + 1,
-        detail: `${from} must not import ${imported} (${specifier}): the dependency arrow runs one way`,
-      })
+  for (const { specifier, line } of moduleReferences(file, source)) {
+    const resolved = resolveSpecifier(file, specifier)
+    if (reachesProfiles(resolved)) {
+      violations.push({ line, detail: `generic package must not import project policy (${resolved})` })
+      continue
     }
+    const scope = FORK_LOCAL_SPECIFIER.exec(specifier)
+    const imported = scope === null ? undefined : groups.get(`@trick-harness/${scope[1] ?? ''}`)
+    if (from === undefined || imported === undefined || layerAllows(from, imported)) continue
+    violations.push({
+      line,
+      detail: `${from} must not import ${imported} (${specifier}): the dependency arrow runs one way`,
+    })
+  }
+
+  // Deliberately textual, and deliberately separate from the syntax pass above.
+  // A project identifier is forbidden wherever it is written — in a comment, a
+  // template, a fixture string — because what leaks is the name itself, not a
+  // dependency on it. There is no syntax node that means "names a product".
+  for (const [index, line] of source.split('\n').entries()) {
     for (const identifier of PROJECT_POLICY_IDENTIFIERS) {
       if (!line.includes(identifier)) continue
       violations.push({
@@ -208,7 +263,11 @@ export function collectSourceViolations(
     }
   }
 
-  return violations.map(({ line, detail }) => `${file}:${line}: ${detail}`)
+  // Stable by line, so a file failing both rules still reads top to bottom and
+  // an import violation precedes an identifier one written on the same line.
+  return violations
+    .sort((left, right) => left.line - right.line)
+    .map(({ line, detail }) => `${file}:${line}: ${detail}`)
 }
 
 /**

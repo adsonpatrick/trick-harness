@@ -6,7 +6,7 @@ This is a fork-local package: private to `adsonpatrick/trick-harness`, never pub
 
 ## The plan is a function of the objective
 
-`planStages` reads the objective's risk and nothing else, so the same objective plans the same way on every machine and in every replay. Risk adds certification rather than changing what implementation does — QA from medium, an independent code review at high, a security stage on top of both at critical — which keeps "what will this run do" answerable before anything is dispatched, from the objective alone. Below medium, QA is proportionate rather than absent: the work folds into verification instead of buying a separate stage for it.
+`planStages` is the default, and it is the pull-request lifecycle: implement, verify, deliver, review, and a fresh verification to close. It reads the objective's risk and nothing else, so the same objective plans the same way on every machine and in every replay. Risk adds certification rather than changing what implementation does — QA from medium, a security stage at critical — which keeps "what will this run do" answerable before anything is dispatched, from the objective alone. A database change adds no stage: the isolated preview is a capability the delivery stage runs before it publishes, not somewhere a model could be routed.
 
 ## One owner, one signal
 
@@ -56,9 +56,9 @@ When the diagnosis names a `productDecisionDependency`, the gate returns a `prod
 
 ## A pull request is certified after it is published, not before
 
-`planPullRequestStages` is the second plan this package ships, and the only thing it changes is where delivery sits: the branch is delivered as soon as implementation verifies, and every certifying stage after that reads the same published diff a person would. A review of an unpublished working tree reviews something nobody can comment on. Risk still decides how much certification is bought — QA above `low`, security at `critical` — and every plan ends on a fresh `verify-final`, so nothing is called ready on a reading taken before the last repair.
+`planPullRequestStages` is what `planStages` returns, and the thing that matters about it is where delivery sits: the branch is delivered as soon as implementation verifies, and every certifying stage after that reads the same published diff a person would. A review of an unpublished working tree reviews something nobody can comment on. Risk still decides how much certification is bought — QA above `low`, security at `critical` — and every plan ends on a fresh `verify-final`, so nothing is called ready on a reading taken before the last repair.
 
-A repair inside that plan is followed by a fresh delivery of its own. The runtime re-queues `delivery-N` between the repair and the re-run of the stage that failed, so the next review reads the fix rather than the diff that provoked it.
+A repair inside that plan is verified and then re-delivered before it is re-read. The runtime re-queues a fresh `verify-N` and then `delivery-N` between the repair and the re-run of the stage that failed, so an unverified fix is never published and the next review reads the fix rather than the diff that provoked it. When verification is itself the stage that failed, its own re-run is that proof and no second one is queued.
 
 `assessPullRequest` restates a finished run as `PR_READY`, `BLOCKED`, `FAIL`, `PARTIAL` or `INCONCLUSIVE`. It consults only the last stage of each role: a bug that `review-1` found and a repair fixed is absent from `review-2`, and it is the second reading that describes the branch as it now stands — the run believes the last reading, never the claim of the stage that edited it. An outstanding confirmed defect therefore cannot coexist with `PR_READY`, including when the run reached `maxRepairCycles` and stopped. Improvements are carried in `reportedFindings` and never implemented, because nobody asked for them.
 

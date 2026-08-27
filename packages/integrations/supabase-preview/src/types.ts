@@ -8,6 +8,31 @@
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { PreviewError } from './commands.ts'
 
+/**
+ * One hosted thing this capability made, changed or took away.
+ *
+ * Deliberately narrow. A record names the preview project and the branch, and
+ * nothing else: it is written to a durable log, and the connection string, the
+ * database password and the CLI's access token are all values that would be
+ * read back by whoever reads that log next.
+ */
+export interface SupabaseMutationRecord {
+  readonly action: 'preview-created' | 'migrations-applied' | 'preview-deleted'
+  /** The child project ref, which the run has already proven is not the parent. */
+  readonly previewProjectRef: string
+  /** The branch name this run owns. */
+  readonly branchName?: string
+}
+
+/**
+ * Somewhere durable for one confirmed hosted mutation to be written down.
+ *
+ * Called after the mutation has been verified and before the next one is
+ * attempted, and awaited. A rejection stops the run: a branch nobody recorded
+ * is a branch nobody knows to delete.
+ */
+export type SupabaseMutationObserver = (record: SupabaseMutationRecord) => Promise<void>
+
 /** How one preview capability is bound to one project. */
 export interface SupabasePreviewOptions {
   /** Absolute path of the repository whose migration history is applied. */
@@ -42,6 +67,8 @@ export interface SupabasePreviewOptions {
   readonly pollIntervalMs?: number | undefined
   /** Terminate escalation grace for each spawned command. */
   readonly graceMs?: number | undefined
+  /** Where each confirmed hosted mutation is checkpointed before the next one. */
+  readonly onMutation?: SupabaseMutationObserver | undefined
 }
 
 /** One request to validate the repository's migrations on a fresh branch. */
@@ -68,10 +95,32 @@ export interface PreviewBranchIdentity {
   readonly healthy: boolean
 }
 
+/**
+ * The ordered vocabulary of things a preview run has to get past.
+ *
+ * Named as a closed set because the run is a sequence with dependencies, not a
+ * checklist: a lint result read off a branch whose migrations did not apply
+ * describes a schema that does not exist, and the only honest thing to say
+ * about the gates after a failure is that they were not asked.
+ *
+ * `types` is reserved. This capability does not generate types yet, so it never
+ * appears in a run's completed or skipped set.
+ */
+export type PreviewGate =
+  | 'create'
+  | 'identity'
+  | 'health'
+  | 'migration-push'
+  | 'migration-list'
+  | 'lint'
+  | 'project-tests'
+  | 'types'
+  | 'cleanup'
+
 /** What one gate observed, with output already redacted. */
 export interface GateResult {
-  /** Gate name, such as `migrations`, `migration-list`, `lint` or `project-tests`. */
-  readonly name: string
+  /** Which gate this was. */
+  readonly name: PreviewGate
   /** Whether the gate passed. */
   readonly passed: boolean
   /** Exit code, or null when the process was signalled. */
@@ -99,8 +148,29 @@ export interface PreviewOutcome {
   readonly status: 'PASSED' | 'FAILED' | 'BLOCKED'
   /** The branch, when one was created. */
   readonly branch: PreviewBranchIdentity | undefined
-  /** Each gate that ran, in order. */
+  /** Each command gate that ran, in order. */
   readonly gates: readonly GateResult[]
+  /**
+   * Gates this run got past, in order.
+   *
+   * A gate that ran and failed is not here; it is named by {@link primaryFailure}.
+   */
+  readonly completedGates: readonly PreviewGate[]
+  /**
+   * Gates that would have run and were never asked, because a gate they depend
+   * on failed first. Empty on a run that got all the way through.
+   */
+  readonly skippedGates: readonly PreviewGate[]
+  /**
+   * The one gate that stopped this run, when one did.
+   *
+   * Separate from {@link cleanupFailure} on purpose: cleanup is orthogonal, and
+   * a run whose branch could not be deleted still failed — or passed — for its
+   * own reasons.
+   */
+  readonly primaryFailure: { readonly gate: PreviewGate; readonly message: string } | undefined
+  /** Why the branch could not be taken away, when it could not; redacted. */
+  readonly cleanupFailure: string | undefined
   /** Human-readable result, naming no connection string. */
   readonly summary: string
   /** Why the run stopped, when it did. */

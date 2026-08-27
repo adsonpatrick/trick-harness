@@ -100,6 +100,40 @@ function requireArray(value: unknown, path: string): readonly unknown[] {
   return value
 }
 
+/**
+ * Validate one flat table of policy values.
+ *
+ * Policy is data a router reads, never behavior it runs, and that distinction
+ * is only real if it is checked at the boundary: a nested object, an array or a
+ * function that reaches a rule is a decision the profile made somewhere the
+ * routing engine cannot see. `Object.entries` is what reads the table, so an
+ * inherited field declares nothing and a symbol key is not policy at all.
+ * @param value - the candidate table, as a caller or a parser produced it.
+ * @param path - dotted path of the table, for attributing a failure.
+ * @param options - whether a table with no entries is a decision or an omission.
+ * @throws {ProfileValidationError} naming the exact entry that fails.
+ */
+function validateScalarTable(value: unknown, path: string, { allowEmpty }: { allowEmpty: boolean }): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ProfileValidationError(path, 'must be a flat object')
+  }
+  const entries = Object.entries(value)
+  if (!allowEmpty && entries.length === 0) {
+    throw new ProfileValidationError(path, 'must declare at least one value')
+  }
+  for (const [key, entry] of entries) {
+    const at = `${path}.${key}`
+    if (typeof entry === 'string' || typeof entry === 'boolean') continue
+    if (typeof entry === 'number') {
+      if (!Number.isFinite(entry)) {
+        throw new ProfileValidationError(at, 'must be a finite number')
+      }
+      continue
+    }
+    throw new ProfileValidationError(at, 'must be a string, a finite number or a boolean')
+  }
+}
+
 /** Validate one rule list and reject ids repeated within it. */
 function validateRules(value: unknown, path: string, { allowEmpty }: { allowEmpty: boolean }): void {
   const rules = requireArray(value, path)
@@ -116,12 +150,10 @@ function validateRules(value: unknown, path: string, { allowEmpty }: { allowEmpt
       throw new ProfileValidationError(`${path}[${index}].id`, `repeats rule id ${JSON.stringify(id)}`)
     }
     seen.add(id)
-    for (const side of ['when', 'use'] as const) {
-      const table = field(rule, side)
-      if (typeof table !== 'object' || table === null || Array.isArray(table)) {
-        throw new ProfileValidationError(`${path}[${index}].${side}`, 'must be a flat object')
-      }
-    }
+    // An empty `when` is the catch-all rule and a real decision; an empty `use`
+    // is a rule that routes to nothing, which is an omission rather than one.
+    validateScalarTable(field(rule, 'when'), `${path}[${index}].when`, { allowEmpty: true })
+    validateScalarTable(field(rule, 'use'), `${path}[${index}].use`, { allowEmpty: false })
   }
 }
 
@@ -131,6 +163,38 @@ function validateStringList(value: unknown, path: string): void {
     if (typeof entry !== 'string' || entry.length === 0) {
       throw new ProfileValidationError(`${path}[${index}]`, 'must be a non-empty string')
     }
+  }
+}
+
+/**
+ * Validate the declared security-repair allowlist, when one is declared.
+ *
+ * Absent is legitimate and means fail-closed. Present and malformed is not: a
+ * rule that names no boundary, or names one as something other than a string,
+ * would silently authorise nothing while reading like it authorises something.
+ * @param value - the declared rules, or undefined.
+ * @throws ProfileValidationError naming the first field that fails.
+ */
+function validateSecurityRepairRules(value: unknown): void {
+  if (value === undefined) return
+  const path = 'securityPolicy.repairRules'
+  const seen = new Set<string>()
+  for (const [index, entry] of requireArray(value, path).entries()) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new ProfileValidationError(`${path}[${index}]`, 'must be an object')
+    }
+    const id = field(entry, 'id')
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new ProfileValidationError(`${path}[${index}].id`, 'must be a non-empty string')
+    }
+    if (seen.has(id)) {
+      throw new ProfileValidationError(`${path}[${index}].id`, `repeats rule id ${JSON.stringify(id)}`)
+    }
+    seen.add(id)
+    if (field(entry, 'findingClass') !== 'SECURITY_BUG') {
+      throw new ProfileValidationError(`${path}[${index}].findingClass`, 'must be "SECURITY_BUG"')
+    }
+    validateStringList(field(entry, 'allowedBoundaries'), `${path}[${index}].allowedBoundaries`)
   }
 }
 
@@ -178,7 +242,9 @@ export function validateProfile(candidate: unknown): asserts candidate is Harnes
   }
 
   validateRules(field(field(candidate, 'qaPolicy'), 'rules'), 'qaPolicy.rules', { allowEmpty: true })
-  validateRules(field(field(candidate, 'securityPolicy'), 'rules'), 'securityPolicy.rules', { allowEmpty: true })
+  const securityPolicy = field(candidate, 'securityPolicy')
+  validateRules(field(securityPolicy, 'rules'), 'securityPolicy.rules', { allowEmpty: true })
+  validateSecurityRepairRules(field(securityPolicy, 'repairRules'))
 
   const integrationPolicy = field(candidate, 'integrationPolicy')
   validateStringList(field(integrationPolicy, 'enabled'), 'integrationPolicy.enabled')

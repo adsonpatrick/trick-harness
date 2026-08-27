@@ -36,6 +36,12 @@ export const securityPolicy: SecurityPolicyDefinition = {
       use: { review: 'security', independence: 'cross-executor-preferred', blocking: true },
     },
   ],
+  // Stated empty on purpose. A security defect is repaired automatically only
+  // on ground a person wrote down in advance, and Plurora names none: every
+  // confirmed security finding blocks and waits for a human. The empty list is
+  // written out rather than omitted so this reads as a decision somebody made
+  // rather than a block somebody forgot.
+  repairRules: [],
 }
 
 /**

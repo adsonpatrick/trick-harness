@@ -22,7 +22,7 @@ PR #1 currently routes implementation to `codex.balanced/medium`, routine review
 
 - refine/plan -> `opencode.reasoning-fast` (DeepSeek V4 Flash semantic tier).
 - small/medium implementation -> `opencode.workhorse` (MiMo V2.5).
-- heavy/high-volume implementation, broad refactor and heavy test/repair generation -> `opencode.workhorse`; heavy work is a hard invariant unless an explicit per-run user override exists at the router layer.
+- heavy/high-volume implementation, broad refactor and heavy test/repair generation -> `opencode.workhorse`; heavy work is a hard invariant for the *primary* route. On OpenCode unavailability it falls back to Codex where Codex is usable, and BLOCKS where it is not (amended 2026-08-26; see the remediation design spec).
 - routine review, difficult diagnosis and QA charter/risk analysis -> `codex.balanced` + `high` when available.
 - high-risk architecture, security-sensitive review and Auth/RLS/tenant-isolation analysis -> `codex.frontier` + `xhigh`.
 - exceptional unresolved reasoning -> `codex.frontier` + `max` only behind an explicit escalation fact.

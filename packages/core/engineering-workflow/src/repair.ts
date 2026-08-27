@@ -12,6 +12,7 @@
 
 import { AUTO_REPAIRABLE_FINDINGS, parseDiagnosisContract } from '@trick-harness/contracts'
 import type { DiagnosisContract, EvidenceRef, Finding } from '@trick-harness/contracts'
+import type { SecurityRepairRule } from '@trick-harness/profile'
 
 /**
  * Finding classes whose repair may skip diagnosis.
@@ -42,6 +43,7 @@ export class RepairError extends Error {
     | 'incomplete-diagnosis'
     | 'unsupported-root-cause'
     | 'product-decision'
+    | 'security-unauthorized'
 
   /**
    * @param code - Machine-readable cause.
@@ -52,6 +54,80 @@ export class RepairError extends Error {
     this.name = 'RepairError'
     this.code = code
   }
+}
+
+/** Whether a security defect may be repaired here, and why or why not. */
+export interface SecurityRepairDecision {
+  readonly allowed: boolean
+  /** A code a durable record can carry, naming the rule or the refusal. */
+  readonly reasonCode: string
+}
+
+/**
+ * Whether one declared boundary falls inside one allowlist pattern.
+ *
+ * A whole segment of `*` matches one segment and `**` matches any number of
+ * them; everything else is compared literally. That is the whole language. One
+ * rich enough to be clever here would be one a reviewer has to run to
+ * understand, and this is the list that decides whether a model may write to a
+ * security surface unattended.
+ * @param boundary - The boundary the diagnosis declared.
+ * @param pattern - One allowlist entry.
+ * @returns True when the boundary is inside the pattern.
+ */
+function boundaryMatches(boundary: string, pattern: string): boolean {
+  const walk = (parts: readonly string[], rest: readonly string[]): boolean => {
+    if (rest.length === 0) return parts.length === 0
+    const head = rest[0] as string
+    const tail = rest.slice(1)
+    if (head === '**') {
+      for (let skip = 0; skip <= parts.length; skip += 1) {
+        if (walk(parts.slice(skip), tail)) return true
+      }
+      return false
+    }
+    if (parts.length === 0) return false
+    if (head !== '*' && head !== parts[0]) return false
+    return walk(parts.slice(1), tail)
+  }
+  return walk(boundary.split('/'), pattern.split('/'))
+}
+
+/**
+ * Decide whether a security defect may be repaired without a person.
+ *
+ * Fail-closed, and deterministic in its inputs: the finding's class and the
+ * boundary the diagnosis declared, matched against a list a person wrote. It
+ * reads no summary, no root-cause prose and no self-declared safety, because
+ * every one of those is written by the same kind of thing the authorisation is
+ * deciding about.
+ * @param finding - The confirmed defect.
+ * @param boundary - The boundary the diagnosis declared, if it stated one.
+ * @param rules - The profile's declared security-repair allowlist.
+ * @returns Whether the repair is allowed, and the code saying why.
+ */
+export function authorizeSecurityRepair(
+  finding: Finding,
+  boundary: string | undefined,
+  rules: readonly SecurityRepairRule[] = [],
+): SecurityRepairDecision {
+  if (finding.class !== 'SECURITY_BUG') {
+    return Object.freeze({ allowed: true, reasonCode: 'security:not-applicable' })
+  }
+  if (rules.length === 0) {
+    return Object.freeze({ allowed: false, reasonCode: 'security:no-policy' })
+  }
+  if (boundary === undefined || boundary.trim().length === 0) {
+    return Object.freeze({ allowed: false, reasonCode: 'security:no-boundary' })
+  }
+  // Every rule is a SECURITY_BUG rule by construction: the profile validator
+  // refuses any other class before a profile is ever composed.
+  for (const rule of rules) {
+    if (rule.allowedBoundaries.some(pattern => boundaryMatches(boundary, pattern))) {
+      return Object.freeze({ allowed: true, reasonCode: `security:rule-${rule.id}` })
+    }
+  }
+  return Object.freeze({ allowed: false, reasonCode: 'security:boundary-not-allowed' })
 }
 
 /** What the gate decided, and what the repair still owes when it is done. */
@@ -150,10 +226,15 @@ export function validateDiagnosis(value: unknown): DiagnosisContract {
  * later review could not detect.
  * @param finding - The confirmed defect the repair would act on.
  * @param diagnosis - What the read-only debugger established, if it ran.
+ * @param securityRepairRules - The boundaries a person wrote down in advance as safe to repair a security defect on; empty means none.
  * @returns What the repair is authorized to do and what it still owes.
  * @throws {RepairError} when the repair may not start.
  */
-export function authorizeRepair(finding: Finding, diagnosis?: unknown): RepairAuthorization {
+export function authorizeRepair(
+  finding: Finding,
+  diagnosis?: unknown,
+  securityRepairRules: readonly SecurityRepairRule[] = [],
+): RepairAuthorization {
   if (!AUTO_REPAIRABLE_FINDINGS.includes(finding.class)) {
     throw new RepairError('not-repairable',
       `a ${finding.class} finding is reported and left alone, never repaired automatically`)
@@ -163,6 +244,12 @@ export function authorizeRepair(finding: Finding, diagnosis?: unknown): RepairAu
   }
 
   if (diagnosis === undefined) {
+    // A security defect never reaches the mechanical path: there is no boundary
+    // to check it against, so the allowlist could not have allowed it.
+    if (finding.class === 'SECURITY_BUG') {
+      throw new RepairError('security-unauthorized',
+        'a security defect may not be repaired without a diagnosis naming the boundary a policy rule allows')
+    }
     if (!isMechanicallyObvious(finding)) {
       throw new RepairError('no-diagnosis',
         `a ${finding.class} finding needs a read-only diagnosis before a repair may write anything`)
@@ -180,10 +267,16 @@ export function authorizeRepair(finding: Finding, diagnosis?: unknown): RepairAu
     throw new RepairError('product-decision',
       'the defect depends on an unmade product decision; the run stops rather than inventing the behavior')
   }
+  const security = authorizeSecurityRepair(finding, contract.affectedBoundary, securityRepairRules)
+  if (!security.allowed) {
+    throw new RepairError('security-unauthorized',
+      `a security defect may not be repaired automatically here (${security.reasonCode})`)
+  }
   return Object.freeze({
     findingId: finding.id,
     reasonCodes: Object.freeze([
       'repair:diagnosed',
+      security.reasonCode,
       `repair:class-${finding.class}`,
       `repair:confidence-${contract.confidence}`,
     ]),

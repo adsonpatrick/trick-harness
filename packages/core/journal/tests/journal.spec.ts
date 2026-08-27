@@ -65,13 +65,15 @@ const diagnosis: DiagnosisContract = {
 }
 
 describe('the harness event vocabulary', () => {
-  it('declares the twelve events the lifecycle needs, in lifecycle order', () => {
+  it('declares the fourteen events the lifecycle needs, in lifecycle order', () => {
     expect([...HARNESS_EVENT_TYPES]).toStrictEqual([
       'harness/workflow-start',
       'harness/route-decision',
       'harness/route-fallback',
       'harness/executor-start',
       'harness/executor-end',
+      'harness/capability-start',
+      'harness/capability-end',
       'harness/finding',
       'harness/diagnosis',
       'harness/verdict',
@@ -124,6 +126,8 @@ describe('writing and replaying one workflow', () => {
     )
     journal.executorStart({ stageId: 'impl-1', role: 'implement', decision })
     journal.executorEnd('impl-1', 'opencode', 'completed', 1_200)
+    await journal.beginCapability('deliver-1', 'github-delivery', true)
+    await journal.endCapability('deliver-1', 'github-delivery', 'completed', 900)
     journal.finding('review-1', finding)
     await journal.diagnosis('debug-1', diagnosis)
     await journal.verdict('verify-1', 'verify', 'PASS', 'focused suite green', evidence)
@@ -177,7 +181,7 @@ describe('writing and replaying one workflow', () => {
     journal.routeDecision({ stageId: 'review-1', role: 'review', decision })
     await journal.routeFallback(
       { stageId: 'review-1', role: 'review', decision: { ...decision, fallbackFrom: 'codex' } },
-      'rate-limit',
+      'usage-limit-exceeded',
       { independence: 'lost', assurance: 'lowered' },
     )
     expect(replay().routes[0]?.fallbackFrom).toBe('codex')
@@ -195,9 +199,9 @@ describe('writing and replaying one workflow', () => {
   })
 
   it('projects the last circuit state each executor was left in', () => {
-    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:rate-limit')
+    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
     journal.circuitBreaker('codex', 'DEGRADED', 'AVAILABLE', 'manual-refresh')
-    journal.circuitBreaker('opencode', 'AVAILABLE', 'DEGRADED', 'failure:server-capacity')
+    journal.circuitBreaker('opencode', 'AVAILABLE', 'DEGRADED', 'failure:server-overloaded')
     expect(replay().circuits).toStrictEqual({ codex: 'AVAILABLE', opencode: 'DEGRADED' })
   })
 
@@ -224,6 +228,7 @@ describe('writing and replaying one workflow', () => {
       blockers: [],
       circuits: {},
       openStages: [],
+      openCapabilities: [],
       executorStarts: 0,
     })
   })
@@ -246,10 +251,10 @@ describe('what the journal refuses to lose', () => {
     journal.executorStart({ stageId: 'impl-1', role: 'implement', decision })
     journal.executorEnd('impl-1', 'opencode', 'completed', 5)
     journal.finding('review-1', finding)
-    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:rate-limit')
+    journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
     expect(flush).not.toHaveBeenCalled()
 
-    await journal.routeFallback({ stageId: 'impl-1', role: 'implement', decision }, 'rate-limit', { independence: 'preserved', assurance: 'unchanged' })
+    await journal.routeFallback({ stageId: 'impl-1', role: 'implement', decision }, 'usage-limit-exceeded', { independence: 'preserved', assurance: 'unchanged' })
     await journal.diagnosis('debug-1', diagnosis)
     await journal.verdict('verify-1', 'verify', 'PASS', 'green', evidence)
     await journal.delivery({ action: 'commit', branch: 'feat/x', commitSha: 'abc' })
@@ -329,5 +334,138 @@ describe('what never reaches the durable log', () => {
     journal.executorEnd('impl-1', 'opencode', 'completed', 3)
     const payload = session.events.find(event => event.type === 'harness/executor-end')?.data
     expect(Object.hasOwn(payload as object, 'failureClass')).toBe(false)
+  })
+})
+
+describe('two attempts at one objective', () => {
+  it('keeps each attempt to its own projection', async () => {
+    const session = Session.create(SessionId('two-attempts'))
+    const flush = async (): Promise<boolean> => true
+    const first = new WorkflowJournal(session, 'wf-a', flush)
+    const second = new WorkflowJournal(session, 'wf-b', flush)
+
+    first.start(objective)
+    first.routeDecision({ stageId: 's-1', role: 'implement', decision })
+    first.finding('s-1', finding)
+    await first.end('failed', 'FAIL', 'the first attempt failed')
+    second.start(objective)
+    second.routeDecision({ stageId: 's-1', role: 'implement', decision })
+
+    const one = projectWorkflow(session.events, 'wf-a')
+    const two = projectWorkflow(session.events, 'wf-b')
+
+    // Both attempts name the same objective, which is the point: the logical
+    // thing a person asked for is stable, and each attempt at it is separate.
+    expect(one.objective?.id).toBe('obj-1')
+    expect(two.objective?.id).toBe('obj-1')
+    expect(one.findings.length).toBe(1)
+    expect(two.findings).toEqual([])
+    expect(one.end?.state).toBe('failed')
+    // A second attempt reading the first one's end would report itself finished
+    // before it had run a stage.
+    expect(two.end).toBeUndefined()
+    expect(two.routes.length).toBe(1)
+  })
+})
+
+describe('the executor start barrier', () => {
+  it('appends the route and the start, then checkpoints, in that order', async () => {
+    const session = Session.create(SessionId('barrier'))
+    const order: string[] = []
+    const journal = new WorkflowJournal(session, 'wf-1', async () => {
+      order.push(...session.events.map(event => event.type))
+      return true
+    })
+
+    await journal.beginExecutor({ stageId: 's-1', role: 'implement', decision })
+
+    // The checkpoint sees both facts. One that saw only the route would leave a
+    // restart able to say what was authorised and not that anything ran.
+    expect(order).toEqual(['harness/route-decision', 'harness/executor-start'])
+  })
+
+  it('refuses a checkpoint that did not happen, however it says so', async () => {
+    const session = Session.create(SessionId('barrier-failed'))
+    const refusing = new WorkflowJournal(session, 'wf-1', async () => false)
+    const rejecting = new WorkflowJournal(session, 'wf-2', async () => {
+      throw new Error('the disk is full')
+    })
+
+    // `false` and a rejection are the same fact — the checkpoint did not
+    // happen — so they cannot mean different things to whoever is about to
+    // start a provider on the strength of it.
+    await expect(refusing.beginExecutor({ stageId: 's-1', role: 'implement', decision }))
+      .rejects.toThrow(JournalError)
+    await expect(rejecting.beginExecutor({ stageId: 's-1', role: 'implement', decision }))
+      .rejects.toThrow(/the disk is full/)
+  })
+})
+
+describe('the deterministic capability window', () => {
+  it('records that a capability ran without recording what it said', async () => {
+    const session = Session.create(SessionId('capability'))
+    const order: string[] = []
+    const journal = new WorkflowJournal(session, 'wf-1', async () => {
+      order.push(session.events.at(-1)?.type ?? '')
+      return true
+    })
+
+    journal.start(objective)
+    await journal.beginCapability('deliver-1', 'github-delivery', true)
+    await journal.endCapability('deliver-1', 'github-delivery', 'completed', 42)
+
+    // Each half is durable on its own, because the gap between them is exactly
+    // the window a restart needs to be able to see.
+    expect(order).toEqual(['harness/capability-start', 'harness/capability-end'])
+    const started = session.events.find(event => event.type === 'harness/capability-start')
+    expect(started?.data).toStrictEqual({
+      workflowId: 'wf-1',
+      stageId: 'deliver-1',
+      capability: 'github-delivery',
+      mutationPossible: true,
+    })
+    const ended = session.events.find(event => event.type === 'harness/capability-end')
+    expect(Object.hasOwn(ended?.data as object, 'failureClass')).toBe(false)
+    // No stdout, no connection string, no token: the log says a push happened,
+    // never how to repeat it.
+    expect(JSON.stringify(session.events)).not.toContain('postgres')
+  })
+
+  it('replays a start with no end as a window still open', async () => {
+    const session = Session.create(SessionId('capability-open'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+
+    journal.start(objective)
+    await journal.beginCapability('deliver-1', 'github-delivery', true)
+    await journal.beginCapability('deliver-1', 'supabase-preview', false)
+    await journal.endCapability('deliver-1', 'supabase-preview', 'completed', 7)
+
+    const replayed = projectWorkflow(session.events, 'wf-1')
+    expect(replayed.openCapabilities).toEqual(['deliver-1:github-delivery'])
+  })
+
+  it('leaves one window open when the same capability ran twice and answered once', async () => {
+    const session = Session.create(SessionId('capability-twice'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+
+    journal.start(objective)
+    await journal.beginCapability('deliver-1', 'github-delivery', true)
+    await journal.beginCapability('deliver-1', 'github-delivery', true)
+    await journal.endCapability('deliver-1', 'github-delivery', 'error', 3, 'transport-unavailable')
+
+    // Set arithmetic would report nothing open here, which is the one answer a
+    // restart must not be given.
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities)
+      .toEqual(['deliver-1:github-delivery'])
+  })
+
+  it('refuses a checkpoint that did not happen on either half', async () => {
+    const session = Session.create(SessionId('capability-refused'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => false)
+
+    await expect(journal.beginCapability('deliver-1', 'github-delivery', true))
+      .rejects.toThrow(expect.objectContaining({ code: 'flush-failed' }))
+    await expect(journal.endCapability('deliver-1', 'github-delivery', 'completed', 1))
+      .rejects.toThrow(JournalError)
   })
 })

@@ -5,11 +5,17 @@ import type {
   SubprocessOutcome,
   SubprocessSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
-import type { ExecutorRoute, ExecutorStartRequest } from '@trick-harness/executor'
+import type {
+  ExecutorResult,
+  ExecutorRoute,
+  ExecutorStartRequest,
+} from '@trick-harness/executor'
 import {
   CODEX_CAPABILITIES,
   CODEX_EXECUTOR,
+  CODEX_RUN_DISPOSE_CLEANUP,
   createCodexProvider,
+  executorFailure,
   isAvailabilityFailure,
   NON_AVAILABILITY_CATEGORIES,
   sandboxMode,
@@ -64,7 +70,12 @@ interface FakeChild {
   readonly terminations: () => number
 }
 
-function fakeChild(): FakeChild {
+interface FakeChildOptions {
+  /** Make process-tree teardown fail, the way an unkillable tree does. */
+  readonly waitForExitFails?: Error
+}
+
+function fakeChild(options: FakeChildOptions = {}): FakeChild {
   const fromChild = new PassThrough()
   const toChild = new PassThrough()
   const stderr = new PassThrough()
@@ -87,6 +98,7 @@ function fakeChild(): FakeChild {
     done,
     terminate: vi.fn(() => { terminations += 1; settle() }),
     waitForExit: vi.fn(async () => {
+      if (options.waitForExitFails !== undefined) throw options.waitForExitFails
       if (!exited) settle()
       return true
     }),
@@ -126,9 +138,14 @@ interface DrivenRun {
  */
 async function drive(
   request: ExecutorStartRequest,
-  options: { readonly env?: Record<string, string> } = {},
+  options: {
+    readonly env?: Record<string, string>
+    readonly waitForExitFails?: Error
+  } = {},
 ): Promise<DrivenRun & { readonly result: Promise<unknown> }> {
-  const child = fakeChild()
+  const child = fakeChild(
+    options.waitForExitFails === undefined ? {} : { waitForExitFails: options.waitForExitFails },
+  )
   const spawn = vi.fn((_spec: SubprocessSpawnSpec) => child.handle)
   const provider = createCodexProvider({
     spawn,
@@ -296,6 +313,79 @@ describe('native credentials and configuration', () => {
   })
 })
 
+/**
+ * The routing vocabulary, restated here rather than imported.
+ *
+ * A provider does not depend on `@trick-harness/routing` at runtime, and taking
+ * the dependency only so a test could read the real set would couple the two in
+ * the build to make one assertion. Restating is the same technique the routing
+ * package's own invariant uses: if either side moves, this list stops matching
+ * and someone has to look at both.
+ */
+const ROUTING_CATEGORIES: readonly string[] = [
+  'usage-limit-exceeded',
+  'session-budget-exceeded',
+  'server-overloaded',
+  'internal-server-error',
+  'transport-unavailable',
+  'context-window-exceeded',
+  'bad-request',
+  'sandbox-denied',
+  'cyber-policy-refusal',
+  'unauthorized',
+  'wrong-answer',
+  'failed-verification',
+  'other',
+]
+
+describe('failure normalization at the provider boundary', () => {
+  it.each([
+    ['usageLimitExceeded', 'usage-limit-exceeded', true],
+    ['sessionBudgetExceeded', 'session-budget-exceeded', true],
+    ['serverOverloaded', 'server-overloaded', true],
+    ['internalServerError', 'internal-server-error', true],
+    ['httpConnectionFailed', 'transport-unavailable', true],
+    ['responseStreamConnectionFailed', 'transport-unavailable', true],
+    ['responseStreamDisconnected', 'transport-unavailable', true],
+    ['responseTooManyFailedAttempts', 'transport-unavailable', true],
+    ['contextWindowExceeded', 'context-window-exceeded', false],
+    ['badRequest', 'bad-request', false],
+    ['sandboxError', 'sandbox-denied', false],
+    ['activeTurnNotSteerable', 'bad-request', false],
+    ['cyberPolicy', 'cyber-policy-refusal', false],
+    ['unauthorized', 'unauthorized', false],
+    ['threadRollbackFailed', 'other', false],
+  ])('normalizes %s to %s', (native, normalized, availability) => {
+    expect(executorFailure(native)).toMatchObject({ category: normalized, availability })
+  })
+
+  it.each(['unknown', 'process-exit', 'someVariantShippedNextQuarter'])(
+    'reports %s as an unrecognised fault nobody may route around',
+    (native) => {
+      // Fail-closed: a variant this package has never seen must not become an
+      // outage, or every future upstream rename buys itself a free second run
+      // on the other executor.
+      expect(executorFailure(native)).toMatchObject({ category: 'other', availability: false })
+    },
+  )
+
+  it('emits nothing the routing classifier would refuse', () => {
+    const natives = [...NON_AVAILABILITY_CATEGORIES, 'usageLimitExceeded', 'httpConnectionFailed', 'unknown']
+    for (const native of natives) {
+      expect(ROUTING_CATEGORIES).toContain(executorFailure(native).category)
+    }
+  })
+
+  it('keeps the native variant out of the diagnostic it hands on', () => {
+    // The diagnostic travels into durable evidence. Carrying the camelCase name
+    // there would leave two spellings of the same outage in the record, which
+    // is the thing normalizing exists to stop.
+    const failure = executorFailure('usageLimitExceeded')
+    expect(failure.safeDiagnostic).not.toContain('usageLimitExceeded')
+    expect(failure.safeDiagnostic).toContain('usage-limit-exceeded')
+  })
+})
+
 describe('failure classification', () => {
   it('treats quota, budget, overload, and transport as availability failures', () => {
     for (const category of [
@@ -326,9 +416,9 @@ describe('failure classification', () => {
     const result = await driven.result as { status: string; failure?: JsonObject }
     expect(result.status).toBe('error')
     expect(result.failure).toEqual({
-      category: 'usageLimitExceeded',
+      category: 'usage-limit-exceeded',
       availability: true,
-      safeDiagnostic: 'codex run failed (usageLimitExceeded)',
+      safeDiagnostic: 'codex run failed (usage-limit-exceeded)',
     })
   })
 
@@ -337,7 +427,7 @@ describe('failure classification', () => {
     driven.finish(failedTurn('contextWindowExceeded'))
     const result = await driven.result as { status: string; failure?: JsonObject }
     expect(result.failure).toMatchObject({
-      category: 'contextWindowExceeded',
+      category: 'context-window-exceeded',
       availability: false,
     })
   })
@@ -347,9 +437,9 @@ describe('failure classification', () => {
     driven.finish(failedTurn({ httpConnectionFailed: { httpStatusCode: 503 } }))
     const result = await driven.result as { status: string; failure?: JsonObject }
     expect(result.failure).toEqual({
-      category: 'httpConnectionFailed',
+      category: 'transport-unavailable',
       availability: true,
-      safeDiagnostic: 'codex run failed (httpConnectionFailed)',
+      safeDiagnostic: 'codex run failed (transport-unavailable)',
       httpStatus: 503,
     })
   })
@@ -358,7 +448,7 @@ describe('failure classification', () => {
     const driven = await drive(startRequest())
     driven.finish(failedTurn('cyberPolicy'))
     const result = await driven.result as { failure?: { safeDiagnostic: string } }
-    expect(result.failure?.safeDiagnostic).toBe('codex run failed (cyberPolicy)')
+    expect(result.failure?.safeDiagnostic).toBe('codex run failed (cyber-policy-refusal)')
   })
 })
 
@@ -383,5 +473,70 @@ describe('results and cancellation', () => {
     driven.finish(...answered)
     await driven.result
     expect(driven.child.terminations()).toBeGreaterThan(0)
+  })
+})
+
+describe('teardown failures are observable, not swallowed', () => {
+  /**
+   * Build a teardown error carrying the sort of text a real one carries.
+   * @returns the error, whose message must not survive into the result.
+   */
+  function unkillable(): Error {
+    const error = new Error('kill EPERM pid 4321 CODEX_HOME=/home/dev/.codex token=sk-live-77')
+    error.name = 'TreeTeardownError'
+    return error
+  }
+
+  it('leaves a completed run completed and says the tree would not come down', async () => {
+    const driven = await drive(startRequest(), { waitForExitFails: unkillable() })
+    driven.finish(...answered)
+    const result = await driven.result as ExecutorResult
+    // The turn answered. A leaked process tree is a separate fact from a wrong
+    // answer, and collapsing the two would lose whichever one is reported second.
+    expect(result.status).toBe('completed')
+    expect(result.output).toBe('done')
+    expect(result.cleanup).toEqual([{
+      category: CODEX_RUN_DISPOSE_CLEANUP,
+      safeDiagnostic: 'codex-run-dispose failed (CodexRunFailure)',
+    }])
+  })
+
+  it('never marks a cleanup fault as an availability failure', async () => {
+    const driven = await drive(startRequest(), { waitForExitFails: unkillable() })
+    driven.finish(...answered)
+    const result = await driven.result as ExecutorResult
+    // The whole reason the cleanup fact has no `availability` field: a run that
+    // Codex answered must not be able to file Codex as unreachable and spend a
+    // second run on another product because a `kill` returned EPERM.
+    expect(result.failure).toBeUndefined()
+    expect(Object.keys(result.cleanup?.[0] ?? {})).toEqual(['category', 'safeDiagnostic'])
+  })
+
+  it('carries no byte of the raw exception into the durable fact', async () => {
+    const driven = await drive(startRequest(), { waitForExitFails: unkillable() })
+    driven.finish(...answered)
+    const durable = JSON.stringify(await driven.result)
+    expect(durable).not.toContain('EPERM')
+    expect(durable).not.toContain('CODEX_HOME')
+    expect(durable).not.toContain('sk-live-77')
+  })
+
+  it('reports the fault on an aborted run too, without changing its status', async () => {
+    const controller = new AbortController()
+    const driven = await drive(
+      startRequest({ signal: controller.signal }),
+      { waitForExitFails: unkillable() },
+    )
+    controller.abort()
+    const result = await driven.result as ExecutorResult
+    expect(result.status).toBe('aborted')
+    expect(result.cleanup?.[0]?.category).toBe(CODEX_RUN_DISPOSE_CLEANUP)
+  })
+
+  it('says nothing at all when disposal was clean', async () => {
+    const driven = await drive(startRequest())
+    driven.finish(...answered)
+    const result = await driven.result as ExecutorResult
+    expect(result.cleanup).toBeUndefined()
   })
 })

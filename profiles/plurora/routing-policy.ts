@@ -36,6 +36,75 @@ import type { RoutingPolicyDefinition } from '@trick-harness/profile'
  */
 export const routingPolicy: RoutingPolicyDefinition = {
   rules: [
+    // Who writes code comes first, ahead of every judgement row, and that
+    // ordering is itself the invariant. A task class says what the change is
+    // about — authentication, row-level security — and a row keyed on one of
+    // those sitting above these would quietly send an *implementation* of an
+    // auth change to the reviewing executor, which is the one thing this table
+    // exists to prevent. What a stage is for outranks what it is about.
+    //
+    // The first four rows are redundant against `implementation` and `repair`,
+    // and are written out anyway: the heavy-work rule is the single most
+    // expensive thing this table could get wrong, so it is stated where a diff
+    // that removes it is visible, rather than left implied by a broader row.
+    {
+      id: 'heavy-implementation',
+      when: { role: 'implement', workload: 'heavy' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'large-write-implementation',
+      when: { role: 'implement', writeVolume: 'large' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'heavy-repair',
+      when: { role: 'repair', workload: 'heavy' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'large-write-repair',
+      when: { role: 'repair', writeVolume: 'large' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'implementation',
+      when: { role: 'implement' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'repair',
+      when: { role: 'repair' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    // The one route that spends the most expensive budget this project has, so
+    // it is gated on a fact nobody can assert casually: the diagnosis has
+    // already failed twice, and `maxRepairCycles` is three, so this is the last
+    // attempt before the run is handed back to a human. A row that fired on the
+    // first attempt would make `max` the ordinary price of a hard bug.
+    {
+      id: 'exceptional-escalation',
+      when: { role: 'debug', priorAttempts: 2 },
+      use: { executor: 'codex', tier: 'codex.frontier', effort: 'max' },
+    },
+    // Authentication, row-level security and tenant isolation are read at the
+    // top tier whatever role asks: these are the three places in this product
+    // where a plausible-looking wrong answer is a breach rather than a bug.
+    {
+      id: 'auth-analysis',
+      when: { taskClass: 'auth' },
+      use: { executor: 'codex', tier: 'codex.frontier', effort: 'xhigh' },
+    },
+    {
+      id: 'rls-analysis',
+      when: { taskClass: 'rls' },
+      use: { executor: 'codex', tier: 'codex.frontier', effort: 'xhigh' },
+    },
+    {
+      id: 'tenant-isolation-analysis',
+      when: { taskClass: 'tenant-isolation' },
+      use: { executor: 'codex', tier: 'codex.frontier', effort: 'xhigh' },
+    },
     {
       id: 'security-review',
       when: { role: 'security' },
@@ -79,14 +148,17 @@ export const routingPolicy: RoutingPolicyDefinition = {
       when: { role: 'qa' },
       use: { executor: 'codex', tier: 'codex.balanced', effort: 'high' },
     },
+    // Broad mechanical change is volume work whichever role asks for it: a
+    // refactor across many files and a large batch of generated tests are the
+    // same shape of job as an implementation, and are priced the same way.
     {
-      id: 'implementation',
-      when: { role: 'implement' },
+      id: 'broad-refactor',
+      when: { taskClass: 'refactor' },
       use: { executor: 'opencode', tier: 'opencode.workhorse' },
     },
     {
-      id: 'repair',
-      when: { role: 'repair' },
+      id: 'test-generation',
+      when: { taskClass: 'test-generation' },
       use: { executor: 'opencode', tier: 'opencode.workhorse' },
     },
     {
@@ -135,9 +207,45 @@ export const routingPolicy: RoutingPolicyDefinition = {
       use: { executor: 'opencode', tier: 'opencode.reasoning-fast' },
     },
     {
+      id: 'codex-unavailable-qa-execution',
+      when: { unavailable: 'codex', role: 'qa', workload: 'heavy' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'codex-unavailable-qa',
+      when: { unavailable: 'codex', role: 'qa' },
+      use: { executor: 'opencode', tier: 'opencode.reasoning-fast' },
+    },
+    {
+      id: 'codex-unavailable-implement',
+      when: { unavailable: 'codex', role: 'implement' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'codex-unavailable-repair',
+      when: { unavailable: 'codex', role: 'repair' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'codex-unavailable-refactor',
+      when: { unavailable: 'codex', taskClass: 'refactor' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    {
+      id: 'codex-unavailable-test-generation',
+      when: { unavailable: 'codex', taskClass: 'test-generation' },
+      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+    },
+    // The residual row, and reasoning-fast rather than the workhorse on purpose.
+    // Whatever reached here was routed to Codex by the primary table, and the
+    // primary table sends Codex judgement work; a residual that answered with
+    // the workhorse would quietly turn every unclassified judgement stage into
+    // volume work at the moment Codex went down — which is the moment nobody is
+    // reading the route facts closely.
+    {
       id: 'codex-unavailable',
       when: { unavailable: 'codex' },
-      use: { executor: 'opencode', tier: 'opencode.workhorse' },
+      use: { executor: 'opencode', tier: 'opencode.reasoning-fast' },
     },
     {
       id: 'opencode-unavailable',

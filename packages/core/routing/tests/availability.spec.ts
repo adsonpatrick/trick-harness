@@ -10,6 +10,8 @@ import {
   capVerdict,
   classifyFailure,
   degradedExecutors,
+  DISABLING_FAILURES,
+  disablesExecutor,
   isAvailabilityFailure,
   openCircuit,
   recordFailure,
@@ -88,7 +90,67 @@ describe('telling an outage apart from a wrong answer', () => {
   })
 
   it('classifies the same category the same way every time', () => {
-    expect(classifyFailure('rate-limit')).toBe(classifyFailure('rate-limit'))
+    expect(classifyFailure('server-overloaded')).toBe(classifyFailure('server-overloaded'))
+  })
+})
+
+describe('an executor that cannot serve anything, as against one that failed', () => {
+  it('takes an unauthorized executor out of the pool without rerouting the run that found it', () => {
+    // Both halves matter. Rerouting the attempt would launder an account
+    // problem into a second opinion; leaving the executor in the pool would
+    // send every later stage into the same wall and report it as stage failure.
+    expect(disablesExecutor('unauthorized')).toBe(true)
+    expect(isAvailabilityFailure('unauthorized')).toBe(false)
+  })
+
+  it.each([...QUALITY_FAILURES].filter(failure => !DISABLING_FAILURES.includes(failure as never)))(
+    'does not disable an executor for %s',
+    (failure) => {
+      expect(disablesExecutor(failure)).toBe(false)
+    },
+  )
+
+  it('never disables an executor the breaker is meant to bring back', () => {
+    for (const failure of AVAILABILITY_FAILURES) {
+      expect(disablesExecutor(failure), failure).toBe(false)
+    }
+  })
+
+  it('refuses to answer for a category it was never told about', () => {
+    expect(() => disablesExecutor('weird-thing')).toThrow(
+      expect.objectContaining({ code: 'unknown-failure' }),
+    )
+  })
+})
+
+describe('fallback reaches only an executor that can actually take the work', () => {
+  it('moves the work to the other executor while that one is usable', () => {
+    const decision = route(context({ degradedExecutors: ['codex'] }), policy)
+    expect(decision.executor).toBe('opencode')
+    // Never silent: the durable fact says where this came from, so a reader can
+    // tell a chosen route from a substituted one.
+    expect(decision.reasonCodes).toContain('fallback:codex')
+    expect(decision.fallbackFrom).toBe('codex')
+  })
+
+  it('blocks instead of routing to an executor already known to be unusable', () => {
+    // Blocking is the intended outcome, not a defect. The alternative is a run
+    // attributed to an executor that never took it.
+    expect(() => route(context({ degradedExecutors: ['codex', 'opencode'] }), policy)).toThrow(
+      expect.objectContaining({ code: 'no-fallback' }),
+    )
+  })
+
+  it('does not fall back to the degraded executor itself under any rule', () => {
+    const selfServing: RoutingPolicy = {
+      ...policy,
+      fallbackRules: [
+        { id: 'codex-out', when: { unavailable: 'codex' }, use: { executor: 'codex', tier: 'codex.fast' } },
+      ],
+    }
+    expect(() => route(context({ degradedExecutors: ['codex'] }), selfServing)).toThrow(
+      expect.objectContaining({ code: 'no-fallback' }),
+    )
   })
 })
 
@@ -109,7 +171,7 @@ describe('the executor circuit breaker', () => {
     ])
     // A second failure while already degraded is not a second transition: the
     // durable record would otherwise read as repeated outages.
-    expect(recordFailure(first.circuit, 'rate-limit', at + 6).transitions).toStrictEqual([])
+    expect(recordFailure(first.circuit, 'server-overloaded', at + 6).transitions).toStrictEqual([])
   })
 
   it('does not degrade an executor for being wrong', () => {
@@ -121,7 +183,7 @@ describe('the executor circuit breaker', () => {
   })
 
   it('withholds a probe until the cooldown has passed', () => {
-    const degraded = recordFailure(openCircuit('codex', at), 'rate-limit', at).circuit
+    const degraded = recordFailure(openCircuit('codex', at), 'transport-unavailable', at).circuit
     expect(tryProbe(degraded, strict, at + 999).allowed).toBe(false)
     const probe = tryProbe(degraded, strict, at + 1_000)
     expect(probe.allowed).toBe(true)
@@ -137,7 +199,7 @@ describe('the executor circuit breaker', () => {
   })
 
   it('recovers only on a probe that actually succeeded', () => {
-    const degraded = recordFailure(openCircuit('codex', at), 'server-capacity', at).circuit
+    const degraded = recordFailure(openCircuit('codex', at), 'server-overloaded', at).circuit
     const recovered = recordSuccess(degraded, at + 2_000)
     expect(recovered.circuit).toStrictEqual(openCircuit('codex', at + 2_000))
     expect(recovered.transitions).toStrictEqual([
@@ -161,7 +223,7 @@ describe('the executor circuit breaker', () => {
   })
 
   it('names the degraded executors a route should be told about', () => {
-    const codex = recordFailure(openCircuit('codex', at), 'rate-limit', at).circuit
+    const codex = recordFailure(openCircuit('codex', at), 'transport-unavailable', at).circuit
     expect(degradedExecutors([codex, openCircuit('opencode', at)])).toStrictEqual(['codex'])
   })
 })

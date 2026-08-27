@@ -23,6 +23,7 @@ import type {
 } from '@trick-harness/contracts'
 import type {
   BlockerKind,
+  CapabilityOutcome,
   DeliveryAction,
   ExecutorOutcome,
   WorkflowEndState,
@@ -44,6 +45,8 @@ export const HARNESS_EVENT_TYPES = [
   'harness/route-fallback',
   'harness/executor-start',
   'harness/executor-end',
+  'harness/capability-start',
+  'harness/capability-end',
   'harness/finding',
   'harness/diagnosis',
   'harness/verdict',
@@ -59,7 +62,7 @@ export type HarnessEventType = typeof HARNESS_EVENT_TYPES[number]
 /** A journal operation that cannot be completed as asked. */
 export class JournalError extends Error {
   /** Machine-readable cause, so a caller can branch without parsing prose. */
-  readonly code: 'unknown-event' | 'foreign-workflow'
+  readonly code: 'unknown-event' | 'foreign-workflow' | 'flush-failed'
 
   /**
    * @param code - Machine-readable cause.
@@ -134,12 +137,26 @@ export interface WorkflowProjection {
   readonly circuits: Readonly<Record<string, 'AVAILABLE' | 'DEGRADED'>>
   /** Executor runs started but never ended — the work a restart must verify. */
   readonly openStages: readonly string[]
+  /**
+   * Capability runs started but never ended, as `stageId:capability`.
+   *
+   * The deterministic half of the same question `openStages` asks. A GitHub
+   * push or a Supabase branch apply that began and never reported back may have
+   * changed the world, and the log's job is to say so rather than to guess.
+   */
+  readonly openCapabilities: readonly string[]
   readonly executorStarts: number
   /** Absent while the workflow is still in flight. */
   readonly end?: { readonly state: WorkflowEndState; readonly verdict: WorkflowVerdict; readonly summary: string }
 }
 
-/** Force a durable checkpoint, so an append survives losing the process. */
+/**
+ * Force a durable checkpoint, so an append survives losing the process.
+ *
+ * Resolving `false` is a refusal, not a hint: the journal treats it exactly as
+ * it treats a rejection, because a checkpoint that did not happen is the same
+ * fact either way and the work that was waiting on it must not proceed.
+ */
 export type JournalFlush = () => Promise<unknown>
 
 /** What one stage was dispatched as. */
@@ -243,7 +260,48 @@ export class WorkflowJournal {
       reasonCodes: [...decision.reasonCodes],
       policyVersion: decision.policyVersion,
     })
-    await this.#flush()
+    await this.#durable()
+  }
+
+  /**
+   * Checkpoint, refusing to report a durability that did not happen.
+   *
+   * Everything a caller does after an `await` on one of this journal's durable
+   * methods is allowed to assume the fact survives the process. A flush that
+   * failed quietly would turn that assumption into the one thing the journal
+   * exists to prevent: a restart reasoning about a world it has no record of.
+   * @throws {JournalError} when the checkpoint did not happen.
+   */
+  async #durable(): Promise<void> {
+    let flushed: unknown
+    try {
+      flushed = await this.#flush()
+    } catch (cause) {
+      throw new JournalError('flush-failed', `the journal could not reach a durable checkpoint: ${
+        cause instanceof Error ? cause.message : 'the flush rejected'
+      }`)
+    }
+    if (flushed === false) {
+      throw new JournalError('flush-failed', 'the journal could not reach a durable checkpoint')
+    }
+  }
+
+  /**
+   * Record the route and the start of one executor run, durably.
+   *
+   * The barrier every dispatch passes through. Both facts are appended and the
+   * checkpoint is awaited before this resolves, so a caller that starts a
+   * provider only after it resolves cannot have mutated a working tree the log
+   * has no record of authorising. A failed checkpoint throws rather than
+   * warning: the work is stopped, because the alternative is a run whose
+   * effects nobody can attribute after a restart.
+   * @param dispatch - The stage and the decision it runs on.
+   * @throws {JournalError} when the checkpoint did not happen.
+   */
+  async beginExecutor(dispatch: StageDispatch): Promise<void> {
+    this.routeDecision(dispatch)
+    this.executorStart(dispatch)
+    await this.#durable()
   }
 
   /**
@@ -285,6 +343,58 @@ export class WorkflowJournal {
       durationMs,
       ...failureClass === undefined ? {} : { failureClass },
     })
+  }
+
+  /**
+   * Record that a deterministic capability began work, durably.
+   *
+   * Flushed before the capability is allowed to act, for the same reason an
+   * executor start is: a push that happened with no record of having been
+   * started is a mutation a restart cannot attribute, and re-running it is how
+   * one commit becomes two.
+   * @param stageId - The stage the capability is working for.
+   * @param capability - Which capability, e.g. `github-delivery`.
+   * @param mutationPossible - Whether this work could change the world.
+   * @throws {JournalError} when the checkpoint did not happen.
+   */
+  async beginCapability(stageId: string, capability: string, mutationPossible: boolean): Promise<void> {
+    this.#session.append('harness/capability-start', {
+      workflowId: this.#workflowId,
+      stageId,
+      capability,
+      mutationPossible,
+    })
+    await this.#durable()
+  }
+
+  /**
+   * Record that a deterministic capability finished, durably.
+   *
+   * No command output, no connection string, no token: what is kept is that it
+   * ran, how it stopped, and how long it took.
+   * @param stageId - The stage the capability was working for.
+   * @param capability - Which capability finished.
+   * @param status - How it stopped.
+   * @param durationMs - Wall-clock duration.
+   * @param failureClass - The classified failure, when it had one.
+   * @throws {JournalError} when the checkpoint did not happen.
+   */
+  async endCapability(
+    stageId: string,
+    capability: string,
+    status: CapabilityOutcome,
+    durationMs: number,
+    failureClass?: string,
+  ): Promise<void> {
+    this.#session.append('harness/capability-end', {
+      workflowId: this.#workflowId,
+      stageId,
+      capability,
+      status,
+      durationMs,
+      ...failureClass === undefined ? {} : { failureClass },
+    })
+    await this.#durable()
   }
 
   /**
@@ -337,7 +447,7 @@ export class WorkflowJournal {
           : { productDecisionDependency: diagnosis.productDecisionDependency },
       },
     })
-    await this.#flush()
+    await this.#durable()
   }
 
   /**
@@ -366,7 +476,7 @@ export class WorkflowJournal {
       evidence: evidence.map(reference => ({ ...reference })),
       ...lowered === undefined ? {} : { lowered },
     })
-    await this.#flush()
+    await this.#durable()
   }
 
   /**
@@ -386,7 +496,7 @@ export class WorkflowJournal {
       ...record.prNumber === undefined ? {} : { prNumber: record.prNumber },
       ...record.prUrl === undefined ? {} : { prUrl: record.prUrl },
     })
-    await this.#flush()
+    await this.#durable()
   }
 
   /**
@@ -401,7 +511,7 @@ export class WorkflowJournal {
       evidence: record.evidence.map(reference => ({ ...reference })),
       ...record.stageId === undefined ? {} : { stageId: record.stageId },
     })
-    await this.#flush()
+    await this.#durable()
   }
 
   /**
@@ -409,7 +519,7 @@ export class WorkflowJournal {
    * @param executor - The executor whose circuit moved.
    * @param from - The state it left.
    * @param to - The state it entered.
-   * @param reason - Machine-readable cause, e.g. `failure:rate-limit`.
+   * @param reason - Machine-readable cause, e.g. `failure:usage-limit-exceeded`.
    */
   circuitBreaker(
     executor: string,
@@ -439,7 +549,7 @@ export class WorkflowJournal {
       verdict,
       summary,
     })
-    await this.#flush()
+    await this.#durable()
   }
 }
 
@@ -470,6 +580,8 @@ interface Projected {
   circuits: Record<string, 'AVAILABLE' | 'DEGRADED'>
   started: string[]
   ended: string[]
+  capabilityStarted: string[]
+  capabilityEnded: string[]
   end?: WorkflowProjection['end']
 }
 
@@ -520,6 +632,16 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
       state.ended.push((data as unknown as { stageId: string }).stageId)
       return
     }
+    case 'harness/capability-start': {
+      const payload = data as unknown as { stageId: string; capability: string }
+      state.capabilityStarted.push(`${payload.stageId}:${payload.capability}`)
+      return
+    }
+    case 'harness/capability-end': {
+      const payload = data as unknown as { stageId: string; capability: string }
+      state.capabilityEnded.push(`${payload.stageId}:${payload.capability}`)
+      return
+    }
     case 'harness/finding': {
       state.findings.push((data as unknown as { finding: Finding }).finding)
       return
@@ -556,6 +678,26 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
 }
 
 /**
+ * The starts no end accounts for, pairing one end to one start.
+ *
+ * Counted rather than set-subtracted, because the same stage may run the same
+ * capability twice: two starts and one end leave one window open, and a set
+ * difference would report none.
+ * @param starts - The start keys, in log order.
+ * @param ends - The end keys, in log order.
+ * @returns The starts still unaccounted for.
+ */
+function unmatched(starts: readonly string[], ends: readonly string[]): string[] {
+  const remaining = [...ends]
+  return starts.filter((key) => {
+    const index = remaining.indexOf(key)
+    if (index === -1) return true
+    remaining.splice(index, 1)
+    return false
+  })
+}
+
+/**
  * Rebuild one workflow's state from a session's event log.
  *
  * The projection reads `harness/*` events and nothing else, so pruning tool
@@ -579,19 +721,16 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     circuits: {},
     started: [],
     ended: [],
+    capabilityStarted: [],
+    capabilityEnded: [],
   }
   for (const event of events) {
     const data = harnessPayload(event)
     if (data === undefined || data.workflowId !== workflowId) continue
     fold(state, event.type as HarnessEventType, data)
   }
-  const ended = [...state.ended]
-  const openStages = state.started.filter((stageId) => {
-    const index = ended.indexOf(stageId)
-    if (index === -1) return true
-    ended.splice(index, 1)
-    return false
-  })
+  const openStages = unmatched(state.started, state.ended)
+  const openCapabilities = unmatched(state.capabilityStarted, state.capabilityEnded)
   return Object.freeze({
     workflowId,
     routes: Object.freeze(state.routes),
@@ -602,6 +741,7 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     blockers: Object.freeze(state.blockers),
     circuits: Object.freeze(state.circuits),
     openStages: Object.freeze(openStages),
+    openCapabilities: Object.freeze(openCapabilities),
     executorStarts: state.started.length,
     ...state.objective === undefined ? {} : { objective: state.objective },
     ...state.end === undefined ? {} : { end: state.end },

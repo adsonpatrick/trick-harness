@@ -31,6 +31,9 @@ export type ExecutorOutcome = 'completed' | 'failed' | 'canceled'
 /** The mutations delivery is allowed to record. */
 export type DeliveryAction = 'commit' | 'push' | 'pr-open' | 'pr-update'
 
+/** How one deterministic capability run stopped. */
+export type CapabilityOutcome = 'completed' | 'aborted' | 'error'
+
 /** Why a workflow stopped short of a verdict. */
 export type BlockerKind = 'product-decision' | 'design-decision' | 'budget-exhausted' | 'unroutable' | 'external'
 
@@ -97,6 +100,30 @@ declare module '@deepseek-ai/dsh-session/types' {
       outcome: ExecutorOutcome
       failureClass?: string
       durationMs: number
+    }
+    /**
+     * A deterministic capability began work for one stage.
+     *
+     * Written for the same reason an executor start is: the window between
+     * asking GitHub or Supabase to do something and hearing back is the window
+     * in which the world may have changed without this log knowing. A start
+     * with no end is that window, still open, and `mutationPossible` says
+     * whether anything in it could have left a mark.
+     */
+    'harness/capability-start': {
+      workflowId: string
+      stageId: string
+      capability: string
+      mutationPossible: boolean
+    }
+    /** A deterministic capability finished, with its classified failure when it had one. */
+    'harness/capability-end': {
+      workflowId: string
+      stageId: string
+      capability: string
+      status: CapabilityOutcome
+      durationMs: number
+      failureClass?: string
     }
     /** One triaged finding, carrying its evidence rather than its narration. */
     'harness/finding': { workflowId: string; stageId: string; finding: Finding }

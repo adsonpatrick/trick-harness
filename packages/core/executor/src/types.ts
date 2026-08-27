@@ -93,6 +93,27 @@ export interface ExecutorFailure {
   readonly httpStatus?: number
 }
 
+/**
+ * One owned-resource teardown that failed, described in terms safe to store.
+ *
+ * Separate from {@link ExecutorFailure} on purpose, and narrower: it has no
+ * `availability` field because a teardown fault is never a reachability verdict
+ * on the executor. Failing to close a server the run already finished talking to
+ * says nothing about whether a second run would reach that product, so this fact
+ * must not be able to reach fallback routing at all — the way to guarantee that
+ * is to give it no field fallback routing reads.
+ *
+ * The same prohibition as {@link ExecutorFailure} applies to `safeDiagnostic`:
+ * no raw stderr, response body, environment, stack, or provider prose. Build it
+ * with `cleanupFailure`, which is the only sanctioned construction.
+ */
+export interface ExecutorCleanupFailure {
+  /** Stable machine-readable cleanup class, e.g. `'opencode-server-close'`. */
+  readonly category: string
+  /** Redacted diagnostic, derived from the category and the error's class name. */
+  readonly safeDiagnostic: string
+}
+
 /** The bounded outcome of one run. */
 export interface ExecutorResult {
   readonly status: 'completed' | 'aborted' | 'error'
@@ -100,6 +121,16 @@ export interface ExecutorResult {
   readonly output: string
   /** Present exactly when `status` is `'error'`. */
   readonly failure?: ExecutorFailure
+  /**
+   * Teardown faults observed while the run gave its resources back.
+   *
+   * Independent of `status`, and deliberately able to accompany any of them: a
+   * task that answered correctly and then failed to close its server is still
+   * `completed`, and the outcome must not be downgraded to hide that. Absent
+   * when teardown was clean, so its presence is the fact, never a count of
+   * nothing. A run can fail more than one teardown, so it is a list.
+   */
+  readonly cleanup?: readonly ExecutorCleanupFailure[]
 }
 
 /** One product runtime, adapted to the executor contract. */

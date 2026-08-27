@@ -14,7 +14,15 @@ Observable facts and bounded evidence references. A model's reasoning is not a f
 
 ## Flushing, and what it is for
 
-Most appends ride the session's ordinary buffering. Six do not: a route fallback, a diagnosis, a verdict, a delivery mutation, a blocker, and the terminal state are awaited to durable storage as they happen. Each is a fact a restart would otherwise act against — a push that already happened read as a push about to happen, a lowered verdict with its explanation missing, a repair authorised by a root cause nobody can now read.
+Most appends ride the session's ordinary buffering. The rest do not: a route fallback, a diagnosis, a verdict, a delivery mutation, a blocker, the terminal state, and both halves of a capability window are awaited to durable storage as they happen. Each is a fact a restart would otherwise act against — a push that already happened read as a push about to happen, a lowered verdict with its explanation missing, a repair authorised by a root cause nobody can now read.
+
+A flush that resolves `false` is treated exactly as one that rejects. A checkpoint that did not happen is the same fact either way, and the work waiting on it must not proceed on the difference.
+
+## The barrier in front of anything that can act
+
+`beginExecutor` appends the route and the start and then checkpoints, and nothing may dispatch a provider until it returns. `beginCapability` does the same for deterministic work — a GitHub push, a Supabase preview branch — and `endCapability` closes the window. The gap between the two is the interval in which the world may have moved with nothing recorded, so it is made visible rather than assumed away: `projectWorkflow` reports every unclosed one as `openCapabilities`, and a restart reads them as work that must be verified before anything is retried.
+
+The pairing is counted, not set-subtracted. A stage that ran one capability twice and heard back once has a window still open, and reporting none is the single answer a restart must never be given. What is kept is which capability ran, for which stage, whether it could mutate, how it stopped and how long it took — never its output, its connection string, or its credentials.
 
 ## Refusing a log it cannot read
 

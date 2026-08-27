@@ -750,14 +750,22 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the number of active runs.',
       },
       {
-        signature: 'stop(): void',
-        description: 'Abort every run in flight when the owning context stops.',
+        signature: 'cleanupReport(): ExecutorCleanupReport',
+        description: 'Report what this runtime has seen of its providers\' teardown.',
         parameters: [],
+        returns: 'the standing cleanup evidence.',
       },
       {
-        signature: 'dispose(): void',
-        description: 'Unregister every provider and abort every run in flight.',
+        signature: 'stop(): Promise<void>',
+        description: 'End every run in flight when the owning context stops, and wait for them.\n\nReturned rather than fired off, so Cordis holds the fiber open until the runtime is actually quiet: a context that finished stopping while a provider was still killing a process tree would leave that tree orphaned with nothing left to attribute it to.',
         parameters: [],
+        returns: 'Nothing; resolves when the runtime is quiet.',
+      },
+      {
+        signature: 'dispose(): Promise<void>',
+        description: 'Unregister every provider, abort every run in flight, and wait for them.',
+        parameters: [],
+        returns: 'Nothing; resolves when the runtime is quiet.',
       },
     ],
   },
@@ -3410,6 +3418,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ExecutorCapabilities {\n    readonly modelOverride: boolean;\n    readonly reasoningEffort: boolean;\n    readonly permissionModes: readonly ExecutorPermissionMode[];\n}',
   },
   {
+    name: 'ExecutorCleanupFailure',
+    declaration: 'export interface ExecutorCleanupFailure {\n    readonly category: string;\n    readonly safeDiagnostic: string;\n}',
+  },
+  {
+    name: 'ExecutorCleanupReport',
+    declaration: 'export interface ExecutorCleanupReport {\n    readonly clean: boolean;\n    readonly total: number;\n    readonly retained: readonly ExecutorCleanupFailure[];\n}',
+  },
+  {
     name: 'ExecutorFailure',
     declaration: 'export interface ExecutorFailure {\n    readonly category: string;\n    readonly availability: boolean;\n    readonly safeDiagnostic: string;\n    readonly httpStatus?: number;\n}',
   },
@@ -3427,7 +3443,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ExecutorResult',
-    declaration: 'export interface ExecutorResult {\n    readonly status: \'completed\' | \'aborted\' | \'error\';\n    readonly output: string;\n    readonly failure?: ExecutorFailure;\n}',
+    declaration: 'export interface ExecutorResult {\n    readonly status: \'completed\' | \'aborted\' | \'error\';\n    readonly output: string;\n    readonly failure?: ExecutorFailure;\n    readonly cleanup?: readonly ExecutorCleanupFailure[];\n}',
   },
   {
     name: 'ExecutorRoute',
@@ -4195,7 +4211,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SecurityPolicyDefinition',
-    declaration: 'export interface SecurityPolicyDefinition {\n    readonly rules: readonly PolicyRuleDefinition[];\n}',
+    declaration: 'export interface SecurityPolicyDefinition {\n    readonly rules: readonly PolicyRuleDefinition[];\n    readonly repairRules?: readonly SecurityRepairRule[];\n}',
+  },
+  {
+    name: 'SecurityRepairRule',
+    declaration: 'export interface SecurityRepairRule {\n    readonly id: string;\n    readonly findingClass: \'SECURITY_BUG\';\n    readonly allowedBoundaries: readonly string[];\n}',
   },
   {
     name: 'SendTeamMessageRequest',

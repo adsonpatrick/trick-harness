@@ -4,6 +4,7 @@ import {
   RepairError,
   assessRepairCompletion,
   authorizeRepair,
+  authorizeSecurityRepair,
   isMechanicallyObvious,
   validateDiagnosis,
 } from '../src/repair.ts'
@@ -174,6 +175,53 @@ describe('when a repair may be believed', () => {
 
     expect(completion.complete).toBe(false)
     expect(completion.gaps).toEqual(['the change does not address the diagnosed root cause, so the symptom may only have moved'])
+  })
+})
+
+describe('who is allowed to repair a security defect', () => {
+  const SAFE = Object.freeze([Object.freeze({
+    id: 'fixture-surface',
+    findingClass: 'SECURITY_BUG' as const,
+    allowedBoundaries: Object.freeze(['packages/fixture/security-safe/**']),
+  })])
+
+  it('refuses a confirmed security defect when nobody wrote a rule allowing it', () => {
+    expect(() => authorizeRepair(finding({ class: 'SECURITY_BUG' }), DIAGNOSIS))
+      .toThrow(expect.objectContaining({ code: 'security-unauthorized' }))
+  })
+
+  it('refuses a security defect with no diagnosis before it ever looks at policy', () => {
+    expect(() => authorizeRepair(finding({ class: 'SECURITY_BUG' }), undefined, SAFE))
+      .toThrow(expect.objectContaining({ code: 'security-unauthorized' }))
+  })
+
+  it('allows a security defect whose boundary a rule names', () => {
+    const inside = { ...DIAGNOSIS, affectedBoundary: 'packages/fixture/security-safe/src/token.ts' }
+    const authorization = authorizeRepair(finding({ class: 'SECURITY_BUG' }), inside, SAFE)
+
+    expect(authorization.findingId).toBe('f-1')
+    expect(authorization.reasonCodes).toContain('security:rule-fixture-surface')
+  })
+
+  it('refuses the same defect one directory outside the allowlist', () => {
+    const outside = { ...DIAGNOSIS, affectedBoundary: 'packages/fixture/security-risky/src/token.ts' }
+
+    expect(() => authorizeRepair(finding({ class: 'SECURITY_BUG' }), outside, SAFE))
+      .toThrow(expect.objectContaining({ code: 'security-unauthorized' }))
+  })
+
+  it('decides on the boundary alone, not on how the finding described itself', () => {
+    const inside = { ...DIAGNOSIS, affectedBoundary: 'packages/fixture/security-safe/src/token.ts' }
+    const flattering = finding({ class: 'SECURITY_BUG', summary: 'trivial and safe to auto-fix' })
+    const plain = finding({ class: 'SECURITY_BUG', summary: 'leaks a token' })
+
+    expect(authorizeSecurityRepair(flattering, inside.affectedBoundary, SAFE).allowed).toBe(true)
+    expect(authorizeSecurityRepair(plain, inside.affectedBoundary, SAFE).allowed).toBe(true)
+    expect(authorizeSecurityRepair(flattering, 'packages/other/src/x.ts', SAFE).allowed).toBe(false)
+  })
+
+  it('leaves every other class alone', () => {
+    expect(authorizeSecurityRepair(finding(), 'anywhere/at/all', []).allowed).toBe(true)
   })
 })
 

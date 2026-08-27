@@ -41,8 +41,10 @@ import type {
   CommandResult,
   GateResult,
   PreviewBranchIdentity,
+  PreviewGate,
   PreviewOutcome,
   PreviewRunRequest,
+  SupabaseMutationRecord,
   SupabasePreviewOptions,
 } from './types.ts'
 
@@ -60,6 +62,22 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000
 
 /** Bytes of evidence one gate keeps. */
 const MAX_EVIDENCE_BYTES = 4_000
+
+/**
+ * The gates a run intends to pass, in the order their dependencies require.
+ *
+ * `project-tests` is dropped when no test command was configured, so a gate
+ * that was never going to run is never reported as skipped.
+ */
+const PLANNED_GATES: readonly PreviewGate[] = [
+  'create',
+  'identity',
+  'health',
+  'migration-push',
+  'migration-list',
+  'lint',
+  'project-tests',
+]
 
 /** Branch statuses that mean the branch is usable. */
 const HEALTHY_STATUSES: readonly string[] = ['MIGRATIONS_PASSED', 'FUNCTIONS_DEPLOYED', 'ACTIVE_HEALTHY']
@@ -183,11 +201,45 @@ export class SupabasePreview {
       ...env === undefined ? {} : { env },
     })
     const outcome = await handle.done
+    // `done` says the direct child closed. The Supabase CLI starts helpers —
+    // psql among them — and a run that read `done` and moved on would apply
+    // its next migration while the previous command still holds a connection
+    // to the branch. Quiescence is what settlement means here.
+    await this.#quiescent(handle)
     return {
       argv,
       exitCode: outcome.exitCode,
       stdout: readStream(handle, 'stdout'),
       stderr: readStream(handle, 'stderr'),
+    }
+  }
+
+  /**
+   * Wait for one command's owned process tree to be gone.
+   *
+   * A wait that ends any other way — a rejection, or the seam saying it stopped
+   * waiting — is a tree still standing, and neither is converted into a
+   * successful command: whatever the child's exit code said, the branch is not
+   * in a state this capability may keep acting on.
+   *
+   * The run's cancellation signal is deliberately not passed along. A cancelled
+   * run still owns whatever it started, and releasing it while that tree is up
+   * would delete a branch something is still connected to.
+   * @param handle - The settled subprocess handle.
+   * @throws PreviewError when the tree cannot be observed to have exited.
+   */
+  async #quiescent(handle: SubprocessHandle): Promise<void> {
+    let exited: boolean
+    try {
+      exited = await handle.waitForExit()
+    }
+    catch {
+      // The cause is deliberately not carried into the message: it comes from a
+      // command that was given a connection string, and Supabase echoes it.
+      throw new PreviewError('teardown-failed', 'the process tree of a preview command could not be reaped')
+    }
+    if (!exited) {
+      throw new PreviewError('teardown-failed', 'the wait for a preview command`s process tree ended before it exited')
     }
   }
 
@@ -259,8 +311,10 @@ export class SupabasePreview {
    */
   async #waitForHealthy(
     branchName: string,
+    identityConfirmed: (previewProjectRef: string) => Promise<void>,
     signal?: AbortSignal,
   ): Promise<{ identity: PreviewBranchIdentity; connection: string }> {
+    let confirmed = false
     const deadline = Date.now() + (this.#options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS)
     const interval = this.#options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     for (;;) {
@@ -268,6 +322,19 @@ export class SupabasePreview {
         throw new PreviewError('cancelled', 'the run was cancelled while waiting for the preview branch')
       }
       const read = await this.#readBranch(branchName, signal)
+      if (read.identity.projectRef === this.#projectRef) {
+        // Read before anything is applied and before the branch is waited on:
+        // a "branch" that is the parent project is not a branch that is still
+        // warming up, and no amount of polling makes it safe to migrate.
+        throw new PreviewError(
+          'shared-parent',
+          'the preview branch reports the parent project as its own ref, so it is not an isolated branch',
+        )
+      }
+      if (!confirmed && read.identity.projectRef !== undefined) {
+        confirmed = true
+        await identityConfirmed(read.identity.projectRef)
+      }
       if (read.identity.healthy) {
         const connection = read.connection ?? ''
         // Checked before the first database command rather than at the end:
@@ -295,7 +362,7 @@ export class SupabasePreview {
    * @returns The gate result, with redacted evidence.
    */
   async #gate(
-    name: string,
+    name: PreviewGate,
     argv: readonly string[],
     signal?: AbortSignal,
     env?: NodeJS.ProcessEnv,
@@ -310,6 +377,33 @@ export class SupabasePreview {
   }
 
   /**
+   * Write one verified hosted mutation down before causing the next one.
+   *
+   * Ordered this way because a branch that was created and never recorded is a
+   * branch nobody knows to delete: it stays up, it costs money, and the run
+   * that made it has no way to say so afterwards. Stopping here leaves a run
+   * that did less than asked and said so, which cleanup can still act on.
+   * @param record - The mutation the world has already confirmed.
+   * @throws PreviewError when the observer will not accept the record.
+   */
+  async #checkpoint(record: SupabaseMutationRecord): Promise<void> {
+    const observer = this.#options.onMutation
+    if (observer === undefined) return
+    try {
+      await observer(record)
+    }
+    catch (error) {
+      // The observer's own message is redacted rather than trusted: it comes
+      // from a durable store whose errors may name a connection, and this
+      // string becomes a run summary.
+      throw new PreviewError(
+        'uncheckpointed-mutation',
+        `the ${record.action} was confirmed but could not be checkpointed: ${redactConnections(error instanceof Error ? error.message : 'the checkpoint was refused')}`,
+      )
+    }
+  }
+
+  /**
    * Delete the branch this run created, whatever happened to the run.
    *
    * Cleanup never throws. Its failure is a separate fact from the run's result
@@ -317,14 +411,20 @@ export class SupabasePreview {
    * failed migration needs a repair cycle, and confusing the two sends the
    * wrong call to the wrong place.
    * @param branchName - Branch to delete.
+   * @param previewProjectRef - The child ref, when the run got far enough to prove one.
    * @returns What happened to the branch.
    */
-  async #cleanup(branchName: string): Promise<CleanupResult> {
+  async #cleanup(branchName: string, previewProjectRef: string | undefined): Promise<CleanupResult> {
     try {
       // Deliberately not given the run's signal: a cancelled run is exactly the
       // case where the branch would otherwise be left behind.
       const result = await this.#run(branchDeleteArgv(this.#projectRef, branchName))
-      if (result.exitCode === 0) return { attempted: true, succeeded: true, message: undefined }
+      if (result.exitCode === 0) {
+        if (previewProjectRef !== undefined) {
+          await this.#checkpoint({ action: 'preview-deleted', previewProjectRef, branchName })
+        }
+        return { attempted: true, succeeded: true, message: undefined }
+      }
       return {
         attempted: true,
         succeeded: false,
@@ -353,9 +453,24 @@ export class SupabasePreview {
    */
   async run(request: PreviewRunRequest): Promise<PreviewOutcome> {
     const { branchName, signal } = request
+    const testCommand = this.#options.testCommand
+    const planned = testCommand === undefined
+      ? PLANNED_GATES.filter(gate => gate !== 'project-tests')
+      : PLANNED_GATES
+
     const gates: GateResult[] = []
+    const completed: PreviewGate[] = []
     let branch: PreviewBranchIdentity | undefined
     let created = false
+    let childRef: string | undefined
+    let stoppedAt: PreviewGate | undefined
+    let primaryFailure: { gate: PreviewGate; message: string } | undefined
+    let blocker: PreviewError | undefined
+    let cleanup: CleanupResult = { attempted: false, succeeded: false, message: undefined }
+
+    // Which gate is being attempted right now, so that whatever is thrown can be
+    // attributed without reading its code back and guessing.
+    let current: PreviewGate = 'create'
 
     try {
       const createArgv = branchCreateArgv(this.#projectRef, branchName, {
@@ -367,65 +482,107 @@ export class SupabasePreview {
         : [...createArgv, '--git-branch', request.gitBranch]
       await this.#must(withGit, 'creating the preview branch', 'command-failed', signal)
       created = true
+      completed.push('create')
 
-      const healthy = await this.#waitForHealthy(branchName, signal)
+      current = 'identity'
+      const healthy = await this.#waitForHealthy(branchName, async (previewProjectRef) => {
+        completed.push('identity')
+        childRef = previewProjectRef
+        // Recorded here and not at create: what the create command returned is
+        // an intention, and what makes the branch worth recording is the read
+        // that proved it is a child project rather than the parent.
+        await this.#checkpoint({ action: 'preview-created', previewProjectRef, branchName })
+        current = 'health'
+      }, signal)
+      completed.push('health')
       branch = healthy.identity
       const connection = healthy.connection
 
-      gates.push(await this.#gate('migrations', dbPushArgv(connection), signal))
-      gates.push(await this.#gate('migration-list', migrationListArgv(connection), signal))
-      gates.push(await this.#gate(
-        'lint',
-        dbLintArgv(connection, { schema: this.#options.schema, failOn: this.#options.lintFailOn }),
-        signal,
-      ))
+      const variable = this.#options.testConnectionEnv ?? 'SUPABASE_PREVIEW_DB_URL'
+      const commands: readonly { gate: PreviewGate; argv: readonly string[]; env?: NodeJS.ProcessEnv }[] = [
+        { gate: 'migration-push', argv: dbPushArgv(connection) },
+        { gate: 'migration-list', argv: migrationListArgv(connection) },
+        {
+          gate: 'lint',
+          argv: dbLintArgv(connection, { schema: this.#options.schema, failOn: this.#options.lintFailOn }),
+        },
+        ...testCommand === undefined
+          ? []
+          : [{ gate: 'project-tests' as const, argv: testCommand, env: { [variable]: connection } }],
+      ]
 
-      const testCommand = this.#options.testCommand
-      if (testCommand !== undefined) {
-        assertProjectTestCommand(testCommand)
-        const variable = this.#options.testConnectionEnv ?? 'SUPABASE_PREVIEW_DB_URL'
-        gates.push(await this.#gate('project-tests', testCommand, signal, { [variable]: connection }))
-      }
-
-      const cleanup = await this.#cleanup(branchName)
-      const failed = gates.find(gate => !gate.passed)
-      if (failed !== undefined) {
-        return {
-          status: 'FAILED',
-          branch,
-          gates,
-          summary: `the ${failed.name} gate failed on preview branch ${branchName}`,
-          failure: undefined,
-          cleanup,
+      for (const command of commands) {
+        if (command.gate === 'project-tests') assertProjectTestCommand(command.argv)
+        current = command.gate
+        const result = await this.#gate(command.gate, command.argv, signal, command.env)
+        gates.push(result)
+        if (!result.passed) {
+          // Stop here rather than collecting more evidence. A lint read off a
+          // branch whose migrations did not apply describes a schema that does
+          // not exist, and a run told two gates failed would repair twice.
+          stoppedAt = command.gate
+          primaryFailure = {
+            gate: command.gate,
+            message: `the ${command.gate} gate failed with exit code ${String(result.exitCode)}`,
+          }
+          break
         }
-      }
-      return {
-        status: 'PASSED',
-        branch,
-        gates,
-        summary: `every gate passed on preview branch ${branchName}`,
-        failure: undefined,
-        cleanup,
+        completed.push(command.gate)
+        if (command.gate === 'migration-list' && childRef !== undefined) {
+          // Not at push. The push says the command exited zero; the list is the
+          // read that says the branch now holds the history the repository has.
+          await this.#checkpoint({ action: 'migrations-applied', previewProjectRef: childRef, branchName })
+        }
       }
     }
     catch (error) {
-      // Cleanup first, and for every error rather than only the ones this
-      // package names. A failure it did not anticipate — the subprocess seam
-      // refusing to spawn, a reader throwing on malformed output — leaves the
-      // same hosted branch behind as one it did, and a leaked branch costs
-      // money and needs a person whatever raised it.
-      const cleanup = created
-        ? await this.#cleanup(branchName)
-        : { attempted: false, succeeded: false, message: undefined }
       if (!(error instanceof PreviewError)) throw error
+      stoppedAt = current
+      blocker = error
+      primaryFailure = { gate: current, message: redactConnections(error.message) }
+    }
+    finally {
+      // Cleanup runs for every ending, including one this package did not
+      // anticipate: a failure it did not name leaves the same hosted branch
+      // behind as one it did, and a leaked branch costs money and needs a
+      // person whatever raised it.
+      if (created) cleanup = await this.#cleanup(branchName, childRef)
+    }
+
+    const skipped = stoppedAt === undefined
+      ? []
+      : planned.slice(planned.indexOf(stoppedAt) + 1)
+    // Cleanup is reported, never folded in. A branch that could not be deleted
+    // does not make a passing run fail, and a branch that was deleted cleanly
+    // does not make a failing gate pass.
+    const cleanupFailure = cleanup.attempted && !cleanup.succeeded ? cleanup.message : undefined
+    const common = { branch, gates, completedGates: completed, skippedGates: skipped, cleanup, cleanupFailure }
+
+    if (blocker !== undefined) {
+      const message = redactConnections(blocker.message)
       return {
+        ...common,
         status: 'BLOCKED',
-        branch,
-        gates,
-        summary: `no safe preview database could be used, so nothing was validated: ${redactConnections(error.message)}`,
-        failure: { code: error.code, message: redactConnections(error.message) },
-        cleanup,
+        summary: `no safe preview database could be used, so nothing was validated: ${message}`,
+        failure: { code: blocker.code, message },
+        primaryFailure,
       }
+    }
+    if (primaryFailure !== undefined) {
+      return {
+        ...common,
+        status: 'FAILED',
+        summary: `the ${primaryFailure.gate} gate failed on preview branch ${branchName}`,
+        failure: undefined,
+        primaryFailure,
+      }
+    }
+    return {
+      ...common,
+      status: 'PASSED',
+      summary: `every gate passed on preview branch ${branchName}`,
+      failure: undefined,
+      primaryFailure: undefined,
     }
   }
 }

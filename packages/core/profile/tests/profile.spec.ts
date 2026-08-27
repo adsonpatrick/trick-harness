@@ -74,6 +74,36 @@ describe('validateProfile', () => {
     expect(check(without(block))).toThrow(ProfileValidationError)
   })
 
+  it('accepts a security policy that names no repair rules at all', () => {
+    expect(check({ ...valid, securityPolicy: { rules: [], repairRules: [] } })).not.toThrow()
+  })
+
+  it('accepts a security repair rule that names the boundaries it covers', () => {
+    expect(check({
+      ...valid,
+      securityPolicy: {
+        rules: [],
+        repairRules: [{ id: 'fixture', findingClass: 'SECURITY_BUG', allowedBoundaries: ['packages/fixture/**'] }],
+      },
+    })).not.toThrow()
+  })
+
+  it.each([
+    { repairRules: {} },
+    { repairRules: [{ id: '', findingClass: 'SECURITY_BUG', allowedBoundaries: ['a/**'] }] },
+    { repairRules: [{ id: 'a', findingClass: 'BUG', allowedBoundaries: ['a/**'] }] },
+    { repairRules: [{ id: 'a', findingClass: 'SECURITY_BUG', allowedBoundaries: 'a/**' }] },
+    { repairRules: [{ id: 'a', findingClass: 'SECURITY_BUG' }] },
+    {
+      repairRules: [
+        { id: 'a', findingClass: 'SECURITY_BUG', allowedBoundaries: ['a/**'] },
+        { id: 'a', findingClass: 'SECURITY_BUG', allowedBoundaries: ['b/**'] },
+      ],
+    },
+  ])('rejects a malformed security repair rule %o', (patch) => {
+    expect(check({ ...valid, securityPolicy: { rules: [], ...patch } })).toThrow(ProfileValidationError)
+  })
+
   it.each([0, -1, 1.5, Number.NaN])('rejects maxRepairCycles %o', (maxRepairCycles) => {
     expect(check({
       ...valid,
@@ -130,6 +160,78 @@ describe('validateProfile', () => {
   it('names the offending field in the failure message', () => {
     expect(check({ ...valid, policyVersion: 'nope' }))
       .toThrow(/policyVersion/)
+  })
+})
+
+describe('policy is flat scalar data and nothing else', () => {
+  /**
+   * Rebuild the routing policy with one rule whose `when` or `use` carries the
+   * value under test, so a rejection can only be about that value.
+   * @param side - which half of the rule to poison.
+   * @param value - the value a deserialized caller might supply.
+   * @returns a profile-shaped candidate for the validator.
+   */
+  function ruleWith(side: 'when' | 'use', value: unknown): unknown {
+    const rule = { id: 'default', when: {}, use: { executor: 'fixture' }, [side]: { field: value } }
+    return { ...valid, routingPolicy: { rules: [rule], fallbackRules: [] } }
+  }
+
+  const rejected: readonly (readonly [string, unknown])[] = [
+    ['a nested object', { nested: true }],
+    ['an array', []],
+    ['null', null],
+    ['undefined', undefined],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+    ['a function', (): void => {}],
+    ['a bigint', 10n],
+    ['a symbol', Symbol('policy')],
+  ]
+
+  for (const side of ['when', 'use'] as const) {
+    it.each(rejected)(`rejects %s in ${side}`, (_label, value) => {
+      expect(check(ruleWith(side, value))).toThrow(ProfileValidationError)
+    })
+
+    it(`names the exact entry path of the offending ${side} value`, () => {
+      expect(check(ruleWith(side, { nested: true })))
+        .toThrow(new RegExp(`routingPolicy\\.rules\\[0\\]\\.${side}\\.field`))
+    })
+  }
+
+  it.each([
+    ['a string', 'opencode'],
+    ['a boolean', true],
+    ['a finite number', 3],
+    ['zero', 0],
+    ['a negative number', -1],
+  ])('accepts %s as a policy value', (_label, value) => {
+    expect(check(ruleWith('use', value))).not.toThrow()
+  })
+
+  it('holds fallback rules to the same contract as primary rules', () => {
+    expect(check({
+      ...valid,
+      routingPolicy: {
+        rules: valid.routingPolicy.rules,
+        fallbackRules: [{ id: 'spare', when: {}, use: { executor: { name: 'codex' } } }],
+      },
+    })).toThrow(/routingPolicy\.fallbackRules\[0\]\.use\.executor/)
+  })
+
+  it('does not let an inherited property satisfy the contract', () => {
+    // A rule table whose only "value" lives on the prototype declares nothing:
+    // `Object.entries` sees an empty policy while a naive `in` check would see
+    // a route. The validator reads own enumerable keys, so this is empty.
+    const inherited = Object.create({ executor: 'ghost' }) as Record<string, unknown>
+    expect(check({
+      ...valid,
+      routingPolicy: {
+        rules: [{ id: 'default', when: {}, use: inherited }],
+        fallbackRules: [],
+      },
+    })).toThrow(/routingPolicy\.rules\[0\]\.use/)
   })
 })
 

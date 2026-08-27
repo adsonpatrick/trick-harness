@@ -68,9 +68,40 @@ export interface QaPolicyDefinition {
   readonly rules: readonly PolicyRuleDefinition[]
 }
 
+/**
+ * One boundary a security defect may be repaired automatically inside.
+ *
+ * Stated as a rule rather than decided per run. The alternative is a repair
+ * whose authority comes from the diagnosis that asked for it, which is a model
+ * deciding what a model may change: an allowlist a person wrote and a reviewer
+ * can read is the only thing that makes the decision reviewable in advance.
+ */
+export interface SecurityRepairRule {
+  /** Stable id, unique within the policy, recorded in the authorization. */
+  readonly id: string
+  /** The class this rule speaks for; only security defects need one. */
+  readonly findingClass: 'SECURITY_BUG'
+  /**
+   * Boundaries the repair may touch, as `*`/`**` path patterns.
+   *
+   * Matched against the boundary the diagnosis declared, not against anything
+   * a stage summarised. An empty list authorises nothing, which is the same
+   * answer as having no rule at all.
+   */
+  readonly allowedBoundaries: readonly string[]
+}
+
 /** Triggers selecting security-sensitive review for a changed surface. */
 export interface SecurityPolicyDefinition {
   readonly rules: readonly PolicyRuleDefinition[]
+  /**
+   * Where a security defect may be repaired without a person deciding.
+   *
+   * Absent or empty is fail-closed and means nowhere: a security repair with no
+   * rule behind it does not start. A profile that wants automatic security
+   * repair has to name the ground it is allowed on.
+   */
+  readonly repairRules?: readonly SecurityRepairRule[]
 }
 
 /** Which reusable integrations this project enables, and under what constraints. */

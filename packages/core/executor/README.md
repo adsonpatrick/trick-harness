@@ -20,6 +20,8 @@ The runtime decides which provider a route selects, whether that provider can ho
 
 **Results are bounded.** `output` is the final result, never the child transcript.
 
+**Teardown faults travel beside the outcome, never inside it.** A run that completed and then failed to close its server still completed, so a teardown fault cannot be reported as an execution failure. `ExecutorCleanupFailure` carries a stable category and a diagnostic derived from the error's class name only — never its message, which for teardown exceptions routinely holds ports, URLs and authorization headers. It deliberately has no `availability` field: giving it one would let a failed cleanup reroute the next run, so the guarantee is structural rather than a rule someone must remember. `ctx.executors.cleanupReport()` returns an `ExecutorCleanupReport` — whether the runtime is clean, how many faults it saw in total, and up to `CLEANUP_EVIDENCE_LIMIT` retained facts. The total stays exact when the retained list truncates, so evidence is never silently short, and the report survives `dispose()` because that is when the question gets asked.
+
 ## Usage
 
 ```ts

@@ -46,6 +46,7 @@ export type * from './types.ts'
 import type {
   CommandResult,
   DeliveryOutcome,
+  DeliveryRecordObserver,
   DeliveryRequest,
   GitHubDeliveryOptions,
   PullRequestIdentity,
@@ -108,6 +109,7 @@ export class GitHubDelivery {
   readonly #protectedBranches: readonly string[]
   readonly #graceMs: number
   readonly #env: NodeJS.ProcessEnv | undefined
+  readonly #onRecord: DeliveryRecordObserver | undefined
 
   /**
    * @param options - The workspace, the subprocess seam, and the protected set.
@@ -118,6 +120,36 @@ export class GitHubDelivery {
     this.#protectedBranches = options.protectedBranches ?? PROTECTED_BRANCHES
     this.#graceMs = options.graceMs ?? DEFAULT_GRACE_MS
     this.#env = options.env
+    this.#onRecord = options.onRecord
+  }
+
+  /**
+   * Write one confirmed mutation down before causing the next one.
+   *
+   * Ordered this way because the failure the ordering prevents is the one that
+   * cannot be repaired by looking: a push whose commit was never recorded is
+   * indistinguishable, on restart, from a commit that never happened. Stopping
+   * here leaves a delivery that did less than asked and said so, which is the
+   * state a restart can act on.
+   * @param records - The delivery's record list, appended to before checkpointing.
+   * @param record - The mutation the world has just confirmed.
+   * @throws DeliveryError when the observer will not accept the record.
+   */
+  async #checkpoint(records: DeliveryRecord[], record: DeliveryRecord): Promise<void> {
+    records.push(record)
+    if (this.#onRecord === undefined) return
+    try {
+      await this.#onRecord(record)
+    }
+    catch {
+      // The observer's own message is not carried: it comes from a durable
+      // store whose errors may name a path or a connection, and this string
+      // becomes a delivery summary.
+      throw new DeliveryError(
+        'uncheckpointed-mutation',
+        `the ${record.action} was confirmed but could not be checkpointed, so delivery stopped before the next mutation`,
+      )
+    }
   }
 
   /**
@@ -144,11 +176,47 @@ export class GitHubDelivery {
       ...this.#env === undefined ? {} : { env: this.#env },
     })
     const outcome = await handle.done
+    // `done` says the direct child closed. It does not say the tree it started
+    // is gone, and git is a program that starts helpers: a delivery that read
+    // `done` and moved on would run its next command against an index another
+    // process still holds. Quiescence is what settlement means here.
+    await this.#quiescent(handle)
     return {
       argv,
       exitCode: outcome.exitCode,
       stdout: readStream(handle, 'stdout'),
       stderr: readStream(handle, 'stderr'),
+    }
+  }
+
+  /**
+   * Wait for one command's owned process tree to be gone.
+   *
+   * A wait that ends any other way — a rejection, or the seam saying it stopped
+   * waiting — is a tree still standing. Neither is converted into a successful
+   * command: whatever the child's exit code said, the world is not in a state
+   * this capability may keep acting on.
+   *
+   * The run's cancellation signal is deliberately not passed along. A cancelled
+   * delivery still owns whatever it started, and releasing the operation while
+   * that tree is still up would hand the workspace back to a caller who has no
+   * way of knowing something is still writing to it.
+   * @param handle - The settled subprocess handle.
+   * @throws DeliveryError when the tree cannot be observed to have exited.
+   */
+  async #quiescent(handle: SubprocessHandle): Promise<void> {
+    let exited: boolean
+    try {
+      exited = await handle.waitForExit()
+    }
+    catch {
+      // The cause is deliberately not carried into the message: it comes from a
+      // command whose stderr may hold an authentication URL, and this string
+      // reaches a durable event.
+      throw new DeliveryError('teardown-failed', 'the process tree of a delivery command could not be reaped')
+    }
+    if (!exited) {
+      throw new DeliveryError('teardown-failed', 'the wait for a delivery command`s process tree ended before it exited')
     }
   }
 
@@ -239,7 +307,7 @@ export class GitHubDelivery {
 
       // Re-read: the commit is what HEAD now resolves to, not what commit said.
       commitSha = (await this.#must(revParseArgv('HEAD'), 'reading the new commit', signal)).trim()
-      records.push({ action: 'commit', branch, commitSha })
+      await this.#checkpoint(records, { action: 'commit', branch, commitSha })
 
       await this.#must(pushArgv(branch, this.#protectedBranches), 'pushing the branch', signal)
       const remoteSha = (await this.#run(revParseArgv(`refs/remotes/origin/${branch}`), signal)).stdout.trim()
@@ -249,10 +317,10 @@ export class GitHubDelivery {
           'the remote branch does not hold the commit that was just pushed, so the push is not confirmed',
         )
       }
-      records.push({ action: 'push', branch, commitSha })
+      await this.#checkpoint(records, { action: 'push', branch, commitSha })
 
       pullRequest = await this.#pullRequest(branch, request.pullRequest, signal)
-      records.push({
+      await this.#checkpoint(records, {
         action: pullRequest.created ? 'pr-open' : 'pr-update',
         branch,
         commitSha,

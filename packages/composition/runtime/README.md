@@ -28,6 +28,10 @@ Registration is all-or-nothing. A provider the runtime rejects, or a profile the
 
 Disposal is symmetric: a composition removes exactly what it registered, and a bundle that owns its runtime also ends the runs in flight.
 
+## An objective is asked for; an execution is minted
+
+`run` takes the objective a person asked for and mints its own id for this attempt at it. The two are not the same thing: an objective may be attempted again, and a second attempt sharing the first one's id would append its facts onto that history until no reader could say which run a verdict belonged to. `WorkflowOutcome` carries both, `restartOf` addresses the execution, and an id the Session already holds a run under is refused rather than merged. `workflowIdFactory` exists to make ids readable or ordered, never to reuse one.
+
 ## The whole Harness composes from one profile
 
 `composeHarness` assembles the rest of it: routing policy, the durable journal, the workflow runner, the integrations and the loopback control server, from one `HarnessProfile` and the seams a deployment owns. The profile's routing table plus the deployment's model registry become the policy every route resolves against, so a semantic tier is answered in exactly one place.
@@ -37,6 +41,20 @@ Disposal is symmetric: a composition removes exactly what it registered, and a b
 What composition never supplies is a default for a seam a deployment owns: the session, the journal flush, the interpreter that reads a provider's output back into a verdict. There is no stand-in for any of them, because a stand-in would be this package guessing at a product's shape.
 
 `dispose` unwinds in the order things were handed out, and it waits. The control server goes first, since it owns the runs it started and settles them before anything they are still writing to is taken away. Then the runs a caller started directly: each is canceled and awaited, because unregistering a provider under a run that is still dispatching would fail it with an unregistered-executor error rather than end it as canceled — a disposal that reported a crash instead of a cancellation would be lying about why the work stopped. Only then do the registrations and the runtime go.
+
+## A run may be overridden once, and never the policy
+
+`run(objective, signal, routeOverride)` takes one human routing choice: a role, an executor, a semantic tier, optionally a reasoning effort. It is spent on the first stage of that role and only once a route actually resolved with it, so an override the router refused changes nothing rather than being burnt on a stage nobody ran.
+
+It is handed to the run and nowhere else. The profile's routing table is not edited, no provider is reconfigured, and nothing about it survives into the next run. An override that stayed in force would silently become policy for every later stage of that role — including repair cycles nobody asked about — which is how one person's situational call turns into a project's default. What the stage is allowed to do to the working tree is not part of it: permission mode follows the role, so no override buys a review a writable tree.
+
+The control server accepts the same override on a start request and refuses a malformed one outright, before any workflow id exists. Falling back to the table there would leave a caller who asked for a specific executor with a status poll that never mentions their request was dropped.
+
+## An outage reroutes; a wrong answer does not
+
+A run keeps its own picture of its executors: a circuit per product, the set taken out of the pool entirely, and the starts rerouting has spent. A failure the provider categorised as availability moves the stage to another usable executor and records the move as a durable route fact carrying `fallbackFrom`. A quality failure does not move anywhere — asking a second product the same question and taking its answer would record a second opinion as a recovery.
+
+Every reroute is a real start and is charged against the profile's start budget, so an outage cannot loop for free. Executors this runtime has no provider registered for are degraded from the start, for the same reason: a name with nothing behind it cannot serve a stage, and finding that out at dispatch turns a composition gap into a crash halfway through a run. When nothing usable is left the run blocks, and that block is the expected outcome of an outage with nowhere to go rather than a defect.
 
 ## Usage
 
@@ -99,3 +117,31 @@ Use `composeHarnessRuntime(runtime, options)` instead to add providers to a runt
 - **No live smoke.** Loading is proven not to start a process; that a real product then starts correctly is each provider package's own concern.
 - **One session per composed Harness.** `composeHarness` journals every workflow into the session it was given, so `restartOf` reads whatever that session holds. Serving several unrelated projects means composing several Harnesses.
 - **No Claude overlay ships here.** It composes through `extraProviders` like any other executor, and this fork registers none, so "optional" is the absence of a field rather than a flag that turns something off.
+
+## An objective names the deployment it was written for
+
+`WorkflowObjective` carries a `profileId`, and a Harness is composed from exactly one profile. When the two disagree the run is refused before an execution id is minted, so a mismatched objective leaves nothing behind: no durable start, no executor, no hosted mutation, and not even a spent id.
+
+The check is identity, not compatibility. Every rule the run would be held to — which executors it may reach, which integrations are enabled, what delivery is allowed to touch — comes from the composed profile, and an objective authored against a different one never agreed to any of them.
+
+## Publishing is a capability, never a prompt
+
+A run reaches delivery through `capabilities.delivery`, a port whose whole vocabulary is "publish this stage's work". Composition builds it from two halves: `integrations.github`, which is what publishes, and `workflow.describeDelivery`, which is what says what to publish — the branch, the write set, the commit message and the pull request body. Neither half is invented here. The objective names a requirement, not a branch, so a default would be this package deciding on a deployment's behalf what goes on a remote.
+
+A lifecycle that must publish and finds no capability is blocked. It is not rerouted to an executor with a writable tree and a shell: a model asked to push has authority over the remote that nothing bounds, and the bound is the reason the port exists. Publishing also spends no executor-start budget, because that budget counts how often a model is asked a question and a bounded command sequence is not one of those times.
+
+The capability is built once per run rather than once per composition, because the observer that writes each confirmed mutation down is the journal of the run that caused it. Every commit, push and pull request the delivery re-read from the world becomes a durable `harness/delivery` record before the next mutation is attempted, and a `harness/capability-start` record is flushed before the delivery may act at all — so a run that dies mid-push leaves a window a restart can see is open rather than a silence it has to guess about.
+
+## A schema change is verified somewhere isolated before it is published
+
+`workflow.databaseChange` answers, from the objective alone, whether a run changes a database. When it says yes, the run may not reach delivery until `capabilities.databasePreview` has provisioned an isolated branch, applied the migrations, read them back and passed its gates. No preview composed means the run is blocked — never rerouted to an executor that could approximate one, and never pointed at a shared development database.
+
+The three outcomes stay distinct. `PASSED` publishes. `FAILED` describes the repository's migrations and ends the run as a failure. `BLOCKED` means no safe preview database could be reached at all, which is a fact about the world rather than about the work, so the run is blocked instead. The verification is ordered before delivery on purpose: a pull request is what a person reviews, and a reviewer reading a migration nobody has applied anywhere is reading a guess.
+
+`workflow.describeDatabasePreview` names the branch and nothing else. Where that branch lives and what authenticates to it stay in the CLI's own configuration. What the run left in the cloud — the branch it created, the migrations it applied, the branch it deleted — becomes gate evidence on the stage's verdict, naming the action and the child project ref; connection strings and passwords reach no durable record.
+
+## The lifecycle is deterministic, and the model is never asked what runs next
+
+A deployment that names no plan gets the pull-request lifecycle: implement, verify, deliver, review, QA and a security reading as risk buys them, and a fresh final verification to close. Which stage follows which is decided by the runtime from the objective's risk, before anything is dispatched. A repair is verified, then re-delivered, then re-read — so nothing is published unverified and no reading of the branch predates the fix it is certifying.
+
+The authority boundaries hold through composition, not only in the runtime that composes. Against the real Plurora profile, a full run publishes only through the delivery capability and verifies schema only through the isolated preview; no prompt handed to an executor contains `git push`, `gh pr`, `git commit`, `supabase`, `psql`, or a connection string, and no model is ever routed to a `delivery` stage. A confirmed `SECURITY_BUG` starts no repair there at all, because Plurora's `securityPolicy.repairRules` is stated empty: automatic repair of a security defect happens only on ground somebody wrote down in advance.

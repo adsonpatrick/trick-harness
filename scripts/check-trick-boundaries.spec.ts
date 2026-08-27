@@ -9,6 +9,9 @@ import {
   PROJECT_POLICY_IDENTIFIERS,
 } from './check-trick-boundaries.ts'
 
+/** The real repository, so package-group facts cannot drift from what ships. */
+const repositoryRoot = resolve(import.meta.dirname, '..')
+
 describe('generic package selection', () => {
   it.each([
     'packages/core/profile/src/index.ts',
@@ -74,6 +77,122 @@ describe('profile import direction', () => {
   })
 })
 
+describe('formatting is not a way out of the boundary', () => {
+  /** Where the forbidden import always lands, so each case asserts one thing. */
+  const file = 'packages/core/routing/src/engine.ts'
+
+  /**
+   * The violation a case must produce, at the line its module specifier sits on.
+   * @param line - 1-based line of the string literal naming the profile.
+   * @returns The single expected message.
+   */
+  function reaches(line: number): readonly string[] {
+    return [`${file}:${line}: generic package must not import project policy (profiles/plurora/profile.ts)`]
+  }
+
+  it.each([
+    [
+      'a static import broken across lines',
+      [
+        'import {',
+        '  pluroraProfile,',
+        "} from '../../../../profiles/plurora/profile.ts'",
+      ],
+      3,
+    ],
+    [
+      'a static import whose specifier follows `from` on the next line',
+      [
+        'import { pluroraProfile } from',
+        "  '../../../../profiles/plurora/profile.ts'",
+      ],
+      2,
+    ],
+    [
+      'a re-export broken across lines',
+      [
+        'export {',
+        '  pluroraProfile,',
+        '} from',
+        "  '../../../../profiles/plurora/profile.ts'",
+      ],
+      4,
+    ],
+    [
+      'a dynamic import broken across lines',
+      [
+        'const profile = await import(',
+        "  '../../../../profiles/plurora/profile.ts',",
+        ')',
+      ],
+      2,
+    ],
+    [
+      'a require call broken across lines',
+      [
+        'const profile = require(',
+        "  '../../../../profiles/plurora/profile.ts',",
+        ')',
+      ],
+      2,
+    ],
+    [
+      'a side-effect import whose specifier is on its own line',
+      [
+        'import',
+        "  '../../../../profiles/plurora/profile.ts'",
+      ],
+      2,
+    ],
+  ])('catches %s', (_label, lines, line) => {
+    expect(collectSourceViolations(file, lines.join('\n'))).toEqual(reaches(line))
+  })
+
+  it.each([
+    ['a line comment', "// import { x } from '../../../../profiles/plurora/profile.ts'"],
+    [
+      'a block comment',
+      ['/**', " * See `import { x } from '../../../../profiles/plurora/profile.ts'`.", ' */'].join('\n'),
+    ],
+    ['a string literal', 'const hint = "import x from \'../../../../profiles/plurora/profile.ts\'"'],
+    ['a template literal', 'const hint = `require(\'../../../../profiles/plurora/profile.ts\')`'],
+  ])('does not invent a dependency from %s', (_label, source) => {
+    expect(collectSourceViolations(file, source)).toEqual([])
+  })
+
+  it('leaves a legal import alone however it is wrapped', () => {
+    const source = [
+      'import type {',
+      '  HarnessProfile,',
+      '} from',
+      "  '@trick-harness/profile'",
+      'import {',
+      '  Context,',
+      "} from '@deepseek-ai/cordis'",
+    ].join('\n')
+    expect(collectSourceViolations(file, source, forkLocalPackageGroups(repositoryRoot))).toEqual([])
+  })
+
+  it('catches a wrapped import that runs against the one-way arrow', () => {
+    const source = [
+      'import {',
+      '  composeHarness,',
+      '} from',
+      "  '@trick-harness/composition'",
+    ].join('\n')
+    expect(collectSourceViolations(file, source, forkLocalPackageGroups(repositoryRoot))).toEqual([
+      `${file}:4: packages/core must not import packages/composition (@trick-harness/composition): the dependency arrow runs one way`,
+    ])
+  })
+
+  it('says nothing about a dynamic import whose specifier is computed', () => {
+    // Deliberately outside the rule: a specifier this gate cannot read
+    // statically is not a dependency it can honestly report on.
+    const source = 'const profile = await import(`${base}/profiles/plurora/profile.ts`)'
+    expect(collectSourceViolations(file, source)).toEqual([])
+  })
+})
+
 describe('project-policy identifiers', () => {
   it('names every identifier the amendment reserves', () => {
     expect([...PROJECT_POLICY_IDENTIFIERS]).toEqual([
@@ -116,7 +235,7 @@ describe('project-policy identifiers', () => {
 
 describe('the one-way arrow between generic layers', () => {
   /** The real workspace layout, so the test cannot drift from what ships. */
-  const groups = forkLocalPackageGroups(resolve(import.meta.dirname, '..'))
+  const groups = forkLocalPackageGroups(repositoryRoot)
 
   it('knows which group each fork-local package lives in', () => {
     expect(groups.get('@trick-harness/executor')).toBe('packages/core')

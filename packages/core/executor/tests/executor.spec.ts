@@ -2,6 +2,8 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
+  cleanupFailure,
+  CLEANUP_EVIDENCE_LIMIT,
   createExecutorRuntime,
   dispatchableRoute,
   ExecutorCapabilityError,
@@ -45,6 +47,18 @@ function request(overrides: Partial<ExecutorStartRequest> = {}): ExecutorStartRe
     signal: new AbortController().signal,
     ...overrides,
   }
+}
+
+/**
+ * Drain the microtask queue so a promise that *would* settle already has.
+ *
+ * What the quiescence tests need is the difference between "not settled yet"
+ * and "never going to settle without the provider": a single `await` proves
+ * neither, because a settled promise takes a few turns to reach its callback.
+ * @returns Nothing; resolves once the queue has been given room to run.
+ */
+async function settleMicrotasks(): Promise<void> {
+  for (let turn = 0; turn < 10; turn += 1) await Promise.resolve()
 }
 
 describe('provider registration', () => {
@@ -235,15 +249,26 @@ describe('dispatch and run lifecycle', () => {
   it('refuses to start once the runtime is disposed', async () => {
     const runtime = createExecutorRuntime()
     runtime.register(provider('codex'))
-    runtime.dispose()
+    await runtime.dispose()
     await expect(runtime.start(request())).rejects.toThrow(ExecutorProviderError)
   })
 
-  it('unregisters every provider on disposal', () => {
+  it('refuses to start once disposal has begun, before it has finished', async () => {
+    const runtime = createExecutorRuntime()
+    const teardown = Promise.withResolvers<ExecutorResult>()
+    runtime.register(provider('codex', fullCapabilities, async () => teardown.promise))
+    const inFlight = runtime.start(request())
+    const disposal = runtime.dispose()
+    await expect(runtime.start(request())).rejects.toThrow(ExecutorProviderError)
+    teardown.resolve({ status: 'aborted', output: '' })
+    await Promise.all([disposal, inFlight])
+  })
+
+  it('unregisters every provider on disposal', async () => {
     const runtime = createExecutorRuntime()
     runtime.register(provider('codex'))
     runtime.register(provider('opencode'))
-    runtime.dispose()
+    await runtime.dispose()
     expect(runtime.list()).toEqual([])
   })
 
@@ -255,9 +280,91 @@ describe('dispatch and run lifecycle', () => {
       request_.signal.addEventListener('abort', () => { resolve({ status: 'aborted', output: '' }) })
     })))
     const inFlight = runtime.start(request())
-    runtime.dispose()
+    await runtime.dispose()
     await expect(inFlight).resolves.toMatchObject({ status: 'aborted' })
     expect(observed?.aborted).toBe(true)
+  })
+
+  it('keeps a run counted until the provider settles after its own teardown', async () => {
+    const runtime = createExecutorRuntime()
+    const teardown = Promise.withResolvers<null>()
+    let sawAbort = false
+    runtime.register(provider('codex', fullCapabilities, async (received) => {
+      received.signal.addEventListener('abort', () => { sawAbort = true })
+      await teardown.promise
+      return { status: 'aborted', output: '' }
+    }))
+    const inFlight = runtime.start(request())
+
+    const disposal = runtime.dispose()
+    // The signal has been delivered, but delivery is not quiescence: the
+    // provider is still taking its process tree down.
+    expect(sawAbort).toBe(true)
+    expect(runtime.activeRuns()).toBe(1)
+
+    let quiescent = false
+    void disposal.then(() => { quiescent = true })
+    await settleMicrotasks()
+    expect(quiescent).toBe(false)
+    expect(runtime.activeRuns()).toBe(1)
+
+    teardown.resolve(null)
+    await disposal
+    expect(quiescent).toBe(true)
+    expect(runtime.activeRuns()).toBe(0)
+    await expect(inFlight).resolves.toMatchObject({ status: 'aborted' })
+  })
+
+  it('waits for a provider that ignores the abort entirely', async () => {
+    const runtime = createExecutorRuntime()
+    const finish = Promise.withResolvers<ExecutorResult>()
+    runtime.register(provider('codex', fullCapabilities, async () => finish.promise))
+    const inFlight = runtime.start(request())
+
+    let quiescent = false
+    const disposal = runtime.dispose()
+    void disposal.then(() => { quiescent = true })
+    await settleMicrotasks()
+    expect(quiescent).toBe(false)
+
+    finish.resolve({ status: 'completed', output: 'ok' })
+    await disposal
+    expect(runtime.activeRuns()).toBe(0)
+    await expect(inFlight).resolves.toMatchObject({ status: 'completed' })
+  })
+
+  it('still reaches quiescence when the provider settles by throwing', async () => {
+    const runtime = createExecutorRuntime()
+    const teardown = Promise.withResolvers<null>()
+    runtime.register(provider('codex', fullCapabilities, async () => {
+      await teardown.promise
+      throw new Error('teardown failed')
+    }))
+    const inFlight = runtime.start(request())
+    const rejection = expect(inFlight).rejects.toThrow('teardown failed')
+
+    const disposal = runtime.dispose()
+    teardown.resolve(null)
+    await expect(disposal).resolves.toBeUndefined()
+    expect(runtime.activeRuns()).toBe(0)
+    await rejection
+  })
+
+  it('answers a second disposal with the first one settlement', async () => {
+    const runtime = createExecutorRuntime()
+    const teardown = Promise.withResolvers<ExecutorResult>()
+    runtime.register(provider('codex', fullCapabilities, async () => teardown.promise))
+    const inFlight = runtime.start(request())
+
+    const first = runtime.dispose()
+    const second = runtime.dispose()
+    expect(second).toBe(first)
+
+    teardown.resolve({ status: 'aborted', output: '' })
+    await Promise.all([first, second])
+    expect(runtime.activeRuns()).toBe(0)
+    await inFlight
+    await expect(runtime.dispose()).resolves.toBeUndefined()
   })
 
   it('surfaces a provider failure as a result rather than a throw', async () => {
@@ -343,5 +450,118 @@ describe('narrowing a policy intent to a dispatchable route', () => {
       model: 'anthropic/claude-opus-5',
     })
     await expect(runtime.start({ ...request(), route })).rejects.toThrow(ExecutorCapabilityError)
+  })
+})
+
+describe('cleanup facts travel beside the outcome, not inside it', () => {
+  const wedged = cleanupFailure('opencode-server-close', new Error('EADDRINUSE token=sk-live'))
+
+  it.each([
+    ['completed', { status: 'completed', output: 'ok' }],
+    ['aborted', { status: 'aborted', output: '' }],
+    ['error', {
+      status: 'error',
+      output: '',
+      failure: { category: 'provider-error', availability: false, safeDiagnostic: 'nope' },
+    }],
+  ] as const)('leaves a %s run classified exactly as the provider classified it', async (
+    status,
+    outcome: ExecutorResult,
+  ) => {
+    const runtime = createExecutorRuntime()
+    runtime.register(provider('codex', fullCapabilities, async () =>
+      ({ ...outcome, cleanup: [wedged] })))
+    const result = await runtime.start(request())
+    expect(result.status).toBe(status)
+    expect(result.failure).toEqual(outcome.failure)
+    expect(result.cleanup).toEqual([wedged])
+  })
+
+  it('builds a durable fact from the error class name and nothing else', () => {
+    const error = new Error('listen EADDRINUSE 127.0.0.1:49512 authorization=Bearer sk-live-77')
+    error.name = 'ServerCloseError'
+    expect(cleanupFailure('opencode-server-close', error)).toEqual({
+      category: 'opencode-server-close',
+      safeDiagnostic: 'opencode-server-close failed (ServerCloseError)',
+    })
+  })
+
+  it('refuses a raw message even when a product hides it in the class name', () => {
+    // The only field read off the error is `name`, and `name` is writable. A
+    // product that assigned its message there would otherwise have found the
+    // one gap in a contract whose entire purpose is that no product text passes.
+    const error = new Error('inner')
+    error.name = 'failed to close http://127.0.0.1:49512?token=sk-live-77'
+    expect(cleanupFailure('opencode-server-close', error).safeDiagnostic)
+      .toBe('opencode-server-close failed (Error)')
+  })
+
+  it('names a thrown non-error safely rather than describing it', () => {
+    expect(cleanupFailure('codex-run-dispose', 'kill EPERM pid 4321').safeDiagnostic)
+      .toBe('codex-run-dispose failed (Error)')
+  })
+
+  it('freezes the fact, so nothing downstream can edit the durable record', () => {
+    expect(Object.isFrozen(cleanupFailure('codex-run-dispose', new Error('x')))).toBe(true)
+  })
+})
+
+describe('cleanup evidence outlives the runs that produced it', () => {
+  const fault = cleanupFailure('codex-run-dispose', new Error('x'))
+
+  /**
+   * A runtime whose only provider fails teardown on every run.
+   * @param faults - the cleanup facts each run reports.
+   * @returns the runtime, ready to dispatch.
+   */
+  function runtimeReporting(faults: readonly ReturnType<typeof cleanupFailure>[]) {
+    const runtime = createExecutorRuntime()
+    runtime.register(provider('codex', fullCapabilities, async () =>
+      ({ status: 'completed', output: 'ok', cleanup: faults })))
+    return runtime
+  }
+
+  it('calls a runtime clean only until something fails to tear down', async () => {
+    const runtime = runtimeReporting([])
+    expect(runtime.cleanupReport()).toEqual({ clean: true, total: 0, retained: [] })
+    await runtime.dispose()
+    expect(runtime.cleanupReport().clean).toBe(true)
+  })
+
+  it('refuses to call a settled disposal clean when teardown failed', async () => {
+    const runtime = runtimeReporting([fault])
+    await runtime.start(request())
+    // Quiescence and cleanliness are different claims: the run did come back,
+    // and it came back having left something running.
+    await runtime.dispose()
+    expect(runtime.cleanupReport()).toEqual({ clean: false, total: 1, retained: [fault] })
+  })
+
+  it('keeps the evidence readable after disposal, when the run is long gone', async () => {
+    const runtime = runtimeReporting([fault])
+    await runtime.start(request())
+    await runtime.dispose()
+    expect(runtime.cleanupReport().retained).toEqual([fault])
+  })
+
+  it('bounds retained evidence without ever hiding how much there was', async () => {
+    const runtime = runtimeReporting([fault, fault, fault])
+    for (let run = 0; run < CLEANUP_EVIDENCE_LIMIT; run += 1) await runtime.start(request())
+    const report = runtime.cleanupReport()
+    // The count is the honest part. Truncating the examples is a memory bound;
+    // truncating the count would be the runtime under-reporting its own mess.
+    expect(report.total).toBe(CLEANUP_EVIDENCE_LIMIT * 3)
+    expect(report.retained).toHaveLength(CLEANUP_EVIDENCE_LIMIT)
+    expect(report.clean).toBe(false)
+  })
+
+  it('hands out a frozen snapshot rather than its own evidence list', async () => {
+    const runtime = runtimeReporting([fault])
+    await runtime.start(request())
+    const first = runtime.cleanupReport()
+    expect(Object.isFrozen(first.retained)).toBe(true)
+    await runtime.start(request())
+    expect(first.retained).toHaveLength(1)
+    expect(runtime.cleanupReport().retained).toHaveLength(2)
   })
 })

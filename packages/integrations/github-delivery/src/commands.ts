@@ -44,7 +44,9 @@ export class DeliveryError extends Error {
     | 'unexpected-stage'
     | 'nothing-to-commit'
     | 'unverified-push'
+    | 'uncheckpointed-mutation'
     | 'command-failed'
+    | 'teardown-failed'
 
   /**
    * @param code - Machine-readable cause.
@@ -177,8 +179,19 @@ export function assertAllowed(argv: readonly string[]): void {
   }
   if (program === 'git' && subcommand === 'push') {
     for (const argument of argv.slice(at + 1)) {
-      if (DENIED_PUSH_ARGS.includes(argument)) {
-        throw new DeliveryError('denied-operation', `${argument} would rewrite or remove remote history`)
+      // Compared on the flag name alone, because git accepts the value forms
+      // `--force-with-lease=<ref>` and `--force-if-includes=<ref>`, and a
+      // comparison against the whole argument would wave those through while
+      // stopping only the bare spelling nobody would reach for on purpose.
+      const flag = argument.startsWith('--') ? (argument.split('=')[0] ?? argument) : argument
+      if (DENIED_PUSH_ARGS.includes(flag)) {
+        throw new DeliveryError('denied-operation', `${flag} would rewrite or remove remote history`)
+      }
+      // A refspec whose source half is empty deletes the destination branch.
+      // `git push origin :refs/heads/main` removes it as surely as `--delete`
+      // does, and carries no flag for a flag list to catch.
+      if (argument.startsWith(':')) {
+        throw new DeliveryError('denied-operation', 'a refspec with no source would delete the remote branch')
       }
     }
   }
