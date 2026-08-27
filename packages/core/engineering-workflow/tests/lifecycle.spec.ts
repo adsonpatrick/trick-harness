@@ -258,6 +258,64 @@ describe('the pull request lifecycle plan', () => {
     ])
     expect(planPullRequestStages({ ...OBJECTIVE, risk: 'critical' }).at(-1)?.stageId).toBe('verify-final')
   })
+
+  it.each(['low', 'medium', 'high', 'critical'] as const)('publishes before it certifies at %s risk', (risk) => {
+    const roles = planPullRequestStages({ ...OBJECTIVE, risk }).map(stage => stage.role)
+
+    expect(roles.indexOf('delivery')).toBeLessThan(roles.indexOf('review'))
+    expect(roles.at(-1)).toBe('verify')
+    expect(roles.lastIndexOf('verify')).toBeGreaterThan(roles.indexOf('delivery'))
+  })
+
+  it('buys QA from medium upwards and security only at critical', () => {
+    const rolesAt = (risk: WorkflowObjective['risk']) =>
+      planPullRequestStages({ ...OBJECTIVE, risk }).map(stage => stage.role)
+
+    expect(rolesAt('low')).not.toContain('qa')
+    expect(rolesAt('medium')).toContain('qa')
+    expect(rolesAt('high')).toContain('qa')
+    expect(rolesAt('high')).not.toContain('security')
+    expect(rolesAt('critical')).toContain('security')
+  })
+
+  it('names every stage uniquely, so the journal can pair each start with its end', () => {
+    const ids = planPullRequestStages({ ...OBJECTIVE, risk: 'critical' }).map(stage => stage.stageId)
+
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('what only gets reported', () => {
+  it('reaches PR READY with an improvement outstanding and never repairs it', async () => {
+    scripted.set('review-1', [improvement('imp-only')])
+
+    const result = await runLifecycle()
+
+    expect(result.state).toBe('PR_READY')
+    expect(result.outcome.repairCycles).toBe(0)
+    expect(result.outcome.stages.map(stage => stage.role)).not.toContain('repair')
+    expect(result.reportedFindings.map(finding => finding.id)).toEqual(['imp-only'])
+  })
+})
+
+describe('the reading that closes the run', () => {
+  it('verifies once more after the last repair, with a fresh run of its own', async () => {
+    scripted.set('review-1', [bug('bug-a')])
+
+    const result = await runLifecycle()
+    const ids = result.outcome.stages.map(stage => stage.stageId)
+
+    // The final verification is a stage of its own, started after the repair
+    // and after the re-delivery, so nothing is called ready on a reading taken
+    // before the branch reached its current state.
+    expect(ids.at(-1)).toBe('verify-final')
+    expect(ids.indexOf('verify-final')).toBeGreaterThan(ids.indexOf('repair-1'))
+    expect(ids.indexOf('verify-final')).toBeGreaterThan(ids.indexOf('delivery-2'))
+    // It reads rather than writes, and it is not the executor that last wrote.
+    const final = started.at(-1)
+    expect(final?.route.permissionMode).toBe('read-only')
+    expect(final?.route.executor).not.toBe('builder')
+  })
 })
 
 describe('two confirmed bugs and one improvement', () => {
@@ -283,7 +341,7 @@ describe('two confirmed bugs and one improvement', () => {
 
     expect(roles).toEqual([
       'implement-1', 'verify-1', 'delivery-1', 'review-1',
-      'debug-1', 'repair-1', 'delivery-2', 'review-2',
+      'debug-1', 'repair-1', 'verify-2', 'delivery-2', 'review-2',
       'verify-final',
     ])
   })

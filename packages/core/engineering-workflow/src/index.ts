@@ -54,6 +54,7 @@ import {
   validateDiagnosis,
 } from './repair.ts'
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
+import { planPullRequestStages } from './lifecycle.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type {
@@ -107,31 +108,27 @@ function writeVolumeFor(role: Role): WriteVolume {
 /**
  * The stages one objective runs, decided before anything is dispatched.
  *
+ * The default lifecycle is pull-request centric: the branch is delivered as
+ * soon as implementation verifies, and every certifying stage after that reads
+ * the same published diff a person would. A review of an unpublished working
+ * tree reviews something nobody else can see, and a repair that follows one is
+ * re-delivered before it is re-read.
+ *
  * The plan is a function of the objective's risk alone, so the same objective
  * plans the same way on every machine and in every replay. Higher risk adds
  * certification rather than changing what implementation does: QA from medium,
- * an independent code review at high, and a security stage on top of both at
- * critical. Below medium, QA is proportionate rather than absent — the work
- * folds into verification instead of buying a separate stage for it.
+ * a security stage at critical. Whatever ran, the run ends on a fresh
+ * verification, so nothing is called ready on a reading taken before the last
+ * repair.
+ *
+ * A database change adds no stage here. The isolated preview is a capability
+ * the delivery stage runs before it publishes, not a stage a model could be
+ * routed to.
  * @param objective - The approved objective.
  * @returns The stages in the order they will run.
  */
 export function planStages(objective: WorkflowObjective): readonly StageSpec[] {
-  const stages: StageSpec[] = [
-    { stageId: 'implement-1', role: 'implement' },
-    { stageId: 'verify-1', role: 'verify' },
-  ]
-  if (objective.risk === 'high' || objective.risk === 'critical') {
-    stages.push({ stageId: 'review-1', role: 'review' })
-  }
-  if (objective.risk !== 'low') {
-    stages.push({ stageId: 'qa-1', role: 'qa' })
-  }
-  if (objective.risk === 'critical') {
-    stages.push({ stageId: 'security-1', role: 'security' })
-  }
-  stages.push({ stageId: 'delivery-1', role: 'delivery' })
-  return Object.freeze(stages)
+  return planPullRequestStages(objective)
 }
 
 /** The blocker a stage's own findings say it is. */
@@ -662,11 +659,21 @@ export class WorkflowRunner {
         // that changes behavior gets a read-only debugger first. The stage that
         // found the defect is re-run afterwards, by a fresh stage of its own
         // role, so nothing is certified on the strength of a pre-repair reading.
+        // A repair is verified before it is published. The stage that found the
+        // defect is not the one that proves the fix compiles and passes, and
+        // publishing an unverified repair puts a broken diff in front of a
+        // person. When verification is itself the stage that failed, its own
+        // re-run is that proof and a second one would say nothing new.
+        const reverify = stage.role === 'verify'
+          ? []
+          : [{ stageId: `verify-${(attempts.get('verify') ?? 1) + 1}`, role: 'verify' as const }]
+        if (reverify.length > 0) attempts.set('verify', (attempts.get('verify') ?? 1) + 1)
         queue.unshift(
           ...isMechanicallyObvious(repairable)
             ? []
             : [{ stageId: `debug-${repairCycles}`, role: 'debug' as const }],
           { stageId: `repair-${repairCycles}`, role: 'repair' },
+          ...reverify,
           // A published branch is re-delivered before it is re-read: a review
           // that ran against the pre-repair diff would be certifying a state
           // the pull request no longer holds.

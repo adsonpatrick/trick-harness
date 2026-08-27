@@ -413,7 +413,7 @@ describe('a workflow through the real control-server entry path', () => {
     expect(unknown.status).toBe(404)
   })
 
-  it('runs the default working-tree plan when the deployment names none', async () => {
+  it('runs the default pull-request lifecycle when the deployment names no plan', async () => {
     const started: ExecutorStartRequest[] = []
     const base = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
     const harness = compose({
@@ -427,8 +427,11 @@ describe('a workflow through the real control-server entry path', () => {
 
     const outcome = await harness.run(OBJECTIVE)
 
+    // A deployment that names no plan gets the pull-request lifecycle: the
+    // branch is published as soon as implementation verifies, and everything
+    // that certifies afterwards reads the same diff a person would.
     expect(outcome.stages.map(stage => stage.role))
-      .not.toEqual(planPullRequestStages(OBJECTIVE).map(stage => stage.role))
+      .toEqual(planPullRequestStages(OBJECTIVE).map(stage => stage.role))
     expect(outcome.verdict).toBe('PASS')
   })
 

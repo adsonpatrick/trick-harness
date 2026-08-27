@@ -138,20 +138,27 @@ const REPAIRED = Object.freeze({
 })
 
 describe('the stage plan', () => {
-  it('runs implement, verify and delivery for an ordinary objective', () => {
-    expect(planStages(OBJECTIVE).map(stage => stage.role)).toEqual(['implement', 'verify', 'delivery'])
+  it('delivers before it certifies, and ends on a fresh verification', () => {
+    expect(planStages(OBJECTIVE).map(stage => stage.role))
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'verify'])
+    expect(planStages(OBJECTIVE).at(-1)?.stageId).toBe('verify-final')
   })
 
-  it('inserts an independent review before delivery when risk is high', () => {
+  it('buys QA from medium risk upwards', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'high' })
-    expect(stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'review', 'qa', 'delivery'])
+    expect(stages.map(stage => stage.role))
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'qa', 'verify'])
   })
 
   it('adds a security stage for a critical objective', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'critical' })
     expect(stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'review', 'qa', 'security', 'delivery',
+      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'verify',
     ])
+  })
+
+  it('reviews every objective, whatever its risk, because the branch is published either way', () => {
+    expect(planStages({ ...OBJECTIVE, risk: 'low' }).map(stage => stage.role)).toContain('review')
   })
 
   it('names every stage uniquely so the journal can pair starts with ends', () => {
@@ -220,10 +227,13 @@ describe('a normal run', () => {
 
     expect(outcome.state).toBe('completed')
     expect(outcome.verdict).toBe('PASS')
-    expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'delivery'])
-    // Delivery is the third stage and no executor was asked for it: publishing
-    // is a bounded command sequence, not a question put to a model.
-    expect(seen).toEqual(['builder:workspace-write', 'reviewer:read-only'])
+    expect(outcome.stages.map(stage => stage.role))
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'verify'])
+    // No executor was asked for delivery: publishing is a bounded command
+    // sequence, not a question put to a model.
+    expect(seen).toEqual([
+      'builder:workspace-write', 'reviewer:read-only', 'reviewer:read-only', 'reviewer:read-only',
+    ])
   })
 
   it('hands back compact facts and never the executor output', async () => {
@@ -247,9 +257,9 @@ describe('a normal run', () => {
     const projection = projectWorkflow(session.events, 'wf-1')
 
     expect(projection.objective?.id).toBe('obj-1')
-    // Two routed stages, three verdicts: delivery reports one without being routed.
-    expect(projection.routes).toHaveLength(2)
-    expect(projection.verdicts).toHaveLength(3)
+    // Four routed stages, five verdicts: delivery reports one without being routed.
+    expect(projection.routes).toHaveLength(4)
+    expect(projection.verdicts).toHaveLength(5)
     // The capability window opened and closed, so nothing is left open.
     expect(projection.openCapabilities).toEqual([])
     expect(JSON.stringify(session.events)).toContain('github-delivery')
@@ -386,10 +396,10 @@ describe('a run that goes wrong', () => {
     expect(outcome.state).toBe('completed')
     expect(outcome.repairCycles).toBe(1)
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'debug', 'repair', 'verify', 'delivery',
+      'implement', 'verify', 'debug', 'repair', 'verify', 'delivery', 'review', 'verify',
     ])
     expect(outcome.stages.find(stage => stage.role === 'debug')?.permissionMode).toBe('read-only')
-    expect(modes).toEqual(['read-only', 'read-only', 'read-only'])
+    expect(modes).toEqual(['read-only', 'read-only', 'read-only', 'read-only', 'read-only'])
     for (const stage of outcome.stages) expect(stage.permissionMode).toBe(permissionModeFor(stage.role))
     expect(JSON.stringify(session.events)).toContain('harness/diagnosis')
   })
@@ -497,7 +507,7 @@ describe('a run that goes wrong', () => {
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'repair', 'verify', 'delivery',
+      'implement', 'verify', 'repair', 'verify', 'delivery', 'review', 'verify',
     ])
   })
 
@@ -796,7 +806,9 @@ describe('triage inside a run', () => {
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'qa', 'debug', 'repair', 'qa', 'delivery',
+      'implement', 'verify', 'delivery', 'review', 'qa',
+      'debug', 'repair', 'verify', 'delivery', 'qa',
+      'verify',
     ])
     expect(outcome.stages.filter(stage => stage.role === 'qa').map(stage => stage.stageId))
       .toEqual(['qa-1', 'qa-2'])
@@ -1336,10 +1348,11 @@ describe('who is allowed to publish the work', () => {
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
 
-    expect(outcome.stages).toHaveLength(3)
-    // Implement and verify. The budget bounds how often a model is asked, and
-    // a bounded command sequence is not one of those times.
-    expect(outcome.executorStarts).toBe(2)
+    expect(outcome.stages).toHaveLength(5)
+    // Implement, verify, review and the final verify. The budget bounds how
+    // often a model is asked, and a bounded command sequence is not one of
+    // those times.
+    expect(outcome.executorStarts).toBe(4)
   })
 })
 
@@ -1443,12 +1456,12 @@ describe('a run that changes a database', () => {
     })
 
     expect(outcome.state).toBe('completed')
-    expect(order).toEqual(['implement', 'verify', 'supabase-preview'])
+    expect(order.slice(0, 3)).toEqual(['implement', 'verify', 'supabase-preview'])
     expect(delivered).toEqual(['delivery-1'])
     expect(outcome.stages.map(stage => stage.stageId)).toContain('delivery-1-database')
     // A bounded command sequence, so the budget that counts questions to models
     // is untouched by it.
-    expect(outcome.executorStarts).toBe(2)
+    expect(outcome.executorStarts).toBe(4)
   })
 
   it('leaves a run that changes no database alone', async () => {
