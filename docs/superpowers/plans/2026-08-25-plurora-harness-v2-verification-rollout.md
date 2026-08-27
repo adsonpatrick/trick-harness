@@ -65,7 +65,7 @@ Primary evidence owners:
 
 - [x] Record exact Trick Harness and `neuro-via` SHAs/status before verification. Trick Harness frozen at `f9acbdcfec`; `neuro-via` NOT AVAILABLE, Plan C unrun.
 - [x] Verify GitHub fork parent is `deepseek-ai/deepseek-harness`, `LICENSE` retains MIT notice, upstream relationship is documented/reachable, and current Trick branch descends from recorded baseline. Read from the GitHub API; `LICENSE` blob is byte-identical to upstream.
-- [x] Create 35-row execution ledger with criterion, observable, best evidence, command/environment, verdict, artifact/ref. Created at `docs/verification/2026-08-27-harness-v2-plan-d-evidence.md`; location deviation from the file map is recorded in the ledger.
+- [x] Create 35-row execution ledger — 34 active criteria plus criterion 8 kept as a `WITHDRAWN` traceability row, since the 2026-08-27 amendment retires its number rather than reusing it — with criterion, observable, best evidence, command/environment, verdict, artifact/ref. Created at `docs/verification/2026-08-27-harness-v2-plan-d-evidence.md`; location deviation from the file map is recorded in the ledger.
 - [x] Run secret/security hygiene checks in both repos before real smokes. Trick Harness only: twelve hygiene gates pass, one fails as inherited baseline contamination. The `neuro-via` half is BLOCKED on Plan C.
 - [x] Stop/classify baseline contamination instead of retrying until green. `rescope-vendor:check` fails on two upstream-owned edits whose anchors are already absent at baseline `b150a551b8`; classified, not repaired.
 
@@ -194,7 +194,7 @@ Record only what these checks actually prove.
 - [ ] PRO-OPTIONAL. Start Harness DB-changing workflow; it must provision isolated hosted Preview Branch. Provision failure => `BLOCKED`, no parent/local fallback.
 - [ ] PRO-OPTIONAL. Verify preview ref differs from parent via authoritative Supabase state.
 - [ ] PRO-OPTIONAL. Verify migration exists/applied only in preview.
-- [ ] Run remote gates with explicit preview environment:
+- [ ] PRO-OPTIONAL. Run remote gates against the provisioned preview environment. Absent the entitlement there is no entitlement-free target for them, and the global constraints forbid substituting the parent project or a local database, so the step is reported `NOT_APPLICABLE — entitlement absent` rather than redirected:
 
 ```bash
 npm run db:lint
