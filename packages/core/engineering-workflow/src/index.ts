@@ -437,7 +437,7 @@ export class WorkflowRunner {
         // The gate runs before dispatch, so a repair that may not start never
         // gets a writable working tree in the first place.
         try {
-          authorization = authorizeRepair(defect, diagnosis)
+          authorization = authorizeRepair(defect, diagnosis, profile.securityPolicy.repairRules)
         } catch (error) {
           if (!(error instanceof RepairError)) throw error
           return await this.#blocked(

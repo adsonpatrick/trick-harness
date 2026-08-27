@@ -74,6 +74,36 @@ describe('validateProfile', () => {
     expect(check(without(block))).toThrow(ProfileValidationError)
   })
 
+  it('accepts a security policy that names no repair rules at all', () => {
+    expect(check({ ...valid, securityPolicy: { rules: [], repairRules: [] } })).not.toThrow()
+  })
+
+  it('accepts a security repair rule that names the boundaries it covers', () => {
+    expect(check({
+      ...valid,
+      securityPolicy: {
+        rules: [],
+        repairRules: [{ id: 'fixture', findingClass: 'SECURITY_BUG', allowedBoundaries: ['packages/fixture/**'] }],
+      },
+    })).not.toThrow()
+  })
+
+  it.each([
+    { repairRules: {} },
+    { repairRules: [{ id: '', findingClass: 'SECURITY_BUG', allowedBoundaries: ['a/**'] }] },
+    { repairRules: [{ id: 'a', findingClass: 'BUG', allowedBoundaries: ['a/**'] }] },
+    { repairRules: [{ id: 'a', findingClass: 'SECURITY_BUG', allowedBoundaries: 'a/**' }] },
+    { repairRules: [{ id: 'a', findingClass: 'SECURITY_BUG' }] },
+    {
+      repairRules: [
+        { id: 'a', findingClass: 'SECURITY_BUG', allowedBoundaries: ['a/**'] },
+        { id: 'a', findingClass: 'SECURITY_BUG', allowedBoundaries: ['b/**'] },
+      ],
+    },
+  ])('rejects a malformed security repair rule %o', (patch) => {
+    expect(check({ ...valid, securityPolicy: { rules: [], ...patch } })).toThrow(ProfileValidationError)
+  })
+
   it.each([0, -1, 1.5, Number.NaN])('rejects maxRepairCycles %o', (maxRepairCycles) => {
     expect(check({
       ...valid,

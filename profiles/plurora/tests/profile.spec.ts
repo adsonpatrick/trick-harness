@@ -92,6 +92,10 @@ describe('plurora profile', () => {
     }
   })
 
+  it('authorizes no security defect for automatic repair', () => {
+    expect(pluroraProfile.securityPolicy.repairRules).toEqual([])
+  })
+
   it('withholds every destructive delivery capability from automation', () => {
     expect(rule(pluroraProfile.integrationPolicy.rules, 'github-delivery')).toMatchObject({
       allowForcePush: false,

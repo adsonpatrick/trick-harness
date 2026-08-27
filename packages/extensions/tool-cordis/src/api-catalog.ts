@@ -4211,7 +4211,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SecurityPolicyDefinition',
-    declaration: 'export interface SecurityPolicyDefinition {\n    readonly rules: readonly PolicyRuleDefinition[];\n}',
+    declaration: 'export interface SecurityPolicyDefinition {\n    readonly rules: readonly PolicyRuleDefinition[];\n    readonly repairRules?: readonly SecurityRepairRule[];\n}',
+  },
+  {
+    name: 'SecurityRepairRule',
+    declaration: 'export interface SecurityRepairRule {\n    readonly id: string;\n    readonly findingClass: \'SECURITY_BUG\';\n    readonly allowedBoundaries: readonly string[];\n}',
   },
   {
     name: 'SendTeamMessageRequest',

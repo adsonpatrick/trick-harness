@@ -167,6 +167,38 @@ function validateStringList(value: unknown, path: string): void {
 }
 
 /**
+ * Validate the declared security-repair allowlist, when one is declared.
+ *
+ * Absent is legitimate and means fail-closed. Present and malformed is not: a
+ * rule that names no boundary, or names one as something other than a string,
+ * would silently authorise nothing while reading like it authorises something.
+ * @param value - the declared rules, or undefined.
+ * @throws ProfileValidationError naming the first field that fails.
+ */
+function validateSecurityRepairRules(value: unknown): void {
+  if (value === undefined) return
+  const path = 'securityPolicy.repairRules'
+  const seen = new Set<string>()
+  for (const [index, entry] of requireArray(value, path).entries()) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new ProfileValidationError(`${path}[${index}]`, 'must be an object')
+    }
+    const id = field(entry, 'id')
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new ProfileValidationError(`${path}[${index}].id`, 'must be a non-empty string')
+    }
+    if (seen.has(id)) {
+      throw new ProfileValidationError(`${path}[${index}].id`, `repeats rule id ${JSON.stringify(id)}`)
+    }
+    seen.add(id)
+    if (field(entry, 'findingClass') !== 'SECURITY_BUG') {
+      throw new ProfileValidationError(`${path}[${index}].findingClass`, 'must be "SECURITY_BUG"')
+    }
+    validateStringList(field(entry, 'allowedBoundaries'), `${path}[${index}].allowedBoundaries`)
+  }
+}
+
+/**
  * Validate a candidate profile against the contract.
  * @param candidate - the value to check; may be any shape.
  * @returns nothing; the assertion signature narrows `candidate` in the caller.
@@ -210,7 +242,9 @@ export function validateProfile(candidate: unknown): asserts candidate is Harnes
   }
 
   validateRules(field(field(candidate, 'qaPolicy'), 'rules'), 'qaPolicy.rules', { allowEmpty: true })
-  validateRules(field(field(candidate, 'securityPolicy'), 'rules'), 'securityPolicy.rules', { allowEmpty: true })
+  const securityPolicy = field(candidate, 'securityPolicy')
+  validateRules(field(securityPolicy, 'rules'), 'securityPolicy.rules', { allowEmpty: true })
+  validateSecurityRepairRules(field(securityPolicy, 'repairRules'))
 
   const integrationPolicy = field(candidate, 'integrationPolicy')
   validateStringList(field(integrationPolicy, 'enabled'), 'integrationPolicy.enabled')

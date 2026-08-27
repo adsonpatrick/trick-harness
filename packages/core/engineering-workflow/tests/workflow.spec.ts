@@ -48,7 +48,17 @@ const PROFILE: HarnessProfile = Object.freeze({
     critical: 'cross-executor-required',
   }),
   qaPolicy: Object.freeze({ rules: Object.freeze([]) }),
-  securityPolicy: Object.freeze({ rules: Object.freeze([]) }),
+  securityPolicy: Object.freeze({
+    rules: Object.freeze([]),
+    // Narrow on purpose: the cart is the only ground a security defect may be
+    // repaired on unattended in this fixture, and the tests below lean on the
+    // fact that everywhere else is refused.
+    repairRules: Object.freeze([Object.freeze({
+      id: 'cart-only',
+      findingClass: 'SECURITY_BUG',
+      allowedBoundaries: Object.freeze(['packages/cart/**']),
+    })]),
+  }),
   integrationPolicy: Object.freeze({ enabled: Object.freeze([]), rules: Object.freeze([]) }),
   trustedComposition: Object.freeze({ excludedPluginIds: Object.freeze([]) }),
 })
@@ -818,6 +828,39 @@ describe('triage inside a run', () => {
     // A tooling defect alone would have skipped diagnosis; the security bug did not.
     expect(outcome.stages.map(stage => stage.role)).toContain('debug')
     expect(outcome.state).toBe('completed')
+  })
+
+  it('stops rather than repairing a security defect outside the boundaries the policy names', async () => {
+    let verifications = 0
+    const repairs: string[] = []
+    executors.register(provider('repairer', async () => {
+      repairs.push('started')
+      return passing('builder')
+    }))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => {
+        if (stage.role !== 'verify') return interpretAllPass(stage, executor)
+        verifications += 1
+        return {
+          role: stage.role,
+          executor,
+          verdict: verifications === 1 ? 'FAIL' : 'PASS',
+          summary: 'suite',
+          findings: verifications === 1 ? [{ ...bug('f-sec', 'SECURITY_BUG') }] : [],
+          evidence: [],
+        }
+      },
+      // The diagnosis is complete and honest; it simply names ground no rule covers.
+      diagnose: () => ({ ...DIAGNOSIS, affectedBoundary: 'packages/billing/src/charge.ts' }),
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('security:boundary-not-allowed')
+    expect(repairs).toEqual([])
   })
 })
 
