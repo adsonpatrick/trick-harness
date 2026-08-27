@@ -10,6 +10,12 @@
  * The transcript is three surfaces: the bounded status the control server hands
  * a bridge, the findings a report renders from the run's own outcome, and what a
  * degraded executor looks like once the profile's fallback table has answered.
+ *
+ * All three settle at BLOCKED, and that is the point rather than a shortfall.
+ * This composition has no delivery capability, and publishing is a capability
+ * port and never a stage handed to an executor, so the lifecycle stops at
+ * `delivery-1` and says so. A transcript that showed the branch published here
+ * would be showing a model having improvised a mutation nobody granted.
  */
 
 import { access, mkdir, writeFile } from 'node:fs/promises'
@@ -60,8 +66,11 @@ const PROFILE: HarnessProfile = Object.freeze({
 
 const REGISTRY = Object.freeze({ implementation: 'mimo-v2.5', reasoning: 'deepseek-v4-flash' })
 
+// Objective ids deliberately share no prefix with the execution ids the Harness
+// mints below. The two are different identities, and a transcript in which they
+// looked alike is what let a read by the wrong one go unnoticed.
 const OBJECTIVE: WorkflowObjective = Object.freeze({
-  id: 'wf-transcript-1',
+  id: 'objective-certified',
   cwd: '/repo',
   requirement: 'add the thing the review will object to',
   risk: 'low',
@@ -120,8 +129,16 @@ function interpret(stage: StageSpec, executor: string): StageResult {
  * @param degradedExecutors - Executors the breaker has already marked degraded.
  * @returns The composed Harness.
  */
-function harnessWith(degradedExecutors: readonly string[]): ComposedHarness {
+function harnessWith(degradedExecutors: readonly string[], idPrefix: string): ComposedHarness {
+  // The Harness mints the execution id, and by default that is a UUID a
+  // snapshot could never record. A deterministic factory is the supported way
+  // to make the identity readable without pretending the objective supplies it.
+  let minted = 0
   return composeHarness({
+    workflowIdFactory: () => {
+      minted += 1
+      return `${idPrefix}-${String(minted)}`
+    },
     profile: PROFILE,
     registry: REGISTRY,
     session: Session.create(SessionId('transcript')),
@@ -157,19 +174,32 @@ async function statusThroughHttp(
   const base = `http://${host}:${String(port)}`
   const created = await fetch(`${base}/workflows`, { method: 'POST', headers, body: JSON.stringify(objective) })
   expect(created.status).toBe(202)
-  const read = await fetch(`${base}/workflows/${objective.id}`, { headers })
-  return (await read.json()) as ControlWorkflowStatus
+  // The run is named by the id the Harness minted and handed back, never by the
+  // objective's own id: the same objective may be run more than once, so a read
+  // addressed to `objective.id` names nothing and answers 404.
+  const { workflowId } = (await created.json()) as ControlWorkflowStatus
+  // Bounded, because a run that never settles is a defect to report and not a
+  // reason for the suite to hang; the wait is a real pause rather than a spin,
+  // so a stuck run does not also saturate the loopback socket while it waits.
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const read = await fetch(`${base}/workflows/${workflowId}`, { headers })
+    expect(read.status).toBe(200)
+    const status = (await read.json()) as ControlWorkflowStatus
+    if (status.state !== 'running') return status
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  throw new Error(`workflow ${workflowId} never left the running state`)
 }
 
 describe('harness control transcript runnable snapshot', () => {
-  it('records the status, the findings and the fallback a person actually sees', async () => {
-    const certified = harnessWith([])
-    const degraded = harnessWith(['builder'])
+  it('records the status, the block and the fallback a person actually sees', async () => {
+    const certified = harnessWith([], 'wf-transcript')
+    const degraded = harnessWith(['builder'], 'wf-degraded')
     let transcript: string
     try {
       const status = await statusThroughHttp(certified, OBJECTIVE)
-      const outcome = await certified.run({ ...OBJECTIVE, id: 'wf-transcript-2' })
-      const degradedStatus = await statusThroughHttp(degraded, { ...OBJECTIVE, id: 'wf-transcript-3' })
+      const outcome = await certified.run({ ...OBJECTIVE, id: 'objective-published' })
+      const degradedStatus = await statusThroughHttp(degraded, { ...OBJECTIVE, id: 'objective-degraded' })
       const pullRequest = assessPullRequest(outcome)
       transcript = `${JSON.stringify({
         status,
