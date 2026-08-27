@@ -264,7 +264,7 @@ describe('Plurora policy driving a live run', () => {
     const rerun = seen.filter(start => start.role === 'verify')
     expect(rerun.map(start => start.executor)).toEqual(['codex', 'opencode'])
     expect(rerun[1]?.model).toBe(DEFAULT_MODEL_REGISTRY['opencode.reasoning-fast'])
-    const routes = projectWorkflow(session.events, LIVE_OBJECTIVE.id).routes
+    const routes = projectWorkflow(session.events, outcome.workflowId).routes
     const fell = routes.filter(record => record.fallbackFrom === 'codex')
     expect(fell.length).toBe(1)
     expect(fell[0]?.executor).toBe('opencode')
@@ -278,7 +278,7 @@ describe('Plurora policy driving a live run', () => {
 
     expect(outcome.state).toBe('completed')
     expect(seen.every(start => start.executor === 'codex')).toBe(true)
-    const implemented = projectWorkflow(session.events, LIVE_OBJECTIVE.id).routes
+    const implemented = projectWorkflow(session.events, outcome.workflowId).routes
       .find(record => record.role === 'implement')
     expect(implemented?.executor).toBe('codex')
     expect(implemented?.fallbackFrom).toBe('opencode')
@@ -306,21 +306,24 @@ describe('Plurora policy driving a live run', () => {
       semanticModelTier: 'codex.frontier',
       reasoningEffort: 'xhigh',
     })
-    const second = await harness.run({ ...LIVE_OBJECTIVE, id: 'wf-plurora-live-2' })
+    const second = await harness.run(LIVE_OBJECTIVE)
 
     expect(first.state).toBe('completed')
-    const overridden = projectWorkflow(session.events, LIVE_OBJECTIVE.id).routes
+    const overridden = projectWorkflow(session.events, first.workflowId).routes
       .find(record => record.role === 'implement')
     expect(overridden?.executor).toBe('codex')
     expect(overridden?.reasonCodes).toContain('override:user')
     // The next stage of the same run, and the next run entirely, are routed by
     // the table. An override that outlived its stage would have made one
     // person's situational call into this project's policy.
-    const verified = projectWorkflow(session.events, LIVE_OBJECTIVE.id).routes
+    const verified = projectWorkflow(session.events, first.workflowId).routes
       .find(record => record.role === 'verify')
     expect(verified?.reasonCodes).not.toContain('override:user')
     expect(second.state).toBe('completed')
-    const next = projectWorkflow(session.events, 'wf-plurora-live-2').routes
+    // The same objective, a second attempt, its own execution id.
+    expect(second.workflowId).not.toBe(first.workflowId)
+    expect(second.objectiveId).toBe(first.objectiveId)
+    const next = projectWorkflow(session.events, second.workflowId).routes
       .find(record => record.role === 'implement')
     expect(next?.executor).toBe('opencode')
     expect(next?.reasonCodes).not.toContain('override:user')

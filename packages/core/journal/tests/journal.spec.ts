@@ -331,3 +331,34 @@ describe('what never reaches the durable log', () => {
     expect(Object.hasOwn(payload as object, 'failureClass')).toBe(false)
   })
 })
+
+describe('two attempts at one objective', () => {
+  it('keeps each attempt to its own projection', async () => {
+    const session = Session.create(SessionId('two-attempts'))
+    const flush = async (): Promise<boolean> => true
+    const first = new WorkflowJournal(session, 'wf-a', flush)
+    const second = new WorkflowJournal(session, 'wf-b', flush)
+
+    first.start(objective)
+    first.routeDecision({ stageId: 's-1', role: 'implement', decision })
+    first.finding('s-1', finding)
+    await first.end('failed', 'FAIL', 'the first attempt failed')
+    second.start(objective)
+    second.routeDecision({ stageId: 's-1', role: 'implement', decision })
+
+    const one = projectWorkflow(session.events, 'wf-a')
+    const two = projectWorkflow(session.events, 'wf-b')
+
+    // Both attempts name the same objective, which is the point: the logical
+    // thing a person asked for is stable, and each attempt at it is separate.
+    expect(one.objective?.id).toBe('obj-1')
+    expect(two.objective?.id).toBe('obj-1')
+    expect(one.findings.length).toBe(1)
+    expect(two.findings).toEqual([])
+    expect(one.end?.state).toBe('failed')
+    // A second attempt reading the first one's end would report itself finished
+    // before it had run a stage.
+    expect(two.end).toBeUndefined()
+    expect(two.routes.length).toBe(1)
+  })
+})

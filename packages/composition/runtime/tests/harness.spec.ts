@@ -4,6 +4,7 @@ import type { StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import type { ControlWorkflowStatus } from '@trick-harness/control-server'
 import { planPullRequestStages } from '@trick-harness/engineering-workflow'
 import type { ExecutorProvider, ExecutorStartRequest } from '@trick-harness/executor'
+import { projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import {
@@ -294,11 +295,14 @@ describe('a workflow through the real control-server entry path', () => {
     })
     const server = harness.server
     if (server === undefined) throw new Error('the profile enabled a control server')
-    await harness.run(OBJECTIVE)
+    const finished = await harness.run(OBJECTIVE)
     const { host, port } = await server.listen()
     const headers = { authorization: `Bearer ${server.token}` }
 
-    const known = await fetch(`http://${host}:${String(port)}/workflows/${OBJECTIVE.id}`, { headers })
+    // Addressed by the id the Harness minted, not by the objective's: the
+    // objective may have been run more than once, and only the execution id
+    // says which of those attempts is being asked about.
+    const known = await fetch(`http://${host}:${String(port)}/workflows/${finished.workflowId}`, { headers })
     const unknown = await fetch(`http://${host}:${String(port)}/workflows/wf-never-ran`, { headers })
 
     expect(server.token).toBe('a-control-token-long-enough')
@@ -362,9 +366,10 @@ describe('a workflow through the real control-server entry path', () => {
     const started: ExecutorStartRequest[] = []
     const harness = compose(baseOptions(profileEnabling([]), started))
 
-    await harness.run(OBJECTIVE)
+    const finished = await harness.run(OBJECTIVE)
 
-    expect(harness.restartOf(OBJECTIVE.id)?.state).toBe('terminal')
+    expect(harness.restartOf(finished.workflowId)?.state).toBe('terminal')
+    expect(harness.restartOf(OBJECTIVE.id)).toBeUndefined()
     expect(harness.restartOf('wf-never-ran')).toBeUndefined()
   })
 })
@@ -397,5 +402,53 @@ describe('a human route override in a composed runtime', () => {
     const outcome = await harness.run(OBJECTIVE)
 
     expect(outcome.stages.find(stage => stage.role === 'implement')?.executor).toBe('builder')
+  })
+})
+
+describe('what identifies one execution', () => {
+  it('runs the same objective twice under two ids that share no history', async () => {
+    const started: ExecutorStartRequest[] = []
+    const session = Session.create(SessionId('identity'))
+    const ids = ['wf-101', 'wf-102']
+    const harness = compose({
+      ...baseOptions(profileEnabling([]), started),
+      session,
+      workflowIdFactory: () => ids.shift() ?? 'exhausted',
+    })
+
+    const first = await harness.run(OBJECTIVE)
+    const second = await harness.run(OBJECTIVE)
+
+    // An objective is what a person asked for and may ask for again; a workflow
+    // id is one attempt at it. Sharing them would append the second attempt's
+    // facts onto the first one's record, and no reader could then tell which
+    // run a verdict belonged to.
+    expect(first.workflowId).toBe('wf-101')
+    expect(second.workflowId).toBe('wf-102')
+    expect(first.objectiveId).toBe(second.objectiveId)
+    expect(first.objectiveId).toBe(OBJECTIVE.id)
+    const one = projectWorkflow(session.events, 'wf-101')
+    const two = projectWorkflow(session.events, 'wf-102')
+    expect(one.executorStarts).toBeGreaterThan(0)
+    expect(two.executorStarts).toBe(one.executorStarts)
+    expect(one.end?.state).toBe('completed')
+    expect(two.end?.state).toBe('completed')
+  })
+
+  it('refuses an id the session already holds a run under', async () => {
+    const started: ExecutorStartRequest[] = []
+    const session = Session.create(SessionId('identity-repeat'))
+    const harness = compose({
+      ...baseOptions(profileEnabling([]), started),
+      session,
+      workflowIdFactory: () => 'wf-same',
+    })
+
+    await harness.run(OBJECTIVE)
+
+    // Reusing the id would not be a collision anybody notices: the second run
+    // would simply continue the first one's history, and its restart assessment
+    // would answer for both.
+    await expect(harness.run(OBJECTIVE)).rejects.toThrow(BundleCompositionError)
   })
 })

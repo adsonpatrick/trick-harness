@@ -18,6 +18,7 @@
  * @module @trick-harness/composition
  */
 
+import { randomUUID } from 'node:crypto'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import { HarnessControlServer } from '@trick-harness/control-server'
@@ -105,6 +106,16 @@ export interface HarnessCompositionOptions {
   readonly control?: HarnessControlOptions
   /** Executors the breaker has already marked degraded. */
   readonly degradedExecutors?: readonly string[]
+  /**
+   * Mints the id of one execution attempt.
+   *
+   * Defaults to `randomUUID`. An objective is a thing a person asks for and may
+   * ask for again; an execution is one attempt at it, and the two cannot share
+   * an id without the second attempt appending its facts onto the first one's
+   * history. A deployment overrides this only to make ids readable or ordered,
+   * never to reuse one: a repeat is refused rather than merged.
+   */
+  readonly workflowIdFactory?: () => string
 }
 
 /** One assembled Harness and everything it owns. */
@@ -220,13 +231,36 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   // profile's routing table and never touches a provider's configuration: the
   // authority a person granted is for this run, and a composition that wrote it
   // down anywhere durable would have turned one decision into a default.
+  const mintWorkflowId = options.workflowIdFactory ?? randomUUID
+  // Ids handed out this process, kept beyond the run that used them. The
+  // durable log answers for a previous process; this set answers for a factory
+  // that repeats an id within one, which the log cannot yet see because the
+  // first run may not have flushed its start.
+  const minted = new Set<string>()
+
+  /**
+   * Mint one execution id, refusing a repeat rather than appending to it.
+   * @returns The id this attempt is recorded under.
+   */
+  const nextWorkflowId = (): string => {
+    const workflowId = mintWorkflowId()
+    const taken = minted.has(workflowId)
+      || projectWorkflow(session.events, workflowId).objective !== undefined
+    if (taken) {
+      throw new BundleCompositionError(`workflow id ${JSON.stringify(workflowId)} already exists`)
+    }
+    minted.add(workflowId)
+    return workflowId
+  }
+
   const run = async (
     objective: WorkflowObjective,
     signal?: AbortSignal,
     routeOverride?: StageRouteOverride,
   ): Promise<WorkflowOutcome> => {
-    const journal = new WorkflowJournal(session, objective.id, flush)
-    const runner = new WorkflowRunner(objective.id, {
+    const workflowId = nextWorkflowId()
+    const journal = new WorkflowJournal(session, workflowId, flush)
+    const runner = new WorkflowRunner(workflowId, {
       profile,
       policy,
       executors: runtime,
