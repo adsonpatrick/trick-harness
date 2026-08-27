@@ -269,13 +269,15 @@ Do not substitute unit tests for failed external proof.
 
 ### Task 9: Independent Final Review
 
-- [ ] Review the exact correction branch diff against the reviewed PR #2 head.
-- [ ] Re-read the remediation Spec and all ten child plans.
-- [ ] Verify the 18-finding closure matrix against code/tests, not checkboxes.
-- [ ] Review model-executor vs deterministic-capability vs human-only authority boundaries.
-- [ ] Review Supabase parent/Preview isolation and GitHub protected-branch constraints.
-- [ ] Review journal payloads for secret/transcript leakage.
-- [ ] Return `PASS | PARTIAL | FAIL | INCONCLUSIVE | BLOCKED` with evidence.
+- [x] Review the exact correction branch diff against the reviewed PR #2 head.
+- [x] Re-read the remediation Spec and all ten child plans.
+- [x] Verify the 18-finding closure matrix against code/tests, not checkboxes.
+- [x] Review model-executor vs deterministic-capability vs human-only authority boundaries.
+- [x] Review Supabase parent/Preview isolation and GitHub protected-branch constraints.
+- [x] Review journal payloads for secret/transcript leakage.
+- [x] Return `PASS | PARTIAL | FAIL | INCONCLUSIVE | BLOCKED` with evidence.
+
+Completed 2026-08-27. Verdict **PARTIAL**: every closure holds against code and executed tests, the full certification chain passes, and the one defect this review found — the force-push guard matching whole arguments — is closed with regression cover at `518b921622`. It is not PASS solely because the Supabase Preview positive canary remains deferred for want of the Pro entitlement. See the verification file.
 
 No PR-ready claim is allowed unless this review is PASS and both real canaries are PASS.
 

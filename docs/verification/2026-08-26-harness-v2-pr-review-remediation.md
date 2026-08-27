@@ -68,7 +68,7 @@ Result: **24 test files passed, 682 tests passed, 0 failed.**
 | Typecheck | `pnpm run typecheck` | PASS |
 | Lint | `pnpm run lint` | PASS |
 | Build | `pnpm run build` | PASS |
-| Fork test target | `pnpm run test:trick` | PASS — 85 files, 1948 tests |
+| Fork test target | `pnpm run test:trick` | PASS — 85 files, 1951 tests |
 | Package invariants | `pnpm run verify-package-invariants` | PASS — 239 companions conform |
 | Documentation gates | `pnpm run doc-sync` | PASS — 28 gates, 0 failed |
 | Markdown wrapping | `pnpm run verify-md-wrap` | PASS — 2033 files |
@@ -99,6 +99,31 @@ No Harness-owned package failed, and no gate was classified as external: every g
 | R2-10 | Integration quiescence | the process-tree quiescence tests in `packages/integrations/github-delivery`; `packages/integrations/supabase-preview/tests/preview.spec.ts` — *keeps a failed teardown out of the run result*, *keeps a branch that would not go away apart from the gates*, *does not let a clean teardown redeem a failed gate* | PASS | `2551c9e864`, `6b8cbcb418`, `efbf0c44c5` |
 | R2-11 | Supabase fail-fast gates | `packages/integrations/supabase-preview/tests/preview.spec.ts` — *creates a branch, waits for it, applies migrations, reads them back, lints and cleans up*, *asks nothing of a branch whose migrations did not apply*, *never migrates a branch that reports the parent as its own ref*, *does not run the project suite against a branch that failed lint*, *plans no gate it was never going to run* | PASS | `977e438129` |
 | R2-12 | Profile identity binding | `packages/composition/runtime/tests/harness.spec.ts` — the objective/profile mismatch preflight: no run id minted, no journal write, no executor start | PASS | `d25549689d` |
+
+## Independent final review — Task 9, 2026-08-27
+
+The review read the branch as a whole rather than the checkboxes: `b0d2f308f8849c6ffaff3bc6f713b1bb923c56b4`, the head of the reviewed pull request, is an ancestor of this branch's head, and the diff between them is 56 commits over 85 files, +9970/-655. Every claim below was checked against code or an executed test, never against a plan entry that said it was done.
+
+The certification chain was rerun end to end on the reviewed tree — constraints, typecheck, lint, build, `test:trick` — and exited 0 with 85 test files and 1951 tests passing.
+
+What the review confirmed, each against the named source:
+
+- Profile identity binds before anything observable happens: `packages/composition/runtime/src/harness.ts:410` calls `assertObjectiveProfile` before the workflow id is minted (411), before the journal is constructed (412), and before delivery is bound (413).
+- No profile grants a model executor a generic shell or exec capability; deterministic mutation reaches the world only through `GitHubDelivery` and `SupabasePreview`.
+- `gh pr merge`, `gh release` and `gh workflow` are refused, and `git -c key=value` cannot be used to step over the subcommand check in `assertAllowed`.
+- The Supabase guard refuses `--local` and `--linked` as boolean flags with no value form to slip through, and `#must` never carries command output into an error message, so no connection string can reach an exception.
+- Repair is bounded at three cycles and twenty-four executor starts in `profiles/plurora/workflow-policy.ts:20-21`.
+- The journal carries no transcript and no chain of thought: the record types hold `reasoningEffort` and observable results, nothing else.
+- A claimed PASS over a confirmed material defect is refused at `packages/core/engineering-workflow/src/triage.ts:156`, and `stateOf` in `lifecycle.ts:119-120` downgrades a PASS with open defects to PARTIAL before it can ever read as PR READY.
+- The 85 changed TypeScript files contain no test escape hatches — no skipped, focused or conditionally disabled specs.
+
+One defect was found, and it was real. `DENIED_PUSH_ARGS` was compared against the whole argument, so the guard stopped `--force-with-lease` and allowed `--force-with-lease=refs/heads/master`, `--force-if-includes=x` and `--force=x`, which are the forms anyone would actually write; and `git push origin :refs/heads/master`, a refspec that deletes a remote branch while carrying no flag at all, passed as well. All four were confirmed as allowed against `assertAllowed` before the fix rather than reasoned about. The comparison now takes the flag name before `=`, a refspec with an empty source half is refused on its own terms, three regression tests cover the value forms, the deleting refspec and the push the capability really constructs, and the package suite passes at 48 tests.
+
+| ID | Finding | Evidence | Result | SHA |
+| --- | --- | --- | --- | --- |
+| T9-01 | Force-push guard matched whole arguments, allowing the value forms and a deleting refspec | `packages/integrations/github-delivery/tests/commands.spec.ts` — *refuses the value forms of the force flags, which are the ones anyone would actually write*, *refuses a refspec that deletes the remote branch without saying delete*, *still allows the push this capability actually constructs* | CLOSED | `518b921622` |
+
+**Verdict: PARTIAL.** Every finding in the closure table above holds against code and executed tests, the whole certification chain passes on this tree, and the one defect this review found is closed with regression cover. It is not a PASS because the master plan's exit condition requires the Supabase Preview positive canary against the real remote, and that canary is deliberately deferred for want of the Pro entitlement, as the section above records. The verdict is PARTIAL for exactly that reason and for no other: nothing material is open in the code.
 
 ## Canaries
 
