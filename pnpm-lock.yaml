@@ -3407,6 +3407,27 @@ importers:
         specifier: workspace:^
         version: link:../../llm/token-meter
 
+  packages/composition/runtime:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@trick-harness/executor':
+        specifier: workspace:^
+        version: link:../../core/executor
+      '@trick-harness/profile':
+        specifier: workspace:^
+        version: link:../../core/profile
+      '@trick-harness/provider-codex':
+        specifier: workspace:^
+        version: link:../../providers/codex
+      '@trick-harness/provider-opencode':
+        specifier: workspace:^
+        version: link:../../providers/opencode
+
   packages/context/agent-instructions:
     dependencies:
       '@deepseek-ai/schemastery':
@@ -3721,6 +3742,24 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: workspace:^
         version: link:../tools
+
+  packages/core/executor:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
+  packages/core/profile:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
 
   packages/core/scope:
     devDependencies:
@@ -5921,6 +5960,43 @@ importers:
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:^
         version: link:../../core/system-prompt
+
+  packages/providers/codex:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-subagent':
+        specifier: workspace:^
+        version: link:../../subagent/subagent
+      '@deepseek-ai/dsh-subagent-codex':
+        specifier: workspace:^
+        version: link:../../subagent/subagent-codex
+      '@deepseek-ai/dsh-subprocess':
+        specifier: workspace:^
+        version: link:../../subprocess/subprocess
+      '@trick-harness/executor':
+        specifier: workspace:^
+        version: link:../../core/executor
+
+  packages/providers/opencode:
+    dependencies:
+      '@opencode-ai/sdk':
+        specifier: 1.18.23
+        version: 1.18.23
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@trick-harness/executor':
+        specifier: workspace:^
+        version: link:../../core/executor
 
   packages/runtime-diagnostics/invariants:
     dependencies:
@@ -10570,6 +10646,9 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@opencode-ai/sdk@1.18.23':
+    resolution: {integrity: sha512-VouYbL8O2ynLq0atr5fjzCv8YLtFi/zKLQ/uYkCvTJ4CmUdA01XwPn8om+u3TvxnGEfQsBfmThGU141vt3sg5w==}
 
   '@opentelemetry/api-logs@0.220.0':
     resolution: {integrity: sha512-CmVa4ImJ+ynfrPMNaAXHET6Bhb44SwzmfyVJFq9ni2jgXJR/l7C6gfVFddNmHP+ZOkP9cf4f9DBe68qVLTHc9w==}
@@ -16004,6 +16083,10 @@ snapshots:
 
   '@openai/codex@0.147.0-win32-x64':
     optional: true
+
+  '@opencode-ai/sdk@1.18.23':
+    dependencies:
+      cross-spawn: 7.0.6
 
   '@opentelemetry/api-logs@0.220.0':
     dependencies:

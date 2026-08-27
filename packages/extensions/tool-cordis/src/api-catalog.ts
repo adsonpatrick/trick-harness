@@ -715,6 +715,53 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'executors',
+    summary: 'Cordis service exposing the executor runtime as `ctx.executors`.',
+    description: 'Cordis service exposing the executor runtime as `ctx.executors`.',
+    methods: [
+      {
+        signature: 'register(provider: ExecutorProvider): ExecutorRegistration',
+        description: 'Register one provider under its declared name.',
+        parameters: [{ name: 'provider', description: 'the provider to register.' }],
+        returns: 'a handle whose disposal unregisters exactly this registration.',
+      },
+      {
+        signature: 'get(name: string): ExecutorProvider',
+        description: 'Look one provider up by name.',
+        parameters: [{ name: 'name', description: 'the registered provider name.' }],
+        returns: 'the provider.',
+      },
+      {
+        signature: 'list(): readonly ExecutorProvider[]',
+        description: 'List every registered provider.',
+        parameters: [],
+        returns: 'the providers, ordered by registration.',
+      },
+      {
+        signature: 'start(request: ExecutorStartRequest): Promise<ExecutorResult>',
+        description: 'Validate a request and dispatch it to the routed provider.',
+        parameters: [{ name: 'request', description: 'the resolved request.' }],
+        returns: 'the provider\'s bounded result.',
+      },
+      {
+        signature: 'activeRuns(): number',
+        description: 'Count runs currently in flight.',
+        parameters: [],
+        returns: 'the number of active runs.',
+      },
+      {
+        signature: 'stop(): void',
+        description: 'Abort every run in flight when the owning context stops.',
+        parameters: [],
+      },
+      {
+        signature: 'dispose(): void',
+        description: 'Unregister every provider and abort every run in flight.',
+        parameters: [],
+      },
+    ],
+  },
+  {
     key: 'fileReferences',
     summary: 'Host capability for cancellable file-reference discovery.',
     description: 'Host capability for cancellable file-reference discovery.',
@@ -1131,6 +1178,31 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Select whether plan mode should be active. Between turns the method appends the change immediately because no in-turn pre-step will run until another prompt starts a turn. The open-turn fold is the idle signal: agent status stays `running` through post-turn checkpointing, when no further in-turn pre-step runs. During an open turn the selection remains pending until the next accepted in-turn pre-step. Repeated selection of the current or already-pending state is a no-op.',
         parameters: [{ name: 'agent', description: 'The agent to switch.' }, { name: 'active', description: 'Whether plan mode should be active.' }],
         returns: 'what happened: `committed` (logged now), `queued` (awaiting the next accepted in-turn pre-step), `cancelled` (an opposite pending selection was cleared; the logged state already matches), or `noop` (already in that state).',
+      },
+    ],
+  },
+  {
+    key: 'profiles',
+    summary: 'Cordis service exposing the validated profile registry as `ctx.profiles`.',
+    description: 'Cordis service exposing the validated profile registry as `ctx.profiles`.',
+    methods: [
+      {
+        signature: 'register(profile: HarnessProfile): ProfileRegistration',
+        description: 'Validate and register one profile.',
+        parameters: [{ name: 'profile', description: 'the candidate profile.' }],
+        returns: 'a handle whose disposal unregisters exactly this registration.',
+      },
+      {
+        signature: 'get(id: string): HarnessProfile',
+        description: 'Look one profile up by id.',
+        parameters: [{ name: 'id', description: 'the profile id.' }],
+        returns: 'the registered profile.',
+      },
+      {
+        signature: 'list(): readonly HarnessProfile[]',
+        description: 'List every registered profile.',
+        parameters: [],
+        returns: 'the profiles, ordered by registration.',
       },
     ],
   },
@@ -3338,6 +3410,38 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface EpochHeader {\n    config: LlmCallConfig;\n    adapterDefaults?: LlmCallConfigAdapterDefaults;\n    system?: string;\n    tools?: ToolSchema[];\n}',
   },
   {
+    name: 'ExecutorCapabilities',
+    declaration: 'export interface ExecutorCapabilities {\n    readonly modelOverride: boolean;\n    readonly reasoningEffort: boolean;\n    readonly permissionModes: readonly ExecutorPermissionMode[];\n}',
+  },
+  {
+    name: 'ExecutorFailure',
+    declaration: 'export interface ExecutorFailure {\n    readonly category: string;\n    readonly availability: boolean;\n    readonly safeDiagnostic: string;\n    readonly httpStatus?: number;\n}',
+  },
+  {
+    name: 'ExecutorPermissionMode',
+    declaration: 'export type ExecutorPermissionMode = \'read-only\' | \'workspace-write\';',
+  },
+  {
+    name: 'ExecutorProvider',
+    declaration: 'export interface ExecutorProvider {\n    readonly name: string;\n    readonly capabilities: ExecutorCapabilities;\n    start(request: ExecutorStartRequest): Promise<ExecutorResult>;\n}',
+  },
+  {
+    name: 'ExecutorRegistration',
+    declaration: 'export interface ExecutorRegistration {\n    dispose(): void;\n}',
+  },
+  {
+    name: 'ExecutorResult',
+    declaration: 'export interface ExecutorResult {\n    readonly status: \'completed\' | \'aborted\' | \'error\';\n    readonly output: string;\n    readonly failure?: ExecutorFailure;\n}',
+  },
+  {
+    name: 'ExecutorRoute',
+    declaration: 'export interface ExecutorRoute {\n    readonly executor: string;\n    readonly model?: string;\n    readonly reasoningEffort?: ReasoningEffort;\n    readonly permissionMode: ExecutorPermissionMode;\n}',
+  },
+  {
+    name: 'ExecutorStartRequest',
+    declaration: 'export interface ExecutorStartRequest {\n    readonly cwd: string;\n    readonly task: string;\n    readonly route: ExecutorRoute;\n    readonly signal: AbortSignal;\n}',
+  },
+  {
     name: 'FileDiff',
     declaration: 'export interface FileDiff {\n    path: string;\n    oldText: string | null;\n    newText: string;\n}',
   },
@@ -3446,6 +3550,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GrantRecord {\n    readonly kind: \'grant\';\n    readonly payload: unknown;\n}',
   },
   {
+    name: 'HarnessProfile',
+    declaration: 'export interface HarnessProfile {\n    readonly id: string;\n    readonly policyVersion: string;\n    readonly routingPolicy: RoutingPolicyDefinition;\n    readonly workflowPolicy: WorkflowPolicyDefinition;\n    readonly independencePolicy: IndependencePolicyDefinition;\n    readonly qaPolicy: QaPolicyDefinition;\n    readonly securityPolicy: SecurityPolicyDefinition;\n    readonly integrationPolicy: IntegrationPolicyDefinition;\n    readonly trustedComposition: TrustedCompositionDefinition;\n}',
+  },
+  {
     name: 'ImageAttachmentLimits',
     declaration: 'export interface ImageAttachmentLimits {\n    maxImageBytes: number;\n    maxImagesPerMessage: number;\n    maxMessageImageBytes: number;\n    maxImagePixels: number;\n    maxImageDimension: number;\n    mediaTypes: readonly ImageMediaType[];\n}',
   },
@@ -3482,12 +3590,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type InboxTarget = \'next-turn\' | \'next-step\';',
   },
   {
+    name: 'IndependencePolicyDefinition',
+    declaration: 'export interface IndependencePolicyDefinition {\n    readonly low: \'fresh-context\';\n    readonly medium: \'cross-executor-preferred\';\n    readonly high: \'cross-executor-required\';\n    readonly critical: \'cross-executor-required\';\n}',
+  },
+  {
     name: 'IndexInjection',
     declaration: 'export type IndexInjection = {\n    kind: \'global\';\n    name: string;\n    value: unknown;\n} | {\n    kind: \'script\';\n    placement: IndexInjectionPlacement;\n    text: string;\n} | {\n    kind: \'script-src\';\n    placement: IndexInjectionPlacement;\n    src: string;\n} | {\n    kind: \'style\';\n    text: string;\n} | {\n    kind: \'html\';\n    placement: IndexInjectionPlacement;\n    html: string;\n};',
   },
   {
     name: 'IndexInjectionPlacement',
     declaration: 'export type IndexInjectionPlacement = \'head\' | \'body\';',
+  },
+  {
+    name: 'IntegrationPolicyDefinition',
+    declaration: 'export interface IntegrationPolicyDefinition {\n    readonly enabled: readonly string[];\n    readonly rules: readonly PolicyRuleDefinition[];\n}',
   },
   {
     name: 'InvariantFailure',
@@ -3810,6 +3926,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PermissionSelect {\n    options: PresetOption[];\n    currentValue: string;\n}',
   },
   {
+    name: 'PolicyRuleDefinition',
+    declaration: 'export interface PolicyRuleDefinition {\n    readonly id: string;\n    readonly when: Readonly<Record<string, string | number | boolean>>;\n    readonly use: Readonly<Record<string, string | number | boolean>>;\n}',
+  },
+  {
     name: 'PostToolDecision',
     declaration: 'export type PostToolDecision = {\n    kind: \'accept\';\n    content?: ContentBlock[];\n    value?: never;\n    additionalContexts?: UserMessage[];\n} | {\n    kind: \'accept\';\n    value: JsonValue;\n    content?: never;\n    additionalContexts?: UserMessage[];\n} | {\n    kind: \'block\';\n    feedback: ContentBlock[];\n    additionalContexts?: UserMessage[];\n};',
   },
@@ -3848,6 +3968,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PreToolDecision',
     declaration: 'export type PreToolDecision = {\n    kind: \'allow\';\n} | {\n    kind: \'deny\';\n    reason: string;\n} | {\n    kind: \'ask\';\n    reason?: string;\n};',
+  },
+  {
+    name: 'ProfileRegistration',
+    declaration: 'export interface ProfileRegistration {\n    dispose(): void;\n}',
   },
   {
     name: 'ProjectionChangeListener',
@@ -3894,6 +4018,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PruneResult {\n    readonly pruned: readonly PrunedEntry[];\n    readonly charsRemoved: number;\n}',
   },
   {
+    name: 'QaPolicyDefinition',
+    declaration: 'export interface QaPolicyDefinition {\n    readonly rules: readonly PolicyRuleDefinition[];\n}',
+  },
+  {
     name: 'ReadFileLine',
     declaration: 'export interface ReadFileLine {\n    number: number;\n    text: string;\n}',
   },
@@ -3904,6 +4032,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ReasoningBlock',
     declaration: 'export interface ReasoningBlock {\n    type: \'reasoning\';\n    text: string;\n}',
+  },
+  {
+    name: 'ReasoningEffort',
+    declaration: 'export type ReasoningEffort = \'none\' | \'low\' | \'medium\' | \'high\' | \'xhigh\' | \'max\';',
   },
   {
     name: 'ReasoningEffortId',
@@ -3968,6 +4100,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ResumeAgentOptions',
     declaration: 'export interface ResumeAgentOptions {\n    readonly resumeSessionId: SessionId;\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+  },
+  {
+    name: 'RoutingPolicyDefinition',
+    declaration: 'export interface RoutingPolicyDefinition {\n    readonly rules: readonly PolicyRuleDefinition[];\n    readonly fallbackRules: readonly PolicyRuleDefinition[];\n}',
   },
   {
     name: 'RpcError',
@@ -4060,6 +4196,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SearchResultView',
     declaration: 'export type SearchResultView = SearchMatchesResultView | SearchPathsResultView;',
+  },
+  {
+    name: 'SecurityPolicyDefinition',
+    declaration: 'export interface SecurityPolicyDefinition {\n    readonly rules: readonly PolicyRuleDefinition[];\n}',
   },
   {
     name: 'SendTeamMessageRequest',
@@ -4854,6 +4994,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ToolSchema {\n    name: string;\n    description: string;\n    parameters: Record<string, unknown>;\n}',
   },
   {
+    name: 'TrustedCompositionDefinition',
+    declaration: 'export interface TrustedCompositionDefinition {\n    readonly excludedPluginIds: readonly string[];\n}',
+  },
+  {
     name: 'TurnEndCancelCause',
     declaration: 'export type TurnEndCancelCause = AgentCancelCause | {\n    readonly kind: \'legacy\';\n};',
   },
@@ -5024,6 +5168,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkflowPhase',
     declaration: 'export interface WorkflowPhase {\n    title: string;\n    detail?: string;\n    provider?: string;\n    model?: string;\n}',
+  },
+  {
+    name: 'WorkflowPolicyDefinition',
+    declaration: 'export interface WorkflowPolicyDefinition {\n    readonly maxRepairCycles: number;\n    readonly maxExecutorStarts: number;\n}',
   },
   {
     name: 'WorkflowResult',

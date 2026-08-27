@@ -7,6 +7,10 @@ A service can be a core spine service, a swappable capability seam, or a bundle/
 
 ```mermaid
 flowchart LR
+  pkg_core_executor["core/executor"]
+  svc_executors["ctx.executors<br/>Executor provider registry and capability-checked dispatch"]
+  pkg_core_profile["core/profile"]
+  svc_profiles["ctx.profiles<br/>Validated project profile registry"]
   pkg_attachment["attachment"]
   svc_attachments["ctx.attachments<br/>Durable binary attachment storage"]
   pkg_attachment_local["attachment-local"]
@@ -223,6 +227,8 @@ flowchart LR
   pkg_compaction_tool_result_pruner --> svc_toolResultPruner
   pkg_cordis_host_runner --> svc_cordisInspect
   pkg_cordis_host_runner --> svc_dynamicCordisRunner
+  pkg_core_executor --> svc_executors
+  pkg_core_profile --> svc_profiles
   pkg_credentials --> svc_credentials
   pkg_credentials_local --> svc_credentials
   pkg_directory_picker --> svc_directoryPicker
@@ -425,6 +431,8 @@ flowchart LR
 
 | ctx key | Role | Owner | Implementations | Direct consumers | Companion plugins | Note |
 | --- | --- | --- | --- | --- | --- | --- |
+| `ctx.executors` | `seam` | `core/executor` | - | - | - | Fork-local. The runtime owns provider selection, route admissibility, and run lifetime; providers translate one validated request into one product runtime. A route the provider does not declare support for is refused before anything is spawned, so a recorded route never names a model that did not run. |
+| `ctx.profiles` | `seam` | `core/profile` | - | - | - | Fork-local. The seam separating reusable mechanism from project policy: profiles carry declarative policy tables as data, and this registry validates and freezes them without interpreting their rules. |
 | `ctx.attachments` | `seam` | [`attachment`](../packages/attachment/attachment) | [`attachment-local`](../packages/attachment/attachment-local) | `host-runtime`, [`llm-pi-ai`](../packages/llm/llm-pi-ai) | - | The host commits accepted images before session events; provider adapters resolve authorized durable references into provider-native content. |
 | `ctx.llm` | `seam` | [`llm`](../packages/llm/llm) | [`llm-deepseek`](../packages/llm/llm-deepseek), [`llm-pi-ai`](../packages/llm/llm-pi-ai), [`llm-replay`](../packages/test-support/llm-replay) | [`agent-loop`](../packages/core/agent-loop), [`compaction-basic`](../packages/compaction/compaction-basic) | - | Adapters register provider implementations; the loop and compaction call the provider-neutral stream service. |
 | `ctx.tokenMeter` | `core` | [`token-meter`](../packages/llm/token-meter) | - | [`compaction-basic`](../packages/compaction/compaction-basic) | - | Owns isolated per-session replay folds; pressure consumers share immutable revisioned measurements. |

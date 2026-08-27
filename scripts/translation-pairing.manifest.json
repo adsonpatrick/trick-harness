@@ -3,10 +3,25 @@
     ".agents/notes/AGENTS.md",
     ".agents/notes/implemented/AGENTS.md",
     ".agents/notes/implemented/CLAUDE.md",
+    ".agents/notes/implemented/architecture/2026-08-25-executor-capability.md",
+    ".agents/notes/implemented/architecture/2026-08-25-project-profile-seam.md",
+    ".agents/notes/implemented/architecture/2026-08-25-opencode-executor-provider.md",
+    ".agents/notes/implemented/architecture/2026-08-25-codex-executor-provider.md",
+    ".agents/notes/implemented/architecture/2026-08-25-harness-composition-root.md",
+    ".agents/notes/implemented/architecture/2026-08-25-codex-scoped-one-shot-transport.md",
+    ".agents/notes/implemented/architecture/2026-08-25-trick-harness-fork-foundation.md",
     "docs/AGENTS.md",
     "docs/cordis-api/inherited.md",
     "docs/i18n/style-samples.md",
     "docs/i18n/terminology.md",
-    "docs/i18n/translation-prompt.md"
+    "docs/i18n/translation-prompt.md",
+    "docs/superpowers/",
+    "docs/trick-harness/",
+    "packages/composition/runtime/README.md",
+    "packages/core/executor/README.md",
+    "packages/core/profile/README.md",
+    "packages/providers/codex/README.md",
+    "packages/providers/opencode/README.md",
+    "profiles/"
   ]
 }

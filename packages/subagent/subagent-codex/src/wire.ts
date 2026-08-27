@@ -11,7 +11,7 @@ import type { Readable, Writable } from 'node:stream'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SubagentResult } from '@deepseek-ai/dsh-subagent'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
-import type { CodexPermissionMode } from './run.ts'
+import type { CodexPermissionMode, CodexRouting } from './run.ts'
 
 type JsonObject = Record<string, unknown>
 
@@ -245,6 +245,7 @@ export class CodexAppServerWire {
     private readonly input: Readable,
     output: Writable,
     private readonly permissionMode: CodexPermissionMode,
+    private readonly routing: CodexRouting = {},
   ) {
     this.transport = new JsonRpcLineTransport(input, output)
     // Fatal protocol state can arrive after the current guarded operation has
@@ -310,6 +311,23 @@ export class CodexAppServerWire {
       cwd,
       ephemeral: true,
       ...THREAD_PERMISSION_PARAMS[this.permissionMode],
+      // A routed sandbox is applied last because it is the more specific
+      // decision: the deployment's permission mode says how a run is
+      // supervised, and the route says what this one run may reach.
+      //
+      // What routing can and cannot do, precisely. It can never reach
+      // `danger-full-access`, which stays exclusive to the deployment-owned
+      // bypass mode — so against that mode a route only ever narrows. Against
+      // `approve-for-me` it can narrow to `read-only`. Against `never`, which
+      // emits no sandbox at all and leaves the choice to the user's own Codex
+      // configuration, a routed `workspace-write` can grant more authority than
+      // that configuration would have: an unrouted run under `never` inherits
+      // the user's setting, and a routed one states its own. That is the
+      // intended contract — the route is the authority decision for the run —
+      // but it is a grant, not merely a restriction, and is written down here
+      // as one.
+
+      ...this.routing.sandbox === undefined ? {} : { sandbox: this.routing.sandbox },
     }, signal), signal), 'thread/start response')
     const thread = object(response.thread, 'thread/start thread')
     const id = string(thread.id, 'thread/start thread id')
@@ -340,6 +358,13 @@ export class CodexAppServerWire {
       const response = object(await this.guarded(this.transport.request('turn/start', {
         threadId,
         input: texts.map(text => ({ type: 'text', text, text_elements: [] })),
+        // `model` and `effort` are the two optional `TurnStartParams` fields
+        // verified against the pinned app-server schema. They are omitted
+        // entirely when unrouted so an unrouted run emits the exact frame it
+        // emitted before this seam existed, and so neither field is ever sent
+        // as an explicit null the server would read as "clear the override".
+        ...this.routing.model === undefined ? {} : { model: this.routing.model },
+        ...this.routing.effort === undefined ? {} : { effort: this.routing.effort },
       }, signal), signal), 'turn/start response')
       const turn = object(response.turn, 'turn/start turn')
       this.commitTurnId(string(turn.id, 'turn/start turn id'))

@@ -722,6 +722,85 @@ roots(): Agent[]
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 
+<a id="ctxexecutors--executorruntime"></a>
+
+### `ctx.executors` — `ExecutorRuntime`
+
+Cordis service exposing the executor runtime as `ctx.executors`.
+
+```ts cordis-catalog
+/**
+ * Register one provider under its declared name.
+ * @param provider - the provider to register.
+ * @returns a handle whose disposal unregisters exactly this registration.
+ */
+register(provider: ExecutorProvider): ExecutorRegistration
+
+/**
+ * Look one provider up by name.
+ * @param name - the registered provider name.
+ * @returns the provider.
+ */
+get(name: string): ExecutorProvider
+
+/**
+ * List every registered provider.
+ * @returns the providers, ordered by registration.
+ */
+list(): readonly ExecutorProvider[]
+
+/**
+ * Validate a request and dispatch it to the routed provider.
+ * @param request - the resolved request.
+ * @returns the provider's bounded result.
+ */
+start(request: ExecutorStartRequest): Promise<ExecutorResult>
+
+/**
+ * Count runs currently in flight.
+ * @returns the number of active runs.
+ */
+activeRuns(): number
+
+/** Abort every run in flight when the owning context stops. */
+stop(): void
+
+/** Unregister every provider and abort every run in flight. */
+dispose(): void
+```
+
+Source: [`packages/core/executor/src/index.ts`](../../packages/core/executor/src/index.ts)
+
+<a id="ctxprofiles--profileregistry"></a>
+
+### `ctx.profiles` — `ProfileRegistry`
+
+Cordis service exposing the validated profile registry as `ctx.profiles`.
+
+```ts cordis-catalog
+/**
+ * Validate and register one profile.
+ * @param profile - the candidate profile.
+ * @returns a handle whose disposal unregisters exactly this registration.
+ */
+register(profile: HarnessProfile): ProfileRegistration
+
+/**
+ * Look one profile up by id.
+ * @param id - the profile id.
+ * @returns the registered profile.
+ */
+get(id: string): HarnessProfile
+
+/**
+ * List every registered profile.
+ * @returns the profiles, ordered by registration.
+ */
+list(): readonly HarnessProfile[]
+```
+
+Source: [`packages/core/profile/src/index.ts`](../../packages/core/profile/src/index.ts)
+
 <a id="agent-events"></a>
 
 ### `agent/*` events

@@ -75,6 +75,9 @@ const OVERRIDES: Record<string, { license?: string; repo?: string }> = {
   '@modelcontextprotocol/server-filesystem': { license: 'MIT / Apache-2.0', repo: 'https://github.com/modelcontextprotocol/servers' },
   // No repository field in the published manifest.
   'node-addon-require-builtin': { repo: 'https://www.npmjs.com/package/node-addon-require-builtin' },
+  // Published manifest declares MIT but no repository field, and nothing in the
+  // tarball names the source host, so the npm page is the verifiable origin.
+  '@opencode-ai/sdk': { repo: 'https://www.npmjs.com/package/@opencode-ai/sdk' },
 }
 
 /**

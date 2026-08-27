@@ -39,6 +39,18 @@
       "@deepseek-ai/cordis-plugin-logger-console": ["./vendor/logger-console/src"],
       "@deepseek-ai/node-addon-landlock-run": ["./native/landlock-run/packages/entry/src/index.ts"],
       "@deepseek-ai/dsh-invariants": ["./packages/runtime-diagnostics/invariants/src/index.ts"],
+      // Fork-local Trick Harness packages. Private to this fork, never published
+      // under the upstream scope; see docs/trick-harness/upstream.md.
+      "@trick-harness/executor": ["./packages/core/executor/src/index.ts"],
+      "@trick-harness/executor/invariant": ["./packages/core/executor/src/invariant.ts"],
+      "@trick-harness/composition": ["./packages/composition/runtime/src/index.ts"],
+      "@trick-harness/composition/invariant": ["./packages/composition/runtime/src/invariant.ts"],
+      "@trick-harness/provider-codex": ["./packages/providers/codex/src/index.ts"],
+      "@trick-harness/provider-codex/invariant": ["./packages/providers/codex/src/invariant.ts"],
+      "@trick-harness/provider-opencode": ["./packages/providers/opencode/src/index.ts"],
+      "@trick-harness/provider-opencode/invariant": ["./packages/providers/opencode/src/invariant.ts"],
+      "@trick-harness/profile": ["./packages/core/profile/src/index.ts"],
+      "@trick-harness/profile/invariant": ["./packages/core/profile/src/invariant.ts"],
       "@deepseek-ai/dsh-tool-call-timeout-policy": ["./packages/guard/timeout-policy/src"],
       "@deepseek-ai/dsh-tool-call-timeout-policy/invariant": ["./packages/guard/timeout-policy/src/invariant.ts"],
       "@deepseek-ai/dsh-typert-registry": ["./packages/typert/registry/src/index.ts"],

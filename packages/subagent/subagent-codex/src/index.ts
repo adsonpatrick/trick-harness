@@ -27,6 +27,25 @@ import {
   type CodexRunSpec,
 } from './run.ts'
 
+// The scoped transport is part of this package's public surface: a routed
+// worker has no delegating parent Session, so it cannot enter through the
+// Provider above, and the build emits only the `index` and `invariant`
+// entries, so it cannot enter through a subpath either.
+export {
+  CODEX_PERMISSION_MODES,
+  CODEX_ROUTED_SANDBOXES,
+  DEFAULT_CODEX_PERMISSION_MODE,
+  DEFAULT_DISPOSE_GRACE_MS,
+  type CodexPermissionMode,
+  parseCodexDiagnostic,
+  startCodexTask,
+  type CodexDiagnosticFacts,
+  type CodexRouting,
+  type CodexRoutedSandbox,
+  type CodexTaskRequest,
+  type CodexTaskSpec,
+} from './run.ts'
+
 export const name = 'subagent-codex'
 export const inject = ['subagents', 'subprocess']
 

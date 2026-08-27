@@ -98,6 +98,20 @@ const GROUP_ORDER = [
 
 const SERVICE_ROLES: ServiceRole[] = [
   {
+    key: 'executors',
+    pkg: 'core/executor',
+    title: 'Executor provider registry and capability-checked dispatch',
+    mode: 'seam',
+    note: 'Fork-local. The runtime owns provider selection, route admissibility, and run lifetime; providers translate one validated request into one product runtime. A route the provider does not declare support for is refused before anything is spawned, so a recorded route never names a model that did not run.',
+  },
+  {
+    key: 'profiles',
+    pkg: 'core/profile',
+    title: 'Validated project profile registry',
+    mode: 'seam',
+    note: 'Fork-local. The seam separating reusable mechanism from project policy: profiles carry declarative policy tables as data, and this registry validates and freezes them without interpreting their rules.',
+  },
+  {
     key: 'attachments',
     pkg: 'attachment',
     title: 'Durable binary attachment storage',
