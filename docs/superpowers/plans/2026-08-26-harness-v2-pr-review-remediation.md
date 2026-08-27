@@ -160,7 +160,7 @@ PR READY
 **File:**
 - Create: `docs/verification/2026-08-26-harness-v2-pr-review-remediation.md`
 
-- [ ] **Step 1: Record exact execution provenance**
+- [x] **Step 1: Record exact execution provenance**
 
 The verification file must record:
 
@@ -174,7 +174,7 @@ GitHub canary branch/PR identity
 
 Do not record secrets or connection strings.
 
-- [ ] **Step 2: Run affected package suites together**
+- [x] **Step 2: Run affected package suites together**
 
 ```bash
 pnpm vitest run \
@@ -192,13 +192,13 @@ pnpm vitest run \
   profiles/plurora
 ```
 
-- [ ] **Step 3: Run full repository gates**
+- [x] **Step 3: Run full repository gates**
 
 Run the exact current root scripts for workspace constraints, typecheck, lint, build, full tests, coverage where configured, doc-sync, hygiene/invariants, and real entry-path/keyless snapshots.
 
 A Harness-owned failing package blocks completion. An upstream/environmental timeout may be classified as external only after a fresh isolated rerun proves it is not caused by the correction branch.
 
-- [ ] **Step 4: Complete this exact closure table in the verification file**
+- [x] **Step 4: Complete this exact closure table in the verification file**
 
 | ID | Finding | Required evidence |
 | --- | --- | --- |
@@ -223,7 +223,7 @@ A Harness-owned failing package blocks completion. An upstream/environmental tim
 
 Each row must cite a current test name, result, and commit SHA.
 
-- [ ] **Step 5: Commit verification evidence**
+- [x] **Step 5: Commit verification evidence**
 
 ```bash
 git add docs/verification/2026-08-26-harness-v2-pr-review-remediation.md

@@ -16,6 +16,7 @@
     "docs/i18n/terminology.md",
     "docs/i18n/translation-prompt.md",
     "docs/superpowers/",
+    "docs/verification/",
     "docs/trick-harness/",
     "packages/composition/runtime/README.md",
     "packages/core/executor/README.md",
