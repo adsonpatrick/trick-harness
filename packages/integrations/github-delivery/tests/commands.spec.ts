@@ -118,6 +118,29 @@ describe('the operations that are absent rather than guarded', () => {
     }
   })
 
+  it('refuses the value forms of the force flags, which are the ones anyone would actually write', () => {
+    // `--force-with-lease` is nearly always written with the ref it leases
+    // against. A guard that only knew the bare spelling would stop the form
+    // nobody uses and allow the form everybody does.
+    for (const denied of [
+      '--force-with-lease=refs/heads/master',
+      '--force-if-includes=refs/heads/master',
+      '--force=anything',
+    ]) {
+      expect(codeOf(() => { assertAllowed(['git', 'push', 'origin', 'HEAD', denied]) })).toBe('denied-operation')
+    }
+  })
+
+  it('refuses a refspec that deletes the remote branch without saying delete', () => {
+    expect(codeOf(() => { assertAllowed(['git', 'push', 'origin', ':refs/heads/master']) })).toBe('denied-operation')
+  })
+
+  it('still allows the push this capability actually constructs', () => {
+    expect(() => {
+      assertAllowed(['git', 'push', '-u', 'origin', 'refs/heads/feature:refs/heads/feature'])
+    }).not.toThrow()
+  })
+
   it('refuses merge, rebase and reset outright', () => {
     for (const subcommand of ['merge', 'rebase', 'reset']) {
       expect(codeOf(() => { assertAllowed(['git', subcommand, 'origin/main']) })).toBe('denied-operation')
