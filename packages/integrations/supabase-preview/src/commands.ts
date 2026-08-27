@@ -43,6 +43,7 @@ export class PreviewError extends Error {
     | 'unreadable-branch'
     | 'branch-unhealthy'
     | 'command-failed'
+    | 'teardown-failed'
     | 'cancelled'
 
   /**

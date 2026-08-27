@@ -22,6 +22,22 @@ It is read from the branch, held for the length of the run, passed to database c
 
 pgTAP and RLS tests belong to the repository, not here, so the suite is configuration: an argv the project supplies. It is still read for the same denied flags, because a project test command carrying `--local` or `--linked` would quietly move the gate off the branch the run provisioned.
 
+## A command is settled when its tree is gone
+
+The Supabase CLI starts helpers, and a closed direct child says nothing about
+them. Every command here waits for its whole owned process tree before the next
+one runs: otherwise a migration would be applied while the previous command
+still holds a connection to the branch, and the branch would be deleted out from
+under something still writing to it.
+
+A tree that cannot be observed to have exited blocks the run with
+`teardown-failed`. It is never reported as a command that succeeded, whatever
+exit code the child gave, and the underlying cause is dropped rather than
+wrapped — a Supabase failure echoes the connection string it was handed.
+
+The cancellation signal is not passed to that wait. A cancelled run still owns
+what it started.
+
 ## Cleanup is a separate report
 
 The branch is deleted whatever happened to the run, including cancellation, and the delete is deliberately not given the run's abort signal — a cancelled run is exactly the case where a hosted branch would otherwise be left behind. Whether the delete worked is reported in `cleanup`, apart from the run's own result, because a leaked branch costs money and needs a person while a failed migration needs a repair cycle.

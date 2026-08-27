@@ -183,11 +183,45 @@ export class SupabasePreview {
       ...env === undefined ? {} : { env },
     })
     const outcome = await handle.done
+    // `done` says the direct child closed. The Supabase CLI starts helpers —
+    // psql among them — and a run that read `done` and moved on would apply
+    // its next migration while the previous command still holds a connection
+    // to the branch. Quiescence is what settlement means here.
+    await this.#quiescent(handle)
     return {
       argv,
       exitCode: outcome.exitCode,
       stdout: readStream(handle, 'stdout'),
       stderr: readStream(handle, 'stderr'),
+    }
+  }
+
+  /**
+   * Wait for one command's owned process tree to be gone.
+   *
+   * A wait that ends any other way — a rejection, or the seam saying it stopped
+   * waiting — is a tree still standing, and neither is converted into a
+   * successful command: whatever the child's exit code said, the branch is not
+   * in a state this capability may keep acting on.
+   *
+   * The run's cancellation signal is deliberately not passed along. A cancelled
+   * run still owns whatever it started, and releasing it while that tree is up
+   * would delete a branch something is still connected to.
+   * @param handle - The settled subprocess handle.
+   * @throws PreviewError when the tree cannot be observed to have exited.
+   */
+  async #quiescent(handle: SubprocessHandle): Promise<void> {
+    let exited: boolean
+    try {
+      exited = await handle.waitForExit()
+    }
+    catch {
+      // The cause is deliberately not carried into the message: it comes from a
+      // command that was given a connection string, and Supabase echoes it.
+      throw new PreviewError('teardown-failed', 'the process tree of a preview command could not be reaped')
+    }
+    if (!exited) {
+      throw new PreviewError('teardown-failed', 'the wait for a preview command`s process tree ended before it exited')
     }
   }
 

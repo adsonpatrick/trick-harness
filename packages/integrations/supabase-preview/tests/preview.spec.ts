@@ -35,8 +35,8 @@ function settled(exitCode: number | null, stdout: string, stderr = ''): Subproce
     collected: { stdout: reader(stdout), stderr: reader(stderr) },
     done: Promise.resolve(outcome),
     terminate: () => {},
-    waitForExit: () => Promise.resolve(outcome),
-  } as unknown as SubprocessHandle
+    waitForExit: () => Promise.resolve(true),
+  }
 }
 
 /**
@@ -237,5 +237,71 @@ describe('cleanup is reported apart from the work', () => {
 
     const spoken = argvs().map(argv => argv.join(' '))
     expect(spoken.some(line => line.includes('branches delete'))).toBe(true)
+  })
+})
+
+describe('what settling a preview command means', () => {
+  /**
+   * A handle whose direct child has closed while its tree has not.
+   * @param quiescence - how the wait for the tree resolves.
+   * @returns the lingering handle.
+   */
+  function lingering(quiescence: Promise<boolean>): SubprocessHandle {
+    const reader = { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) }
+    return {
+      pid: 4242,
+      stdin: undefined,
+      stdout: undefined,
+      stderr: undefined,
+      collected: { stdout: reader, stderr: reader },
+      done: Promise.resolve({ exitCode: 0, signal: null } as SubprocessOutcome),
+      terminate: () => {},
+      waitForExit: () => quiescence,
+    }
+  }
+
+  /**
+   * A capability whose every command lingers the same way.
+   * @param quiescence - how the wait for each tree resolves.
+   * @returns the capability under test.
+   */
+  function withTree(quiescence: Promise<boolean>): SupabasePreview {
+    return new SupabasePreview({ cwd: '/repo', spawn: () => lingering(quiescence), projectRef: PARENT_REF })
+  }
+
+  it('does not call a command finished while its tree is still up', async () => {
+    let release = (_value: boolean): void => {}
+    const quiescence = new Promise<boolean>((resolve) => { release = resolve })
+    let settledRun = false
+    const running = withTree(quiescence).run({ branchName: 'pr-7' }).then((outcome) => {
+      settledRun = true
+      return outcome
+    })
+
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve()
+    expect(settledRun).toBe(false)
+
+    // The child closed twenty ticks ago. What the run was waiting for is the
+    // tree the child started, which is the thing that can still write.
+    release(false)
+    await running
+  })
+
+  it('refuses to report a run whose tree could not be observed to exit', async () => {
+    const outcome = await withTree(Promise.resolve(false)).run({ branchName: 'pr-7' })
+
+    expect(outcome.status).toBe('BLOCKED')
+    expect(outcome.summary).toContain('process tree')
+  })
+
+  it('names no command output when a tree cannot be reaped', async () => {
+    const leak = new Error(`supabase: ${PREVIEW_CONNECTION} refused`)
+    const outcome = await withTree(Promise.reject(leak)).run({ branchName: 'pr-7' })
+
+    // The cause is dropped rather than wrapped: a Supabase rejection echoes
+    // the connection string it was given, and this reaches a durable record.
+    expect(outcome.status).toBe('BLOCKED')
+    expect(outcome.summary).not.toContain('s3cr3t')
+    expect(outcome.summary).not.toContain('postgresql://')
   })
 })
