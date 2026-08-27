@@ -662,14 +662,6 @@ export class WorkflowRunner {
     if (context.userOverride !== undefined) humanOverride.spent = true
     const dispatch = { stageId: stage.stageId, role: stage.role, decision }
 
-    journal.routeDecision(dispatch)
-    if (decision.fallbackFrom !== undefined) {
-      await journal.routeFallback(dispatch, this.#fallbackReason(availability, decision.fallbackFrom), {
-        independence: READ_ONLY_ROLES.includes(stage.role) ? 'reduced' : 'preserved',
-        assurance: READ_ONLY_ROLES.includes(stage.role) ? 'lowered' : 'unchanged',
-      })
-    }
-
     const provider = executors.get(decision.executor)
     const { route: executorRoute } = dispatchableRoute(provider, {
       executor: decision.executor,
@@ -690,6 +682,9 @@ export class WorkflowRunner {
       // assurance the run never actually obtained.
       const summary = `no executor independent of ${decision.executor} is available to ${stage.role}, `
         + 'and this objective requires one'
+      // The route is still recorded: what was refused, and why, is a fact about
+      // this run. No start is, because nothing started.
+      journal.routeDecision(dispatch)
       await journal.verdict(stage.stageId, stage.role, 'BLOCKED', summary, [])
       return {
         dispatched: {
@@ -704,7 +699,18 @@ export class WorkflowRunner {
       }
     }
 
-    journal.executorStart(dispatch)
+    // The durable barrier, and the last thing before a provider is allowed to
+    // touch the working tree. Route and start are on disk before the process
+    // that could mutate it exists, so a restart that finds an open stage knows
+    // both that it began and what authority it began with. A checkpoint that
+    // fails throws out of the run rather than letting it mutate unrecorded.
+    await journal.beginExecutor(dispatch)
+    if (decision.fallbackFrom !== undefined) {
+      await journal.routeFallback(dispatch, this.#fallbackReason(availability, decision.fallbackFrom), {
+        independence: READ_ONLY_ROLES.includes(stage.role) ? 'reduced' : 'preserved',
+        assurance: READ_ONLY_ROLES.includes(stage.role) ? 'lowered' : 'unchanged',
+      })
+    }
     const startedAt = this.#now()
     const result = await executors.start({
       cwd: request.objective.cwd,

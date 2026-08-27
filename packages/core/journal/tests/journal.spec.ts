@@ -362,3 +362,36 @@ describe('two attempts at one objective', () => {
     expect(two.routes.length).toBe(1)
   })
 })
+
+describe('the executor start barrier', () => {
+  it('appends the route and the start, then checkpoints, in that order', async () => {
+    const session = Session.create(SessionId('barrier'))
+    const order: string[] = []
+    const journal = new WorkflowJournal(session, 'wf-1', async () => {
+      order.push(...session.events.map(event => event.type))
+      return true
+    })
+
+    await journal.beginExecutor({ stageId: 's-1', role: 'implement', decision })
+
+    // The checkpoint sees both facts. One that saw only the route would leave a
+    // restart able to say what was authorised and not that anything ran.
+    expect(order).toEqual(['harness/route-decision', 'harness/executor-start'])
+  })
+
+  it('refuses a checkpoint that did not happen, however it says so', async () => {
+    const session = Session.create(SessionId('barrier-failed'))
+    const refusing = new WorkflowJournal(session, 'wf-1', async () => false)
+    const rejecting = new WorkflowJournal(session, 'wf-2', async () => {
+      throw new Error('the disk is full')
+    })
+
+    // `false` and a rejection are the same fact — the checkpoint did not
+    // happen — so they cannot mean different things to whoever is about to
+    // start a provider on the strength of it.
+    await expect(refusing.beginExecutor({ stageId: 's-1', role: 'implement', decision }))
+      .rejects.toThrow(JournalError)
+    await expect(rejecting.beginExecutor({ stageId: 's-1', role: 'implement', decision }))
+      .rejects.toThrow(/the disk is full/)
+  })
+})

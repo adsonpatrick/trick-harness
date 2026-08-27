@@ -1018,3 +1018,95 @@ describe('a human route override', () => {
     expect(overridden?.permissionMode).toBe('read-only')
   })
 })
+
+describe('the durable barrier in front of a dispatch', () => {
+  it('does not start a provider until the start fact has reached the log', async () => {
+    const session = Session.create(SessionId('barrier'))
+    const executors = createExecutorRuntime()
+    let release = (): void => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let flushes = 0
+    const journal = new WorkflowJournal(session, 'wf-barrier', async () => {
+      flushes += 1
+      if (flushes === 1) await held
+      return true
+    })
+    const runner = new WorkflowRunner('wf-barrier', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+    })
+    const starts: string[] = []
+    executors.register(provider('builder', async () => {
+      starts.push('builder')
+      return passing('builder')
+    }))
+    executors.register(provider('reviewer', async () => {
+      starts.push('reviewer')
+      return passing('reviewer')
+    }))
+
+    const running = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve()
+
+    // The implementing stage is the one that may rewrite the working tree. Its
+    // authority is on disk before the process holding that authority exists,
+    // so a restart that finds it open knows what it was allowed to do.
+    expect(starts).toEqual([])
+    release()
+    const outcome = await running
+    expect(starts[0]).toBe('builder')
+    expect(outcome.state).toBe('completed')
+  })
+
+  it('mutates nothing when the log cannot be made durable', async () => {
+    const session = Session.create(SessionId('barrier-failed'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-barrier-failed', async () => false)
+    const runner = new WorkflowRunner('wf-barrier-failed', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+    })
+    const starts: string[] = []
+    executors.register(provider('builder', async () => {
+      starts.push('builder')
+      return passing('builder')
+    }))
+
+    // A checkpoint that did not happen stops the run. Downgrading it to a
+    // warning would let an implementation stage rewrite a tree with no durable
+    // record that it was ever authorised to.
+    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
+      .rejects.toThrow(/durable checkpoint/)
+    expect(starts).toEqual([])
+  })
+
+  it('holds a read-only stage to the same barrier as a mutating one', async () => {
+    const session = Session.create(SessionId('barrier-read'))
+    const executors = createExecutorRuntime()
+    let flushes = 0
+    const journal = new WorkflowJournal(session, 'wf-barrier-read', async () => {
+      flushes += 1
+      // Passes the implementing stage, refuses the verifying one.
+      return flushes < 2
+    })
+    const runner = new WorkflowRunner('wf-barrier-read', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+    })
+    const starts: string[] = []
+    executors.register(provider('builder', async () => {
+      starts.push('builder')
+      return passing('builder')
+    }))
+    executors.register(provider('reviewer', async () => {
+      starts.push('reviewer')
+      return passing('reviewer')
+    }))
+
+    // One rule for every start. A barrier that read the role first would make
+    // the role classification itself a durability decision, and a stage
+    // misclassified once would dispatch unrecorded forever after.
+    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
+      .rejects.toThrow(/durable checkpoint/)
+    expect(starts).toEqual(['builder'])
+  })
+})
