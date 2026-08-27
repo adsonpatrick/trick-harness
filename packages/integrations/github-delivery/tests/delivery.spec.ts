@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import type { DeliveryRecord } from '@trick-harness/journal'
 import { GitHubDelivery } from '../src/index.ts'
 
 /** One scripted answer for a `gh` command this test does not want to really run. */
@@ -425,11 +426,104 @@ describe('what settling a command means', () => {
     const leak = new Error('gh: token ghp_secretsecretsecret rejected')
     const capability = new GitHubDelivery({ cwd: work, spawn: () => lingering(Promise.reject(leak)) })
 
-    const error = await capability.inspect().catch((caught: unknown) => caught as Error)
+    let message = ''
+    try {
+      await capability.inspect()
+    }
+    catch (caught) {
+      message = (caught as Error).message
+    }
 
     // The cause is dropped rather than wrapped: this message reaches a durable
     // event, and a rejection out of `gh` can carry an authentication hint.
-    expect(error.message).not.toContain('ghp_')
-    expect(error.message).toContain('could not be reaped')
+    expect(message).not.toContain('ghp_')
+    expect(message).toContain('could not be reaped')
+  })
+})
+
+describe('checkpointing a mutation before making the next one', () => {
+  /**
+   * A delivery whose verified mutations are handed to an observer.
+   * @param onRecord - what the observer does with each record.
+   * @returns the capability under test.
+   */
+  function observed(onRecord: (record: DeliveryRecord) => Promise<void>): GitHubDelivery {
+    return new GitHubDelivery({ cwd: work, spawn: seam, onRecord })
+  }
+
+  /** The request every test here delivers. */
+  const request = {
+    branch: 'feat/delivery',
+    files: ['a.txt'],
+    message: 'feat: deliver a',
+    pullRequest: { title: 't', body: 'b', base: 'main' },
+  } as const
+
+  it('hands over each mutation only once the world has confirmed it', async () => {
+    scriptNewPullRequest()
+    writeFileSync(join(work, 'a.txt'), 'a\n')
+    const seen: { action: string; commandsBefore: number }[] = []
+
+    const outcome = await observed(async (record) => {
+      seen.push({ action: record.action, commandsBefore: issued.length })
+    }).deliver(request)
+
+    expect(seen.map(entry => entry.action)).toEqual(['commit', 'push', 'pr-open'])
+    // Each one arrives after the re-read that confirmed it, not after the
+    // command that was supposed to cause it.
+    const revParse = argvs().findIndex(argv => argv[1] === 'rev-parse' && argv[2] === 'HEAD')
+    expect(seen[0]?.commandsBefore).toBeGreaterThan(revParse)
+    // And what was handed over is exactly what was returned, in order.
+    expect(seen.map(entry => entry.action)).toEqual(outcome.records.map(record => record.action))
+  })
+
+  it('does not push a commit whose record could not be made durable', async () => {
+    scriptNewPullRequest()
+    writeFileSync(join(work, 'a.txt'), 'a\n')
+
+    const outcome = await observed(async (record) => {
+      if (record.action === 'commit') throw new Error('the journal could not reach a durable checkpoint')
+    }).deliver(request)
+
+    // The commit happened and is reported. The push did not start: a mutation
+    // nobody can prove was made is the one a restart repeats.
+    expect(outcome.delivered).toBe(false)
+    expect(outcome.failure?.code).toBe('uncheckpointed-mutation')
+    expect(outcome.records.map(record => record.action)).toEqual(['commit'])
+    expect(argvs().some(argv => argv[1] === 'push')).toBe(false)
+  })
+
+  it('never offers a mutation it could not confirm', async () => {
+    // The push exits zero but the remote does not hold the commit, which is the
+    // case the re-read exists for. No push record may be checkpointed.
+    scriptNewPullRequest()
+    writeFileSync(join(work, 'a.txt'), 'a\n')
+    const seen: string[] = []
+    const capability = new GitHubDelivery({
+      cwd: work,
+      spawn: (spec) => {
+        if (spec.argv[1] === 'push') {
+          issued.push(spec)
+          return settled(0, '')
+        }
+        return seam(spec)
+      },
+      onRecord: async (record) => { seen.push(record.action) },
+    })
+
+    const outcome = await capability.deliver(request)
+
+    expect(outcome.failure?.code).toBe('unverified-push')
+    expect(seen).toEqual(['commit'])
+  })
+
+  it('delivers exactly as before when nobody is observing', async () => {
+    scriptNewPullRequest()
+    writeFileSync(join(work, 'a.txt'), 'a\n')
+
+    const outcome = await delivery().deliver(request)
+
+    expect(outcome.delivered).toBe(true)
+    expect(outcome.records.map(record => record.action)).toEqual(['commit', 'push', 'pr-open'])
   })
 })

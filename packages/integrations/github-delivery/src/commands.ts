@@ -44,6 +44,7 @@ export class DeliveryError extends Error {
     | 'unexpected-stage'
     | 'nothing-to-commit'
     | 'unverified-push'
+    | 'uncheckpointed-mutation'
     | 'command-failed'
     | 'teardown-failed'
 

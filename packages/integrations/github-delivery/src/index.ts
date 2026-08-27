@@ -46,6 +46,7 @@ export type * from './types.ts'
 import type {
   CommandResult,
   DeliveryOutcome,
+  DeliveryRecordObserver,
   DeliveryRequest,
   GitHubDeliveryOptions,
   PullRequestIdentity,
@@ -108,6 +109,7 @@ export class GitHubDelivery {
   readonly #protectedBranches: readonly string[]
   readonly #graceMs: number
   readonly #env: NodeJS.ProcessEnv | undefined
+  readonly #onRecord: DeliveryRecordObserver | undefined
 
   /**
    * @param options - The workspace, the subprocess seam, and the protected set.
@@ -118,6 +120,36 @@ export class GitHubDelivery {
     this.#protectedBranches = options.protectedBranches ?? PROTECTED_BRANCHES
     this.#graceMs = options.graceMs ?? DEFAULT_GRACE_MS
     this.#env = options.env
+    this.#onRecord = options.onRecord
+  }
+
+  /**
+   * Write one confirmed mutation down before causing the next one.
+   *
+   * Ordered this way because the failure the ordering prevents is the one that
+   * cannot be repaired by looking: a push whose commit was never recorded is
+   * indistinguishable, on restart, from a commit that never happened. Stopping
+   * here leaves a delivery that did less than asked and said so, which is the
+   * state a restart can act on.
+   * @param records - The delivery's record list, appended to before checkpointing.
+   * @param record - The mutation the world has just confirmed.
+   * @throws DeliveryError when the observer will not accept the record.
+   */
+  async #checkpoint(records: DeliveryRecord[], record: DeliveryRecord): Promise<void> {
+    records.push(record)
+    if (this.#onRecord === undefined) return
+    try {
+      await this.#onRecord(record)
+    }
+    catch {
+      // The observer's own message is not carried: it comes from a durable
+      // store whose errors may name a path or a connection, and this string
+      // becomes a delivery summary.
+      throw new DeliveryError(
+        'uncheckpointed-mutation',
+        `the ${record.action} was confirmed but could not be checkpointed, so delivery stopped before the next mutation`,
+      )
+    }
   }
 
   /**
@@ -275,7 +307,7 @@ export class GitHubDelivery {
 
       // Re-read: the commit is what HEAD now resolves to, not what commit said.
       commitSha = (await this.#must(revParseArgv('HEAD'), 'reading the new commit', signal)).trim()
-      records.push({ action: 'commit', branch, commitSha })
+      await this.#checkpoint(records, { action: 'commit', branch, commitSha })
 
       await this.#must(pushArgv(branch, this.#protectedBranches), 'pushing the branch', signal)
       const remoteSha = (await this.#run(revParseArgv(`refs/remotes/origin/${branch}`), signal)).stdout.trim()
@@ -285,10 +317,10 @@ export class GitHubDelivery {
           'the remote branch does not hold the commit that was just pushed, so the push is not confirmed',
         )
       }
-      records.push({ action: 'push', branch, commitSha })
+      await this.#checkpoint(records, { action: 'push', branch, commitSha })
 
       pullRequest = await this.#pullRequest(branch, request.pullRequest, signal)
-      records.push({
+      await this.#checkpoint(records, {
         action: pullRequest.created ? 'pr-open' : 'pr-update',
         branch,
         commitSha,

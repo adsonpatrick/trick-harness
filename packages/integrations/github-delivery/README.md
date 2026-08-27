@@ -38,6 +38,22 @@ The direct child closing is not the end of a git command. Git starts helpers, an
 
 A wait that ends any other way is a tree still standing. A rejection and the seam saying it stopped waiting both become a `teardown-failed` delivery error, and neither can be reported as a command that succeeded, whatever exit code the child gave. The run's cancellation signal is deliberately not passed to that wait: a cancelled delivery still owns what it started, and handing the workspace back while something is still writing to it is the failure cancellation was supposed to prevent.
 
+## A confirmed mutation is written down before the next one
+
+Each of the three mutations is re-read from the world before it is believed, and
+`onRecord` is offered that re-read record before the next mutation starts. The
+order matters more than it looks: a push whose commit was never recorded is, on
+restart, indistinguishable from a commit that never happened, and a restart that
+guesses wrong either repeats work that landed or abandons work that did not.
+
+So an observer that rejects stops the delivery. The result is not an error in
+place of a result — it is a `DeliveryOutcome` that reports what did land, with
+`failure.code` of `uncheckpointed-mutation`. A delivery that did less than it was
+asked and said so is a state a run can act on.
+
+Operations that were attempted but not confirmed are never offered. The observer
+sees mutations, not intentions.
+
 ## Credentials stay where they live
 
 `gh` authenticates from its own stored configuration. This package never reads a token, never constructs an environment to carry one, and passes no `env` to the subprocess seam unless a caller explicitly supplies one — the seam already scrubs credential-shaped entries from the parent. Failure messages name the operation and the exit code and never the command's output, because `gh` writes authentication hints to stderr and those messages reach a durable event.
