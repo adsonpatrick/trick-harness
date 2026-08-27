@@ -10,7 +10,7 @@ Recorded 2026-08-27 against the correction branch below. This file states what w
 | Branch base | `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e` (merge-base with `master`) |
 | Branch head | `49368eb5072758096d05a6ac531fea1588928d2b` |
 | Reviewed PR #2 base/head | `docs/harness-v2-bootstrap` / `feat/harness-v2-routing-workflows` at `b0d2f308f8849c6ffaff3bc6f713b1bb923c56b4` |
-| Supabase parent project ref used for canary | none — see [Canaries](#canaries) |
+| Supabase parent project ref used for canary | `uljaajwwnygopsyvwsre` — reached, and refused branching by entitlement; see [Canaries](#canaries) |
 | GitHub canary branch/PR identity | `canary/github-delivery-20260827`, pull request #3, closed unmerged and deleted — see [Canaries](#canaries) |
 
 ### Child-plan commits on the correction branch
@@ -124,10 +124,25 @@ No merge, no release, no deploy and no force-push occurred, and no command targe
 
 One earlier attempt failed and is recorded because it is a real property of the capability: with `base` set to a branch that had never been pushed, `gh pr create` exited non-zero and `deliver()` returned `delivered: false` with the `commit` and `push` records already checkpointed and no `pr-open` record. It did not report success for a delivery that had not completed, and it did not unmake the commit and push that had.
 
-### Supabase preview canary — not run
+### Supabase preview canary — BLOCKED, and blocked correctly
 
-Not credentialed. The CLI is installed (2.106.0) and no access token is present in this environment. The security constraints governing this program forbid extracting or reusing subscription credentials to obtain one, so this canary waits for a token supplied through the CLI's own login.
+Run on 2026-08-27 against parent project `uljaajwwnygopsyvwsre` (`neurovia-dev`) through the real `SupabasePreview` class over a real subprocess seam. The positive path could not be exercised, and the reason is an entitlement rather than a defect: the owning organisation is on the free plan, and Supabase answers `supabase branches create` with HTTP 402, `entitlement_required`, `Branching is supported only on the Pro plan or above`. No preview branch was ever provisioned, so no migration, lint or test gate could run.
 
-Its command construction and control flow are exercised end to end against scripted subprocess seams — every command the real path constructs is issued and answered, and the argv is asserted. That does not prove the remote's behaviour, and this file does not claim it does.
+What the run does prove is the fail-closed behaviour the Global Constraints require, observed against the real API rather than a script:
 
-Until the Supabase canary runs and passes with real credentials, the master plan's exit condition is unmet, and Plan C / NeuroVia stays blocked.
+| Property required | Observed |
+| --- | --- |
+| A database-changing run blocks when no preview is available | `status: "BLOCKED"` — not `FAILED`, which would have described the repository's migrations, and not `PASSED` |
+| Dependent gates stop after the failed prerequisite | `completedGates: []`, `skippedGates: ["identity","health","migration-push","migration-list","lint"]` |
+| No fallback to a shared or local database | the only command issued was `supabase branches create <name> --project-ref <parent> --experimental`; no `db push`, no `--db-url`, no local stack, no `neurovia-dev` connection |
+| Nothing is checkpointed for a mutation that did not happen | `mutations: []` |
+| Failures expose safe diagnostics, not raw environment | `primaryFailure.message` is `creating the preview branch failed with exit code 1`; it carries no connection string, token, account identity or upgrade URL |
+| The parent is untouched | migration history re-read before and after: 82 migrations, byte-identical lists |
+
+One environment artefact is recorded so it is not mistaken for the result. A first attempt reported exit code 127 because the Windows `supabase` npm shim is a shell script that `CreateProcess` cannot execute; the seam was pointed at the real executable and the run then reported the CLI's true exit code of 1. Only the seam's resolution of `argv[0]` changed — the argv the capability constructs was not touched.
+
+One side effect on the parent is recorded because it is real. Before the run the project had no branches at all. The `branches create` attempt initialised branching on the project, which left a default branch named `main` whose `project_ref` equals the parent's own ref and whose `is_default` is true. It is not a preview, it provisions no second database, and it applied nothing; but the project's state did change from "branching uninitialised" to "branching initialised", and this file says so rather than reporting the parent as wholly unchanged.
+
+The positive canary — preview created, `preview ref != parent ref`, healthy, harmless migration applied, migration history verified, remote lint, project gate, cleanup — remains unrun. It needs the organisation on the Pro plan. Substituting MCP calls or unit tests for it is refused under Task 8 Step 4.
+
+Until the Supabase canary runs and passes on its positive path, the master plan's exit condition is unmet, and Plan C / NeuroVia stays blocked.
