@@ -3415,9 +3415,27 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:^
+        version: link:../../core/session
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../../core/contracts
+      '@trick-harness/control-server':
+        specifier: workspace:^
+        version: link:../../core/control-server
+      '@trick-harness/engineering-workflow':
+        specifier: workspace:^
+        version: link:../../core/engineering-workflow
       '@trick-harness/executor':
         specifier: workspace:^
         version: link:../../core/executor
+      '@trick-harness/github-delivery':
+        specifier: workspace:^
+        version: link:../../integrations/github-delivery
+      '@trick-harness/journal':
+        specifier: workspace:^
+        version: link:../../core/journal
       '@trick-harness/profile':
         specifier: workspace:^
         version: link:../../core/profile
@@ -3427,6 +3445,12 @@ importers:
       '@trick-harness/provider-opencode':
         specifier: workspace:^
         version: link:../../providers/opencode
+      '@trick-harness/routing':
+        specifier: workspace:^
+        version: link:../../core/routing
+      '@trick-harness/supabase-preview':
+        specifier: workspace:^
+        version: link:../../integrations/supabase-preview
 
   packages/context/agent-instructions:
     dependencies:
@@ -3743,6 +3767,57 @@ importers:
         specifier: workspace:^
         version: link:../tools
 
+  packages/core/contracts:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
+  packages/core/control-server:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+      '@trick-harness/engineering-workflow':
+        specifier: workspace:^
+        version: link:../engineering-workflow
+
+  packages/core/engineering-workflow:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:^
+        version: link:../session
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+      '@trick-harness/executor':
+        specifier: workspace:^
+        version: link:../executor
+      '@trick-harness/journal':
+        specifier: workspace:^
+        version: link:../journal
+      '@trick-harness/profile':
+        specifier: workspace:^
+        version: link:../profile
+      '@trick-harness/routing':
+        specifier: workspace:^
+        version: link:../routing
+
   packages/core/executor:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -3752,6 +3827,21 @@ importers:
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
 
+  packages/core/journal:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:^
+        version: link:../session
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+
   packages/core/profile:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -3760,6 +3850,18 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+
+  packages/core/routing:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../contracts
 
   packages/core/scope:
     devDependencies:
@@ -5266,6 +5368,33 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+
+  packages/integrations/github-delivery:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-subprocess':
+        specifier: workspace:^
+        version: link:../../subprocess/subprocess
+      '@trick-harness/journal':
+        specifier: workspace:^
+        version: link:../../core/journal
+
+  packages/integrations/supabase-preview:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-subprocess':
+        specifier: workspace:^
+        version: link:../../subprocess/subprocess
 
   packages/interaction/commands:
     dependencies:

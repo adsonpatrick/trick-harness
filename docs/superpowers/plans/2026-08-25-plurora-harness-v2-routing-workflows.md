@@ -64,10 +64,10 @@ FindingClass = BUG | SECURITY_BUG | TEST_DEFECT | TOOLING_DEFECT |
 
 Also define `DiagnosisContract`, `RoutingContext`, `RouteDecision`, `Finding`, `EvidenceRef`, `WorkflowObjective`, and bounded structured stage result types.
 
-- [ ] Write parser/boundary RED tests for invalid serialized contracts.
-- [ ] Implement only parser/config/durable-boundary validation needed by consumers.
-- [ ] Add invariant/README/JSDoc and Host reference.
-- [ ] Run focused tests/typecheck/constraints and commit: `feat(trick): add engineering workflow contracts`.
+- [x] Write parser/boundary RED tests for invalid serialized contracts.
+- [x] Implement only parser/config/durable-boundary validation needed by consumers.
+- [x] Add invariant/README/JSDoc and Host reference.
+- [x] Run focused tests/typecheck/constraints and commit: `feat(trick): add engineering workflow contracts`.
 
 ---
 
@@ -87,13 +87,13 @@ codex.balanced          -> GPT-5.6 Terra
 codex.frontier          -> GPT-5.6 Sol
 ```
 
-- [ ] Write table-driven RED routing tests covering approved Plurora defaults through `profiles/plurora`.
-- [ ] Add manual override tests proving valid override wins for one run and invalid capability is rejected.
-- [ ] Add independence tests using `implementationExecutor` + risk.
-- [ ] Implement pure `route(context, policy): RouteDecision`; no product/process side effect.
-- [ ] Record `policyVersion` and machine-readable `reasonCodes[]` in every decision.
-- [ ] Add tests proving model registry update changes resolved model without changing workflow mechanism.
-- [ ] Commit: `feat(trick): add deterministic executor routing`.
+- [x] Write table-driven RED routing tests covering approved Plurora defaults through `profiles/plurora`.
+- [x] Add manual override tests proving valid override wins for one run and invalid capability is rejected.
+- [x] Add independence tests using `implementationExecutor` + risk.
+- [x] Implement pure `route(context, policy): RouteDecision`; no product/process side effect.
+- [x] Record `policyVersion` and machine-readable `reasonCodes[]` in every decision.
+- [x] Add tests proving model registry update changes resolved model without changing workflow mechanism.
+- [x] Commit: `feat(trick): add deterministic executor routing`.
 
 ---
 
@@ -108,13 +108,13 @@ codex.frontier          -> GPT-5.6 Sol
 AVAILABLE -> DEGRADED -> AVAILABLE
 ```
 
-- [ ] Write RED tests for `usageLimitExceeded` and verified Codex rate/server capacity categories producing fallback.
-- [ ] Write RED tests proving context-window/bad-request/sandbox/cyber-policy/wrong-answer/failed-verification are not quota fallback.
-- [ ] Implement generic fallback/circuit-breaker mechanism consuming profile policy.
-- [ ] Implement circuit breaker with explicit transition events, configurable bounded probe/cooldown policy, and explicit/manual refresh path.
-- [ ] Prove review fallback prefers an executor different from the implementer when possible.
-- [ ] For critical security assurance, test that fallback may lower assurance and therefore return `PARTIAL/BLOCKED` rather than PASS.
-- [ ] Commit: `feat(trick): add routing fallback and quota circuit breaker`.
+- [x] Write RED tests for `usageLimitExceeded` and verified Codex rate/server capacity categories producing fallback.
+- [x] Write RED tests proving context-window/bad-request/sandbox/cyber-policy/wrong-answer/failed-verification are not quota fallback.
+- [x] Implement generic fallback/circuit-breaker mechanism consuming profile policy.
+- [x] Implement circuit breaker with explicit transition events, configurable bounded probe/cooldown policy, and explicit/manual refresh path.
+- [x] Prove review fallback prefers an executor different from the implementer when possible.
+- [x] For critical security assurance, test that fallback may lower assurance and therefore return `PARTIAL/BLOCKED` rather than PASS.
+- [x] Commit: `feat(trick): add routing fallback and quota circuit breaker`.
 
 ---
 
@@ -140,14 +140,14 @@ harness/circuit-breaker
 harness/workflow-end
 ```
 
-- [ ] Write RED event serialization/replay tests.
-- [ ] Declare `SessionEventMap` extensions with exact payloads/JSDoc.
-- [ ] Implement journal append helpers using `session.append(...)`; flush at route fallback, diagnosis, verdict, delivery mutation, blocker, and terminal state.
-- [ ] Project route history, findings, diagnoses, PR/delivery state, verdicts and circuit state solely from session events.
-- [ ] Test compaction/context pruning cannot erase durable evidence references.
-- [ ] Test missing required Harness journal plugin fails reconstruction rather than silently ignoring facts.
-- [ ] No raw model reasoning/tool transcripts in event payloads; store bounded results/evidence refs only.
-- [ ] Add real-loader composition test and commit: `feat(trick): add durable workflow journal`.
+- [x] Write RED event serialization/replay tests.
+- [x] Declare `SessionEventMap` extensions with exact payloads/JSDoc.
+- [x] Implement journal append helpers using `session.append(...)`; flush at route fallback, diagnosis, verdict, delivery mutation, blocker, and terminal state.
+- [x] Project route history, findings, diagnoses, PR/delivery state, verdicts and circuit state solely from session events.
+- [x] Test compaction/context pruning cannot erase durable evidence references.
+- [x] Test missing required Harness journal plugin fails reconstruction rather than silently ignoring facts.
+- [x] No raw model reasoning/tool transcripts in event payloads; store bounded results/evidence refs only.
+- [x] Add real-loader composition test and commit: `feat(trick): add durable workflow journal`.
 
 ---
 
@@ -158,12 +158,12 @@ harness/workflow-end
 
 **Produces:** lifecycle controller/state machine consuming an approved objective, profile, route, provider and validated stage results.
 
-- [ ] Write RED state-machine tests for normal implement→verify→delivery/review flow, cancellation, executor error, BLOCKED product decision, and restart projection.
-- [ ] Implement one operation lifecycle owner with explicit AbortController/run registry and teardown.
-- [ ] Enforce workflow budgets from `HarnessProfile.workflowPolicy`.
-- [ ] On restart after a prior nonterminal durable workflow exists but no owned live run exists, project it as interrupted/inconclusive and verify world state before retry.
-- [ ] Add role-specific permission/route request construction; read-only roles request read-only provider mode.
-- [ ] Return compact stage facts, not child transcript.
+- [x] Write RED state-machine tests for normal implement→verify→delivery/review flow, cancellation, executor error, BLOCKED product decision, and restart projection.
+- [x] Implement one operation lifecycle owner with explicit AbortController/run registry and teardown.
+- [x] Enforce workflow budgets from `HarnessProfile.workflowPolicy`.
+- [x] On restart after a prior nonterminal durable workflow exists but no owned live run exists, project it as interrupted/inconclusive and verify world state before retry.
+- [x] Add role-specific permission/route request construction; read-only roles request read-only provider mode.
+- [x] Return compact stage facts, not child transcript.
 - [ ] Commit: `feat(trick): add deterministic engineering workflow runtime`.
 
 ---
@@ -188,13 +188,13 @@ finding/symptom
  -> optional QA retest
 ```
 
-- [ ] Write RED tests proving repair cannot start for non-trivial bug without valid `DiagnosisContract` except mechanically obvious test/tooling defects with explicit evidence.
-- [ ] Enforce debugger read-only capability and fresh repair session.
-- [ ] Require diagnosis fields from the approved Spec.
-- [ ] If product-decision dependency is material, emit blocker and stop before mutation.
-- [ ] Repair stage requires regression RED for behavior defects, focused GREEN and fresh verifier.
-- [ ] Symptom disappearance without supported root cause is incomplete.
-- [ ] Commit: `feat(trick): add diagnosis and repair workflow`.
+- [x] Write RED tests proving repair cannot start for non-trivial bug without valid `DiagnosisContract` except mechanically obvious test/tooling defects with explicit evidence.
+- [x] Enforce debugger read-only capability and fresh repair session.
+- [x] Require diagnosis fields from the approved Spec.
+- [x] If product-decision dependency is material, emit blocker and stop before mutation.
+- [x] Repair stage requires regression RED for behavior defects, focused GREEN and fresh verifier.
+- [x] Symptom disappearance without supported root cause is incomplete.
+- [x] Commit: `feat(trick): add diagnosis and repair workflow`.
 
 ---
 
@@ -203,15 +203,15 @@ finding/symptom
 **Files:**
 - Extend workflow package or split single-purpose private plugins only if lifecycle ownership is clearer.
 
-- [ ] Write RED triage tests for every `FindingClass`.
-- [ ] Auto-repair only confirmed eligible `BUG`, safe `SECURITY_BUG`, `TEST_DEFECT`, and required in-scope `TOOLING_DEFECT`.
-- [ ] No auto-fix for product/design decisions, intentional behavior, improvements, refactors or style.
-- [ ] Code review consumes exact requirement + diff + fresh repository evidence and remains read-only.
-- [ ] QA sequence follows approved impact/risk/charter/negative/boundary/E2E/visual/accessibility flow.
-- [ ] Security stage is risk-triggered and consumes repository `SECURITY.md`; reviewer remains read-only.
-- [ ] Verdict vocabulary remains `PASS|PARTIAL|FAIL|INCONCLUSIVE|BLOCKED`; no PASS with confirmed material bug.
-- [ ] Test fresh-context/cross-executor enforcement according to profile policy.
-- [ ] Commit: `feat(trick): add independent review and QA orchestration`.
+- [x] Write RED triage tests for every `FindingClass`.
+- [x] Auto-repair only confirmed eligible `BUG`, safe `SECURITY_BUG`, `TEST_DEFECT`, and required in-scope `TOOLING_DEFECT`.
+- [x] No auto-fix for product/design decisions, intentional behavior, improvements, refactors or style.
+- [x] Code review consumes exact requirement + diff + fresh repository evidence and remains read-only.
+- [x] QA sequence follows approved impact/risk/charter/negative/boundary/E2E/visual/accessibility flow.
+- [x] Security stage is risk-triggered and consumes repository `SECURITY.md`; reviewer remains read-only.
+- [x] Verdict vocabulary remains `PASS|PARTIAL|FAIL|INCONCLUSIVE|BLOCKED`; no PASS with confirmed material bug.
+- [x] Test fresh-context/cross-executor enforcement according to profile policy.
+- [x] Commit: `feat(trick): add independent review and QA orchestration`.
 
 ---
 
@@ -232,13 +232,13 @@ read CI/PR/commit state
 
 **Denied:** force push, protected/main implementation push, merge, release/deploy, unrelated branch mutation.
 
-- [ ] Write RED tests with a temporary Git repo/fake remote for branch validation, exact staged file set, main denial, force denial, normal push construction, and duplicate PR behavior.
-- [ ] Implement command construction through DSH subprocess service; never shell-concatenate untrusted values.
-- [ ] Validate branch belongs to requested workspace and is non-protected before mutation.
-- [ ] After commit/push/PR, re-read actual git/GitHub state and emit durable delivery event with commit SHA/PR identity.
-- [ ] Keep GitHub auth native to `gh`; never read/token-log credentials.
-- [ ] Cleanup/error reporting separates primary delivery result from teardown/metadata failure.
-- [ ] Commit: `feat(trick): add scoped GitHub delivery`.
+- [x] Write RED tests with a temporary Git repo/fake remote for branch validation, exact staged file set, main denial, force denial, normal push construction, and duplicate PR behavior.
+- [x] Implement command construction through DSH subprocess service; never shell-concatenate untrusted values.
+- [x] Validate branch belongs to requested workspace and is non-protected before mutation.
+- [x] After commit/push/PR, re-read actual git/GitHub state and emit durable delivery event with commit SHA/PR identity.
+- [x] Keep GitHub auth native to `gh`; never read/token-log credentials.
+- [x] Cleanup/error reporting separates primary delivery result from teardown/metadata failure.
+- [x] Commit: `feat(trick): add scoped GitHub delivery`.
 
 ---
 
@@ -249,7 +249,7 @@ read CI/PR/commit state
 
 **Capability:** provision isolated hosted branch, apply migration history, run remote gates, expose explicit safe connection inputs to approved subprocess tests, then clean up.
 
-- [ ] **Step 1: Verify installed CLI contract before coding commands**
+- [x] **Step 1: Verify installed CLI contract before coding commands**
 
 ```bash
 supabase --version
@@ -265,14 +265,14 @@ supabase gen types --help
 
 Use only flags supported by actual CLI. Do not use Docker-required `db pull`, `db diff`, `test db`, `start`, or local reset paths.
 
-- [ ] Write RED subprocess-command tests proving no canonical command contains `--local`, `supabase start`, `supabase test db`, `db reset`, Docker or shared-dev fallback.
-- [ ] Implement create → wait/inspect healthy → identify preview project → apply pending migrations → migration-list evidence → remote lint → project-provided pgTAP/RLS test command → cleanup.
-- [ ] Accept parent project ref as non-secret project config; auth remains native Supabase CLI/environment.
-- [ ] Never read `.env` inside this package.
-- [ ] If a safe preview DB connection cannot be obtained, emit `BLOCKED` and clean up; never mutate shared parent as fallback.
-- [ ] Cleanup failure is reported independently from primary result.
-- [ ] Add tests for create failure, gate failure, cancellation, cleanup, and shared-parent non-mutation.
-- [ ] Commit: `feat(trick): add Supabase preview branch runtime`.
+- [x] Write RED subprocess-command tests proving no canonical command contains `--local`, `supabase start`, `supabase test db`, `db reset`, Docker or shared-dev fallback.
+- [x] Implement create → wait/inspect healthy → identify preview project → apply pending migrations → migration-list evidence → remote lint → project-provided pgTAP/RLS test command → cleanup.
+- [x] Accept parent project ref as non-secret project config; auth remains native Supabase CLI/environment.
+- [x] Never read `.env` inside this package.
+- [x] If a safe preview DB connection cannot be obtained, emit `BLOCKED` and clean up; never mutate shared parent as fallback.
+- [x] Cleanup failure is reported independently from primary result.
+- [x] Add tests for create failure, gate failure, cancellation, cleanup, and shared-parent non-mutation.
+- [x] Commit: `feat(trick): add Supabase preview branch runtime`.
 
 ---
 
@@ -296,12 +296,12 @@ implementation verified
  -> PR READY | BLOCKED | FAIL | PARTIAL | INCONCLUSIVE
 ```
 
-- [ ] Write RED scenario with two injected confirmed bugs and one improvement suggestion; assert both bugs auto-close while improvement is reported and not implemented.
-- [ ] Write scenario where finding is a product decision; assert no repair starts.
-- [ ] Use profile `maxRepairCycles`; each repair push triggers fresh diff/evidence and fresh review.
-- [ ] If bugs remain after ceiling, terminal state cannot be PR READY.
-- [ ] Ensure repair executor routing honors Plurora heavy-MiMo invariant and Codex fallback through profile policy.
-- [ ] Commit: `feat(trick): add bounded PR remediation lifecycle`.
+- [x] Write RED scenario with two injected confirmed bugs and one improvement suggestion; assert both bugs auto-close while improvement is reported and not implemented.
+- [x] Write scenario where finding is a product decision; assert no repair starts.
+- [x] Use profile `maxRepairCycles`; each repair push triggers fresh diff/evidence and fresh review.
+- [x] If bugs remain after ceiling, terminal state cannot be PR READY.
+- [x] Ensure repair executor routing honors Plurora heavy-MiMo invariant and Codex fallback through profile policy.
+- [x] Commit: `feat(trick): add bounded PR remediation lifecycle`.
 
 ---
 
@@ -319,14 +319,14 @@ GET  /workflows/:id
 POST /workflows/:id/cancel
 ```
 
-- [ ] Write RED HTTP lifecycle tests including invalid objective, run/status/cancel, unavailable workflow, restart projection, and concurrent workflow IDs.
-- [ ] Bind loopback only (`127.0.0.1`/local equivalent). Add ephemeral process-owned bearer if needed; never persist it.
-- [ ] `POST /workflows` starts a Harness-owned workflow and returns durable workflow ID.
-- [ ] Status combines durable journal projection with live-run state.
-- [ ] Server disposal cancels/settles owned runs and waits for quiescence.
-- [ ] Restart surfaces interrupted/inconclusive state instead of silently resuming side effects.
-- [ ] Add bounded user-visible status schema suitable for OpenCode bridge.
-- [ ] Commit: `feat(trick): add local harness control server`.
+- [x] Write RED HTTP lifecycle tests including invalid objective, run/status/cancel, unavailable workflow, restart projection, and concurrent workflow IDs.
+- [x] Bind loopback only (`127.0.0.1`/local equivalent). Add ephemeral process-owned bearer if needed; never persist it.
+- [x] `POST /workflows` starts a Harness-owned workflow and returns durable workflow ID.
+- [x] Status combines durable journal projection with live-run state.
+- [x] Server disposal cancels/settles owned runs and waits for quiescence.
+- [x] Restart surfaces interrupted/inconclusive state instead of silently resuming side effects.
+- [x] Add bounded user-visible status schema suitable for OpenCode bridge.
+- [x] Commit: `feat(trick): add local harness control server`.
 
 ---
 
@@ -337,11 +337,11 @@ POST /workflows/:id/cancel
 - Add real composition/profile fixtures and snapshots
 - Update package docs/catalog/Agent Notes
 
-- [ ] Compose contracts, executor runtime/providers, routing, journal, workflow, integrations and control server through `HarnessProfile`.
-- [ ] Keep Claude overlay optional/disableable.
-- [ ] Add real Loader/profile composition test with fake external services only at true network/product boundaries.
-- [ ] Add keyless snapshot for user-visible workflow status/finding/fallback transcript through real control-server entry path.
-- [ ] Run focused tests first, then:
+- [x] Compose contracts, executor runtime/providers, routing, journal, workflow, integrations and control server through `HarnessProfile`.
+- [x] Keep Claude overlay optional/disableable.
+- [x] Add real Loader/profile composition test with fake external services only at true network/product boundaries.
+- [x] Add keyless snapshot for user-visible workflow status/finding/fallback transcript through real control-server entry path.
+- [x] Run focused tests first, then:
 
 ```bash
 pnpm run constraints
@@ -355,9 +355,9 @@ pnpm run hygiene
 pnpm run doc-sync
 ```
 
-- [ ] Run independent code verification against Plan B requirements.
-- [ ] Run focused security review of control server, subprocess command construction, credential scrubbing, delivery authority and Supabase isolation.
-- [ ] Fix confirmed bugs only; report non-bug improvements separately.
+- [x] Run independent code verification against Plan B requirements.
+- [x] Run focused security review of control server, subprocess command construction, credential scrubbing, delivery authority and Supabase isolation.
+- [x] Fix confirmed bugs only; report non-bug improvements separately.
 
 ## Plan B Completion Evidence
 

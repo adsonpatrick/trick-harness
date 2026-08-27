@@ -28,7 +28,45 @@ Registration is all-or-nothing. A provider the runtime rejects, or a profile the
 
 Disposal is symmetric: a composition removes exactly what it registered, and a bundle that owns its runtime also ends the runs in flight.
 
+## The whole Harness composes from one profile
+
+`composeHarness` assembles the rest of it: routing policy, the durable journal, the workflow runner, the integrations and the loopback control server, from one `HarnessProfile` and the seams a deployment owns. The profile's routing table plus the deployment's model registry become the policy every route resolves against, so a semantic tier is answered in exactly one place.
+
+`integrationPolicy.enabled` decides what exists. An integration configured but not enabled is refused rather than constructed and quietly never called, because a disagreement between two files is not something this package should resolve by guessing — and the shape of that guess going wrong is a project talking to a hosted database it believed it had turned off. The control server is enabled the same way, so a deployment that wants no HTTP surface gets no listener rather than a closed one.
+
+What composition never supplies is a default for a seam a deployment owns: the session, the journal flush, the interpreter that reads a provider's output back into a verdict. There is no stand-in for any of them, because a stand-in would be this package guessing at a product's shape.
+
+`dispose` unwinds in the order things were handed out, and it waits. The control server goes first, since it owns the runs it started and settles them before anything they are still writing to is taken away. Then the runs a caller started directly: each is canceled and awaited, because unregistering a provider under a run that is still dispatching would fail it with an unregistered-executor error rather than end it as canceled — a disposal that reported a crash instead of a cancellation would be lying about why the work stopped. Only then do the registrations and the runtime go.
+
 ## Usage
+
+```ts
+import { composeHarness } from '@trick-harness/composition'
+import { planPullRequestStages } from '@trick-harness/engineering-workflow'
+import type { HarnessProfile } from '@trick-harness/profile'
+import type { Session } from '@deepseek-ai/dsh-session'
+import type { StageResult } from '@trick-harness/contracts'
+import type { StageSpec } from '@trick-harness/engineering-workflow'
+import type { ExecutorResult } from '@trick-harness/executor'
+
+declare const profile: HarnessProfile
+declare const session: Session
+declare const interpret: (stage: StageSpec, executor: string, result: ExecutorResult) => StageResult
+
+const harness = composeHarness({
+  profile,
+  registry: { implementation: 'mimo-v2.5', reasoning: 'deepseek-v4-flash' },
+  session,
+  flush: async () => true,
+  workflow: {
+    interpret,
+    task: (stage, objective) => `${stage.role}: ${objective.requirement}`,
+    plan: planPullRequestStages,
+  },
+})
+// harness.server exists only if the profile enabled `control-server`.
+await harness.dispose()
+```
 
 ```ts
 import { createHarnessRuntimeBundle } from '@trick-harness/composition'
@@ -59,3 +97,5 @@ Use `composeHarnessRuntime(runtime, options)` instead to add providers to a runt
 - **No Cordis plugin form.** Composition is a plain function because a provider needs a spawn seam and an SDK adapter, neither of which a validated declarative config can carry. A deployment wires it from its own startup path.
 - **Ordering is fixed.** OpenCode, then Codex, then the extras as given. Registration order is the order `list()` reports; nothing routes by it today.
 - **No live smoke.** Loading is proven not to start a process; that a real product then starts correctly is each provider package's own concern.
+- **One session per composed Harness.** `composeHarness` journals every workflow into the session it was given, so `restartOf` reads whatever that session holds. Serving several unrelated projects means composing several Harnesses.
+- **No Claude overlay ships here.** It composes through `extraProviders` like any other executor, and this fork registers none, so "optional" is the absence of a field rather than a flag that turns something off.
