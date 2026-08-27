@@ -45,6 +45,7 @@ export class DeliveryError extends Error {
     | 'nothing-to-commit'
     | 'unverified-push'
     | 'command-failed'
+    | 'teardown-failed'
 
   /**
    * @param code - Machine-readable cause.

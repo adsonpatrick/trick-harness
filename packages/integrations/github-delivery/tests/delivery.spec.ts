@@ -363,3 +363,71 @@ describe('the environment the commands are given', () => {
     for (const spec of issued) expect(Array.isArray(spec.argv)).toBe(true)
   })
 })
+
+describe('what settling a command means', () => {
+  /**
+   * A handle whose direct child has settled while its tree has not.
+   * @param quiescence - resolves/rejects when the owned tree is accounted for.
+   * @returns the handle.
+   */
+  function lingering(quiescence: Promise<boolean>): SubprocessHandle {
+    const reader = { readFrom: () => ({ text: 'feat/delivery', nextOffset: 13, lossy: false }) }
+    return {
+      pid: -1,
+      stdin: undefined,
+      stdout: undefined,
+      stderr: undefined,
+      collected: { stdout: reader, stderr: { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) } },
+      done: Promise.resolve({ exitCode: 0, signal: null }),
+      terminate: () => {},
+      waitForExit: () => quiescence,
+    }
+  }
+
+  it('does not return while a helper the command started is still running', async () => {
+    let release: (quiet: boolean) => void = () => undefined
+    const quiescence = new Promise<boolean>((resolve) => { release = resolve })
+    const capability = new GitHubDelivery({ cwd: work, spawn: () => lingering(quiescence) })
+    let settledYet = false
+
+    const reading = capability.inspect().then((value) => {
+      settledYet = true
+      return value
+    })
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve()
+
+    // The direct child is gone and its output is readable, which is exactly the
+    // state in which a delivery would happily start the next command — while a
+    // git helper still holds the index lock.
+    expect(settledYet).toBe(false)
+    release(true)
+    await expect(reading).resolves.toMatchObject({ branch: 'feat/delivery' })
+  })
+
+  it('reports a tree that would not come down instead of a clean command', async () => {
+    const capability = new GitHubDelivery({
+      cwd: work,
+      spawn: () => lingering(Promise.reject(new Error('the process tree could not be reaped'))),
+    })
+
+    await expect(capability.inspect()).rejects.toMatchObject({ code: 'teardown-failed' })
+  })
+
+  it('treats a wait cut short by cancellation as a tree still standing', async () => {
+    const capability = new GitHubDelivery({ cwd: work, spawn: () => lingering(Promise.resolve(false)) })
+
+    // `false` is not an error and not a success: it is the seam saying it stopped
+    // waiting, which is the one answer that must not be read as quiescence.
+    await expect(capability.inspect()).rejects.toMatchObject({ code: 'teardown-failed' })
+  })
+
+  it('names no command output in the failure it reports', async () => {
+    const leak = new Error('gh: token ghp_secretsecretsecret rejected')
+    const capability = new GitHubDelivery({ cwd: work, spawn: () => lingering(Promise.reject(leak)) })
+
+    await expect(capability.inspect()).rejects.not.toThrow(/ghp_/)
+    await capability.inspect().catch((error: unknown) => {
+      expect(String((error as Error).message)).not.toContain('ghp_')
+    })
+  })
+})

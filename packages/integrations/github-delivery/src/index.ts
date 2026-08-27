@@ -144,11 +144,47 @@ export class GitHubDelivery {
       ...this.#env === undefined ? {} : { env: this.#env },
     })
     const outcome = await handle.done
+    // `done` says the direct child closed. It does not say the tree it started
+    // is gone, and git is a program that starts helpers: a delivery that read
+    // `done` and moved on would run its next command against an index another
+    // process still holds. Quiescence is what settlement means here.
+    await this.#quiescent(handle)
     return {
       argv,
       exitCode: outcome.exitCode,
       stdout: readStream(handle, 'stdout'),
       stderr: readStream(handle, 'stderr'),
+    }
+  }
+
+  /**
+   * Wait for one command's owned process tree to be gone.
+   *
+   * A wait that ends any other way — a rejection, or the seam saying it stopped
+   * waiting — is a tree still standing. Neither is converted into a successful
+   * command: whatever the child's exit code said, the world is not in a state
+   * this capability may keep acting on.
+   *
+   * The run's cancellation signal is deliberately not passed along. A cancelled
+   * delivery still owns whatever it started, and releasing the operation while
+   * that tree is still up would hand the workspace back to a caller who has no
+   * way of knowing something is still writing to it.
+   * @param handle - The settled subprocess handle.
+   * @throws DeliveryError when the tree cannot be observed to have exited.
+   */
+  async #quiescent(handle: SubprocessHandle): Promise<void> {
+    let exited: boolean
+    try {
+      exited = await handle.waitForExit()
+    }
+    catch {
+      // The cause is deliberately not carried into the message: it comes from a
+      // command whose stderr may hold an authentication URL, and this string
+      // reaches a durable event.
+      throw new DeliveryError('teardown-failed', 'the process tree of a delivery command could not be reaped')
+    }
+    if (!exited) {
+      throw new DeliveryError('teardown-failed', 'the wait for a delivery command`s process tree ended before it exited')
     }
   }
 

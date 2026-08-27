@@ -32,6 +32,12 @@ Delivery runs again after every repair cycle. A branch that already has a pull r
 
 Reading CI state can fail on its own — checks not scheduled yet, an API that is slow — and none of that unmakes a commit, a push or a pull request that already exist. Those failures land in `metadataFailures`, separate from `failure`. A run told its delivery failed would go and repair work that is already on the remote.
 
+## A command is settled when its tree is gone
+
+The direct child closing is not the end of a git command. Git starts helpers, and a delivery that read `done` and moved on would run its next command against an index another process still holds — which is not a rare race so much as the ordinary shape of one. Every command here waits for whole-tree quiescence before its result is returned.
+
+A wait that ends any other way is a tree still standing. A rejection and the seam saying it stopped waiting both become a `teardown-failed` delivery error, and neither can be reported as a command that succeeded, whatever exit code the child gave. The run's cancellation signal is deliberately not passed to that wait: a cancelled delivery still owns what it started, and handing the workspace back while something is still writing to it is the failure cancellation was supposed to prevent.
+
 ## Credentials stay where they live
 
 `gh` authenticates from its own stored configuration. This package never reads a token, never constructs an environment to carry one, and passes no `env` to the subprocess seam unless a caller explicitly supplies one — the seam already scrubs credential-shaped entries from the parent. Failure messages name the operation and the exit code and never the command's output, because `gh` writes authentication hints to stderr and those messages reach a durable event.
