@@ -938,3 +938,83 @@ describe('an executor that stops serving mid-run', () => {
     expect(outcome.state).toBe('blocked')
   })
 })
+
+describe('a human route override', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+  let runner: WorkflowRunner
+  let seen: { executor: string; permissionMode: string; model: string }[]
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    seen = []
+    for (const name of ['builder', 'reviewer', 'spare']) {
+      executors.register(provider(name, async (request) => {
+        seen.push({
+          executor: name,
+          permissionMode: request.route.permissionMode,
+          model: request.route.model ?? '',
+        })
+        return passing(name)
+      }))
+    }
+  })
+
+  const twoReviews = () => [
+    { stageId: 'implement-1', role: 'implement' as const },
+    { stageId: 'review-1', role: 'review' as const },
+    { stageId: 'review-2', role: 'review' as const },
+  ]
+
+  it('is spent on the first stage of its role and not the next one', async () => {
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      plan: twoReviews,
+      routeOverride: { role: 'review', executor: 'spare', semanticModelTier: 'implementation' },
+    })
+
+    expect(outcome.state).toBe('completed')
+    // A person overrode one review, not the role. The second one is routed by
+    // the table exactly as it would have been had nobody asked.
+    expect(seen.map(start => start.executor)).toEqual(['builder', 'spare', 'reviewer'])
+    const routes = projectWorkflow(session.events, 'wf-1').routes
+    expect(routes[1]?.reasonCodes).toContain('override:user')
+    expect(routes[2]?.reasonCodes).not.toContain('override:user')
+  })
+
+  it('does not reach a stage of another role', async () => {
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      plan: twoReviews,
+      routeOverride: { role: 'qa', executor: 'spare', semanticModelTier: 'implementation' },
+    })
+
+    expect(seen.map(start => start.executor)).toEqual(['builder', 'reviewer', 'reviewer'])
+  })
+
+  it('cannot buy a review a writable working tree', async () => {
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      plan: twoReviews,
+      routeOverride: { role: 'review', executor: 'builder', semanticModelTier: 'implementation' },
+    })
+
+    // The override says which product reads the work. What a reading stage is
+    // allowed to do to the tree is not a routing question, and no override
+    // reaches it: a review that could write would be certifying its own edits.
+    const overridden = seen[1]
+    expect(overridden?.executor).toBe('builder')
+    expect(overridden?.model).toBe('mimo-v2.5')
+    expect(overridden?.permissionMode).toBe('read-only')
+  })
+})

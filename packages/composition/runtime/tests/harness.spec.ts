@@ -368,3 +368,34 @@ describe('a workflow through the real control-server entry path', () => {
     expect(harness.restartOf('wf-never-ran')).toBeUndefined()
   })
 })
+
+describe('a human route override in a composed runtime', () => {
+  it('reaches the run without touching the profile or the providers', async () => {
+    const started: ExecutorStartRequest[] = []
+    const profile = profileEnabling([])
+    const harness = compose(baseOptions(profile, started))
+    const tableBefore = JSON.stringify(harness.policy)
+
+    const outcome = await harness.run(OBJECTIVE, undefined, {
+      role: 'implement',
+      executor: 'reviewer',
+      semanticModelTier: 'reasoning',
+    })
+
+    const routed = outcome.stages.find(stage => stage.role === 'implement')
+    expect(routed?.executor).toBe('reviewer')
+    // One run, one decision. The table the next objective routes on is the one
+    // the profile shipped, and no provider was reconfigured to serve it.
+    expect(JSON.stringify(harness.policy)).toBe(tableBefore)
+    expect(JSON.stringify(profile.routingPolicy)).toBe(JSON.stringify(profileEnabling([]).routingPolicy))
+  })
+
+  it('routes on the table when the caller sends none', async () => {
+    const started: ExecutorStartRequest[] = []
+    const harness = compose(baseOptions(profileEnabling([]), started))
+
+    const outcome = await harness.run(OBJECTIVE)
+
+    expect(outcome.stages.find(stage => stage.role === 'implement')?.executor).toBe('builder')
+  })
+})

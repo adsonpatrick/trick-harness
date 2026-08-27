@@ -15,9 +15,17 @@ import {
   parseFinding,
   parseRouteDecision,
   parseStageResult,
+  parseStageRouteOverride,
   parseWorkflowObjective,
 } from '../src/index.ts'
-import type { DiagnosisContract, Finding, RouteDecision, StageResult, WorkflowObjective } from '../src/index.ts'
+import type {
+  DiagnosisContract,
+  Finding,
+  RouteDecision,
+  StageResult,
+  StageRouteOverride,
+  WorkflowObjective,
+} from '../src/index.ts'
 
 /** A finding that satisfies every required field, for mutation in individual tests. */
 const finding: Finding = {
@@ -303,6 +311,61 @@ describe('reading a serialized objective back', () => {
     for (const field of ['cwd', 'profileId', 'id', 'requirement'] as const) {
       const { [field]: _dropped, ...rest } = objective
       expect(() => parseWorkflowObjective(rest)).toThrow(new RegExp(`objective\\.${field}`))
+    }
+  })
+})
+
+describe('reading a human routing override back', () => {
+  const override: StageRouteOverride = Object.freeze({
+    role: 'review',
+    executor: 'codex',
+    semanticModelTier: 'codex.frontier',
+    reasoningEffort: 'xhigh',
+  })
+
+  it('survives a JSON round trip unchanged', () => {
+    expect(parseStageRouteOverride(roundTrip(override))).toStrictEqual(override)
+  })
+
+  it('keeps only the fields it declares', () => {
+    expect(parseStageRouteOverride({ ...override, permissionMode: 'workspace-write' }))
+      .toStrictEqual(override)
+  })
+
+  it('accepts an override that leaves the reasoning effort to the route', () => {
+    const { reasoningEffort: _dropped, ...rest } = override
+    expect(parseStageRouteOverride(rest)).toStrictEqual(rest)
+  })
+
+  it('refuses an override with no semantic tier, as the router would', () => {
+    const { semanticModelTier: _dropped, ...rest } = override
+    expect(() => parseStageRouteOverride(rest)).toThrow(/routeOverride\.semanticModelTier/)
+  })
+
+  it('rejects a role outside the vocabulary', () => {
+    expect(() => parseStageRouteOverride({ ...override, role: 'vibes' }))
+      .toThrow(/routeOverride\.role/)
+  })
+
+  it('rejects a blank or missing executor', () => {
+    for (const executor of ['', '   ', undefined, 7, ['codex']]) {
+      expect(() => parseStageRouteOverride({ ...override, executor }))
+        .toThrow(/routeOverride\.executor/)
+    }
+  })
+
+  it('rejects an optional field that is present but unusable', () => {
+    // Stated-but-blank is worse than absent: absent means the table decides,
+    // and blank means a person asked for something nobody can resolve.
+    expect(() => parseStageRouteOverride({ ...override, semanticModelTier: '  ' }))
+      .toThrow(/routeOverride\.semanticModelTier/)
+    expect(() => parseStageRouteOverride({ ...override, reasoningEffort: { level: 'high' } }))
+      .toThrow(/routeOverride\.reasoningEffort/)
+  })
+
+  it('rejects anything that is not an object', () => {
+    for (const value of [null, 'codex', 42, ['codex']]) {
+      expect(() => parseStageRouteOverride(value)).toThrow(ContractError)
     }
   })
 })

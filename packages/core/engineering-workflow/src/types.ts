@@ -4,6 +4,7 @@ import type {
   Role,
   RoutedPermissionMode,
   StageResult,
+  StageRouteOverride,
   WorkflowObjective,
   WorkflowVerdict,
 } from '@trick-harness/contracts'
@@ -92,6 +93,16 @@ export interface WorkflowRunRequest {
   readonly plan?: (objective: WorkflowObjective) => readonly StageSpec[]
   /** Prompt text per role; the runtime never composes task text itself. */
   readonly task: (stage: StageSpec, objective: WorkflowObjective) => string
+  /**
+   * One human routing choice, spent on the first stage of its role.
+   *
+   * Single-consumption on purpose. A person overriding a route is answering a
+   * situation — this review needs the frontier tier, this once — and an
+   * override that stayed in force would silently become policy for every later
+   * stage of that role, including the repair cycles nobody asked about. The
+   * profile's table is never edited to honour it.
+   */
+  readonly routeOverride?: StageRouteOverride
   /**
    * Reads the debugger stage's result back as a diagnosis, if it produced one.
    *

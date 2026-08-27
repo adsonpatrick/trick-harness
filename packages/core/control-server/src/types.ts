@@ -4,7 +4,7 @@
  * @module @trick-harness/control-server
  */
 
-import type { WorkflowObjective, WorkflowVerdict } from '@trick-harness/contracts'
+import type { StageRouteOverride, WorkflowObjective, WorkflowVerdict } from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 
 /** The address family the server is permitted to bind. */
@@ -57,10 +57,17 @@ export interface ControlWorkflowStatus {
   readonly requiresWorldVerification: boolean
 }
 
-/** What starts one workflow on behalf of an HTTP caller. */
+/**
+ * What starts one workflow on behalf of an HTTP caller.
+ *
+ * The override is passed rather than applied: the server's part is to refuse a
+ * malformed one before any durable record exists, and the workflow's part is to
+ * decide which single stage it reaches.
+ */
 export type ControlWorkflowStarter = (
   objective: WorkflowObjective,
   signal: AbortSignal,
+  routeOverride?: StageRouteOverride,
 ) => Promise<WorkflowOutcome>
 
 /**

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import type { StageRouteOverride } from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 import { ControlError, HarnessControlServer } from '../src/index.ts'
 import type { ControlServerOptions, ControlWorkflowStatus } from '../src/index.ts'
@@ -308,5 +309,67 @@ describe('what a status is allowed to carry', () => {
     expect(status.summary.length).toBeLessThanOrEqual(501)
     expect(JSON.stringify(status)).not.toContain('findings')
     expect(JSON.stringify(status)).not.toContain('evidence')
+  })
+})
+
+describe('a start request that carries a human route override', () => {
+  it('hands the override to the starter alongside the objective', async () => {
+    const seen: (StageRouteOverride | undefined)[] = []
+    const { base, auth } = await serve({
+      start: async (objective, _signal, routeOverride) => {
+        seen.push(routeOverride)
+        return outcome(objective.id)
+      },
+    })
+    const routeOverride = {
+      role: 'review',
+      executor: 'codex',
+      semanticModelTier: 'codex.frontier',
+      reasoningEffort: 'xhigh',
+    }
+
+    const response = await fetch(`${base}/workflows`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ ...OBJECTIVE, routeOverride }),
+    })
+
+    expect(response.status).toBe(202)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(seen).toEqual([routeOverride])
+  })
+
+  it('starts nothing at all when the override is malformed', async () => {
+    let starts = 0
+    const { base, auth } = await serve({
+      start: async (objective) => { starts += 1; return outcome(objective.id) },
+    })
+
+    const response = await fetch(`${base}/workflows`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ ...OBJECTIVE, routeOverride: { role: 'vibes', executor: 'codex' } }),
+    })
+
+    // A refusal, not a quiet fall back to the table: the caller asked for a
+    // specific executor, and a status that said 'running' would not tell them
+    // their request had been dropped.
+    expect(response.status).toBe(400)
+    expect(starts).toBe(0)
+  })
+
+  it('runs on the profile table when no override is sent', async () => {
+    const seen: (StageRouteOverride | undefined)[] = []
+    const { base, auth } = await serve({
+      start: async (objective, _signal, routeOverride) => {
+        seen.push(routeOverride)
+        return outcome(objective.id)
+      },
+    })
+
+    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
+
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(seen).toEqual([undefined])
   })
 })

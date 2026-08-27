@@ -39,7 +39,7 @@ import {
   route,
 } from '@trick-harness/routing'
 import type { ExecutorCircuit, RoutingPolicy } from '@trick-harness/routing'
-import type { RouteDecision, RoutingContext } from '@trick-harness/contracts'
+import type { RouteDecision, RoutingContext, StageRouteOverride } from '@trick-harness/contracts'
 
 export type * from './types.ts'
 export * from './repair.ts'
@@ -223,6 +223,19 @@ interface AvailabilityState {
   rerouteStarts: number
 }
 
+/**
+ * The human override a run was given, and whether it has been spent.
+ *
+ * A box rather than a plain value because the routing context is built deep in
+ * the dispatch path: the one place that can say "this stage took it" is the
+ * one place that resolved a route with it, and that has to be visible to the
+ * next stage of the same role.
+ */
+interface OverrideBox {
+  readonly override: StageRouteOverride | undefined
+  spent: boolean
+}
+
 /** Fresh availability state for one run. */
 function availabilityState(): AvailabilityState {
   return { circuits: new Map(), disabled: new Set(), rerouteStarts: 0 }
@@ -369,6 +382,7 @@ export class WorkflowRunner {
     // person would now see rather than the one that provoked the repair.
     let delivered = false
     const availability = availabilityState()
+    const humanOverride: OverrideBox = { override: request.routeOverride, spent: false }
 
     while (queue.length > 0) {
       const stage = queue.shift() as StageSpec
@@ -408,7 +422,7 @@ export class WorkflowRunner {
       try {
         dispatched = await this.#dispatch(
           stage, request, signal, repairCycles, lastMutator, availability,
-          maxExecutorStarts - executorStarts,
+          maxExecutorStarts - executorStarts, humanOverride,
         )
       } catch (error) {
         // A policy that cannot answer for this stage — a degraded executor no
@@ -597,11 +611,12 @@ export class WorkflowRunner {
     lastMutator: string | undefined,
     availability: AvailabilityState,
     extraStarts: number,
+    humanOverride: OverrideBox,
   ): Promise<Dispatched> {
     let spent = 0
     for (;;) {
       const attempt = await this.#attempt(
-        stage, request, signal, priorAttempts, lastMutator, availability,
+        stage, request, signal, priorAttempts, lastMutator, availability, humanOverride,
       )
       // Only an executor that could not serve the run is retried, and only
       // while the budget the profile set still has room. A wrong answer is not
@@ -625,10 +640,17 @@ export class WorkflowRunner {
     priorAttempts: number,
     lastMutator: string | undefined,
     availability: AvailabilityState,
+    humanOverride: OverrideBox,
   ): Promise<{ readonly dispatched: Dispatched; readonly reroutable: boolean }> {
     const { journal, executors, policy } = this.#options
-    const context = this.#routingContext(stage, request, priorAttempts, lastMutator, availability)
+    const context = this.#routingContext(
+      stage, request, priorAttempts, lastMutator, availability, humanOverride,
+    )
     const decision = route(context, policy)
+    // Spent only once a route actually resolved. An override the router refused
+    // has changed nothing, and burning it there would leave the run with an
+    // authority a person granted and nobody used.
+    if (context.userOverride !== undefined) humanOverride.spent = true
     const dispatch = { stageId: stage.stageId, role: stage.role, decision }
 
     journal.routeDecision(dispatch)
@@ -821,6 +843,7 @@ export class WorkflowRunner {
     priorAttempts: number,
     lastMutator: string | undefined,
     availability: AvailabilityState,
+    humanOverride: OverrideBox,
   ): RoutingContext {
     const { objective } = request
     const { profile, degradedExecutors = [], executors, policy } = this.#options
@@ -840,6 +863,12 @@ export class WorkflowRunner {
       ...unregistered,
     ])])
     const implementer = lastMutator ?? request.implementationExecutor
+    // The override reaches exactly one context: the first stage of its role
+    // that gets routed. Later stages of the same role route on the table.
+    const { override } = humanOverride
+    const applies = override !== undefined && !humanOverride.spent && override.role === stage.role
+      ? override
+      : undefined
     return {
       role: stage.role,
       workload: objective.workload,
@@ -853,6 +882,7 @@ export class WorkflowRunner {
       ...implementer === undefined || !READ_ONLY_ROLES.includes(stage.role)
         ? {}
         : { implementationExecutor: implementer },
+      ...applies === undefined ? {} : { userOverride: applies },
     }
   }
 

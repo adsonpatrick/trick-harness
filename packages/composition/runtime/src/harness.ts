@@ -19,7 +19,7 @@
  */
 
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { WorkflowObjective } from '@trick-harness/contracts'
+import type { StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import { HarnessControlServer } from '@trick-harness/control-server'
 import type { ControlServerOptions, ControlWorkflowStatus } from '@trick-harness/control-server'
 import {
@@ -126,8 +126,13 @@ export interface ComposedHarness {
    * Run one objective to a terminal state.
    * @param objective - What to run.
    * @param signal - Cancels the run and everything it owns.
+   * @param routeOverride - One human routing choice, spent on a single stage.
    */
-  run(objective: WorkflowObjective, signal?: AbortSignal): Promise<WorkflowOutcome>
+  run(
+    objective: WorkflowObjective,
+    signal?: AbortSignal,
+    routeOverride?: StageRouteOverride,
+  ): Promise<WorkflowOutcome>
   /** Read durable state for a workflow no longer running here. */
   restartOf(workflowId: string): RestartAssessment | undefined
   /** End everything this composition owns, and wait for it. */
@@ -211,7 +216,15 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   // an unregistered-executor error instead of ending it as canceled.
   const runners = new Map<WorkflowRunner, Promise<unknown>>()
 
-  const run = async (objective: WorkflowObjective, signal?: AbortSignal): Promise<WorkflowOutcome> => {
+  // The override is handed to the run and nowhere else. It never edits the
+  // profile's routing table and never touches a provider's configuration: the
+  // authority a person granted is for this run, and a composition that wrote it
+  // down anywhere durable would have turned one decision into a default.
+  const run = async (
+    objective: WorkflowObjective,
+    signal?: AbortSignal,
+    routeOverride?: StageRouteOverride,
+  ): Promise<WorkflowOutcome> => {
     const journal = new WorkflowJournal(session, objective.id, flush)
     const runner = new WorkflowRunner(objective.id, {
       profile,
@@ -231,6 +244,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       ...workflow.plan === undefined ? {} : { plan: workflow.plan },
       ...workflow.diagnose === undefined ? {} : { diagnose: workflow.diagnose },
       ...workflow.repairEvidence === undefined ? {} : { repairEvidence: workflow.repairEvidence },
+      ...routeOverride === undefined ? {} : { routeOverride },
     })
     runners.set(runner, settled)
     try {

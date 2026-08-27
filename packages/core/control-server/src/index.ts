@@ -21,8 +21,8 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { RISKS, WORKLOADS } from '@trick-harness/contracts'
-import type { WorkflowObjective } from '@trick-harness/contracts'
+import { ContractError, RISKS, WORKLOADS, parseStageRouteOverride } from '@trick-harness/contracts'
+import type { StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 import { ControlError, LOOPBACK_HOSTS } from './types.ts'
 import type {
@@ -65,6 +65,31 @@ function requiredString(body: Record<string, unknown>, key: string): string {
     throw new ControlError('invalid-objective', 400, `the objective must state a non-empty ${key}`)
   }
   return value
+}
+
+/**
+ * Read the human route override a start request may carry.
+ *
+ * Absent is the ordinary case and means the profile's table decides. Present
+ * and malformed is a refusal, not a silent fall back to the table: a caller who
+ * asked for a specific executor and got a different one would have no way to
+ * tell from the status that their request was dropped.
+ * @param payload - The decoded request body.
+ * @returns The override, or `undefined` when the request carries none.
+ * @throws {ControlError} when an override is present but not usable.
+ */
+export function readRouteOverride(payload: unknown): StageRouteOverride | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new ControlError('invalid-objective', 400, 'the request body must be a JSON object')
+  }
+  const value = (payload as Record<string, unknown>)['routeOverride']
+  if (value === undefined) return undefined
+  try {
+    return parseStageRouteOverride(value)
+  } catch (error) {
+    const detail = error instanceof ContractError ? error.path : 'routeOverride'
+    throw new ControlError('invalid-objective', 400, `the route override is not usable: ${detail}`)
+  }
 }
 
 /**
@@ -240,16 +265,19 @@ export class HarnessControlServer {
   /**
    * Start one workflow this server will own.
    * @param objective - The objective to run.
+   * @param routeOverride - One human routing choice for a single stage, if given.
    * @returns The status the caller sees immediately.
    * @throws {ControlError} when a workflow of that id is already running here.
    */
-  startWorkflow(objective: WorkflowObjective): ControlWorkflowStatus {
+  startWorkflow(objective: WorkflowObjective, routeOverride?: StageRouteOverride): ControlWorkflowStatus {
     if (this.#runs.has(objective.id)) {
       throw new ControlError('duplicate-workflow', 409, 'a workflow of that id is already running')
     }
     const controller = new AbortController()
     const settled = Promise.resolve()
-      .then(async () => statusOfOutcome(await this.#options.start(objective, controller.signal)))
+      .then(async () => statusOfOutcome(
+        await this.#options.start(objective, controller.signal, routeOverride),
+      ))
       .catch((error: unknown) => Object.freeze({
         ...runningStatus(objective.id, objective.id),
         state: controller.signal.aborted ? ('canceled' as const) : ('failed' as const),
@@ -357,8 +385,13 @@ export class HarnessControlServer {
     this.#authorize(request)
 
     if (method === 'POST' && path === '/workflows') {
-      const objective = readObjective(await readBody(request))
-      send(response, 202, this.startWorkflow(objective))
+      const body = await readBody(request)
+      // Both reads happen before a workflow id exists, so a malformed override
+      // refuses the request outright rather than starting a run that would then
+      // be routed by a table the caller did not ask for.
+      const objective = readObjective(body)
+      const override = readRouteOverride(body)
+      send(response, 202, this.startWorkflow(objective, override))
       return
     }
 
