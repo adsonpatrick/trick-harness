@@ -552,3 +552,47 @@ describe('what survives a composed run losing its process', () => {
     expect(assessment?.summary).toContain(`deliver-1:${GITHUB_DELIVERY_CAPABILITY}`)
   })
 })
+
+describe('an objective written for another deployment', () => {
+  it('starts nothing at all when it names a profile this Harness was not composed from', async () => {
+    const started: ExecutorStartRequest[] = []
+    const options = baseOptions(profileEnabling([]), started)
+    const harness = compose(options)
+
+    await expect(harness.run({ ...OBJECTIVE, profileId: 'other' })).rejects.toThrow(BundleCompositionError)
+
+    // Every rule the run would have been held to — which executors it may
+    // reach, what delivery may touch — comes from a policy this objective
+    // never agreed to, so the refusal has to come before anything is spent.
+    expect(started).toEqual([])
+    expect(options.session.events.some(event => event.type === 'harness/workflow-start')).toBe(false)
+  })
+
+  it('mints no execution id for an objective it refuses', async () => {
+    const started: ExecutorStartRequest[] = []
+    const ids = ['wf-refused', 'wf-accepted']
+    let next = 0
+    const harness = compose({
+      ...baseOptions(profileEnabling([]), started),
+      workflowIdFactory: () => ids[next++] ?? 'wf-overflow',
+    })
+
+    await expect(harness.run({ ...OBJECTIVE, profileId: 'other' })).rejects.toThrow(BundleCompositionError)
+    const outcome = await harness.run(OBJECTIVE)
+
+    // The first id was never spent, so the accepted run gets it. An id burned
+    // on a refusal would leave a gap nothing accounts for.
+    expect(outcome.workflowId).toBe('wf-refused')
+    expect(harness.restartOf('wf-accepted')).toBeUndefined()
+  })
+
+  it('runs normally when the objective names the composed profile', async () => {
+    const started: ExecutorStartRequest[] = []
+    const harness = compose(baseOptions(profileEnabling([]), started))
+
+    const outcome = await harness.run({ ...OBJECTIVE, profileId: 'plurora-test' })
+
+    expect(outcome.verdict).toBe('PASS')
+    expect(started.length).toBeGreaterThan(0)
+  })
+})

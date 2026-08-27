@@ -196,6 +196,28 @@ function assertAuthorised(profile: HarnessProfile, options: HarnessCompositionOp
 }
 
 /**
+ * Refuse an objective that was written for a different deployment.
+ *
+ * The objective carries the profile it was authored against, and this Harness
+ * was composed from exactly one. When the two disagree, every rule the run is
+ * about to be held to — which executors it may reach, which integrations are
+ * enabled, what delivery is allowed to touch — comes from a policy the
+ * objective never agreed to. Checked before an id is minted so that a
+ * mismatched objective leaves nothing behind: no durable start, no executor,
+ * no hosted mutation.
+ * @param objective - What was asked for.
+ * @param profile - The profile this Harness was composed from.
+ * @throws {BundleCompositionError} when the two name different profiles.
+ */
+function assertObjectiveProfile(objective: WorkflowObjective, profile: HarnessProfile): void {
+  if (objective.profileId !== profile.id) {
+    throw new BundleCompositionError(
+      `objective profile ${JSON.stringify(objective.profileId)} does not match composed profile ${JSON.stringify(profile.id)}`,
+    )
+  }
+}
+
+/**
  * Compose one Harness from one profile.
  *
  * @param options - The profile, the seams, and what the profile is allowed to enable.
@@ -268,6 +290,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
     objective: WorkflowObjective,
     routeOverride?: StageRouteOverride,
   ): { workflowId: string; outcome: Promise<WorkflowOutcome>; cancel: (reason: string) => void } => {
+    assertObjectiveProfile(objective, profile)
     const workflowId = nextWorkflowId()
     const journal = new WorkflowJournal(session, workflowId, flush)
     const runner = new WorkflowRunner(workflowId, {

@@ -118,6 +118,12 @@ Use `composeHarnessRuntime(runtime, options)` instead to add providers to a runt
 - **One session per composed Harness.** `composeHarness` journals every workflow into the session it was given, so `restartOf` reads whatever that session holds. Serving several unrelated projects means composing several Harnesses.
 - **No Claude overlay ships here.** It composes through `extraProviders` like any other executor, and this fork registers none, so "optional" is the absence of a field rather than a flag that turns something off.
 
+## An objective names the deployment it was written for
+
+`WorkflowObjective` carries a `profileId`, and a Harness is composed from exactly one profile. When the two disagree the run is refused before an execution id is minted, so a mismatched objective leaves nothing behind: no durable start, no executor, no hosted mutation, and not even a spent id.
+
+The check is identity, not compatibility. Every rule the run would be held to — which executors it may reach, which integrations are enabled, what delivery is allowed to touch — comes from the composed profile, and an objective authored against a different one never agreed to any of them.
+
 ## The deterministic capabilities are composed, not wired to the journal yet
 
 `composeHarness` builds the GitHub delivery and Supabase preview capabilities from the profile's own ids and options, and Plurora's composition test drives a real preview run through them to prove no local, linked or shared-database path is reachable from the composed object.
