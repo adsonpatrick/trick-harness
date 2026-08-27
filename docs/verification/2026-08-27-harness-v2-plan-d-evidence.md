@@ -312,6 +312,8 @@ The re-recorded transcript is materially different from the stale one, and the d
 
 The consequence for coverage is stated rather than hidden. The transcript no longer exercises the review-to-repair loop, because the lifecycle now stops before reaching it. That loop remains covered deterministically by `packages/core/engineering-workflow`, which is green. Restoring it in this artefact would require a seam for composing a delivery capability from a double, which composition does not offer today and which is a design change rather than a verification one; it is not made here.
 
+Two further points came out of reviewing the repair itself, and both are fixed. The status poll is bounded and pauses between reads, so a run that never settles is reported as a defect rather than hanging the suite and saturating the loopback socket. And the objective ids no longer share a prefix with the minted execution ids: the two are different identities, and a transcript in which they looked alike is what let a read by the wrong one go unnoticed for as long as it did.
+
 `vitest run --config vitest.snapshot.config.ts scripts/harness-control-transcript.snapshot.ts` passes.
 
 ### D2-01 repaired — the exclusion list now refuses

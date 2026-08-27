@@ -66,8 +66,11 @@ const PROFILE: HarnessProfile = Object.freeze({
 
 const REGISTRY = Object.freeze({ implementation: 'mimo-v2.5', reasoning: 'deepseek-v4-flash' })
 
+// Objective ids deliberately share no prefix with the execution ids the Harness
+// mints below. The two are different identities, and a transcript in which they
+// looked alike is what let a read by the wrong one go unnoticed.
 const OBJECTIVE: WorkflowObjective = Object.freeze({
-  id: 'wf-transcript-1',
+  id: 'objective-certified',
   cwd: '/repo',
   requirement: 'add the thing the review will object to',
   risk: 'low',
@@ -175,12 +178,17 @@ async function statusThroughHttp(
   // objective's own id: the same objective may be run more than once, so a read
   // addressed to `objective.id` names nothing and answers 404.
   const { workflowId } = (await created.json()) as ControlWorkflowStatus
-  for (;;) {
+  // Bounded, because a run that never settles is a defect to report and not a
+  // reason for the suite to hang; the wait is a real pause rather than a spin,
+  // so a stuck run does not also saturate the loopback socket while it waits.
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     const read = await fetch(`${base}/workflows/${workflowId}`, { headers })
     expect(read.status).toBe(200)
     const status = (await read.json()) as ControlWorkflowStatus
     if (status.state !== 'running') return status
+    await new Promise(resolve => setTimeout(resolve, 10))
   }
+  throw new Error(`workflow ${workflowId} never left the running state`)
 }
 
 describe('harness control transcript runnable snapshot', () => {
@@ -190,8 +198,8 @@ describe('harness control transcript runnable snapshot', () => {
     let transcript: string
     try {
       const status = await statusThroughHttp(certified, OBJECTIVE)
-      const outcome = await certified.run({ ...OBJECTIVE, id: 'wf-transcript-2' })
-      const degradedStatus = await statusThroughHttp(degraded, { ...OBJECTIVE, id: 'wf-transcript-3' })
+      const outcome = await certified.run({ ...OBJECTIVE, id: 'objective-published' })
+      const degradedStatus = await statusThroughHttp(degraded, { ...OBJECTIVE, id: 'objective-degraded' })
       const pullRequest = assessPullRequest(outcome)
       transcript = `${JSON.stringify({
         status,

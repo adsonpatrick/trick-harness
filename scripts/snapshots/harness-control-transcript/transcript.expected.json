@@ -1,7 +1,7 @@
 {
   "status": {
     "workflowId": "wf-transcript-1",
-    "objectiveId": "wf-transcript-1",
+    "objectiveId": "objective-certified",
     "state": "blocked",
     "verdict": "BLOCKED",
     "summary": "stage delivery-1 publishes the work, and this deployment composed no delivery capability to do it",
@@ -28,7 +28,7 @@
   "pullRequest": {
     "outcome": {
       "workflowId": "wf-transcript-2",
-      "objectiveId": "wf-transcript-2",
+      "objectiveId": "objective-published",
       "state": "blocked",
       "verdict": "BLOCKED",
       "summary": "stage delivery-1 publishes the work, and this deployment composed no delivery capability to do it",
