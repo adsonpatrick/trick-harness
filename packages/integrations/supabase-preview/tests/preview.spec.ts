@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { SubprocessHandle, SubprocessOutcome, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import type { SupabaseMutationRecord } from '../src/index.ts'
 import { SupabasePreview } from '../src/index.ts'
 
 const PARENT_REF = 'abcdefghijklmnop'
@@ -403,5 +404,86 @@ describe('a run that stops at the first gate it cannot get past', () => {
     expect(outcome.status).toBe('FAILED')
     expect(outcome.cleanup.succeeded).toBe(true)
     expect(outcome.cleanupFailure).toBeUndefined()
+  })
+})
+
+describe('checkpointing what the run left in the cloud', () => {
+  /**
+   * A capability whose hosted mutations are handed to an observer.
+   * @param onMutation - what the observer does with each record.
+   * @returns the capability under test.
+   */
+  function observed(onMutation: (record: SupabaseMutationRecord) => Promise<void>): SupabasePreview {
+    return new SupabasePreview({
+      cwd: '/repo',
+      spawn: seam,
+      projectRef: PARENT_REF,
+      pollIntervalMs: 0,
+      onMutation,
+    })
+  }
+
+  it('records each hosted change only once the world has confirmed it', async () => {
+    const seen: SupabaseMutationRecord[] = []
+
+    const outcome = await observed(async (record) => { seen.push(record) }).run({ branchName: 'pr-7' })
+
+    expect(outcome.status).toBe('PASSED')
+    expect(seen.map(record => record.action)).toEqual(['preview-created', 'migrations-applied', 'preview-deleted'])
+    // The ref recorded is the child's, which is the thing the identity read
+    // proved and the thing a leaked branch would be found under.
+    expect(seen.every(record => record.previewProjectRef === PREVIEW_REF)).toBe(true)
+    expect(seen.every(record => record.branchName === 'pr-7')).toBe(true)
+  })
+
+  it('carries no connection, password or token into a record', async () => {
+    const seen: SupabaseMutationRecord[] = []
+
+    await observed(async (record) => { seen.push(record) }).run({ branchName: 'pr-7' })
+
+    const written = JSON.stringify(seen)
+    expect(written).not.toContain('postgresql://')
+    expect(written).not.toContain('s3cr3t')
+    expect(Object.keys(seen[0] ?? {}).sort()).toEqual(['action', 'branchName', 'previewProjectRef'])
+  })
+
+  it('does not migrate a branch whose creation could not be recorded', async () => {
+    const outcome = await observed(async (record) => {
+      if (record.action === 'preview-created') throw new Error(`the journal refused ${PREVIEW_CONNECTION}`)
+    }).run({ branchName: 'pr-7' })
+
+    expect(outcome.status).toBe('BLOCKED')
+    expect(outcome.failure?.code).toBe('uncheckpointed-mutation')
+    expect(issued.some(spec => spec.argv.includes('push'))).toBe(false)
+    // The branch exists even though nothing recorded it, so the run still takes
+    // it away rather than leaving it up as compensation for its own bookkeeping.
+    expect(outcome.cleanup.attempted).toBe(true)
+    expect(outcome.cleanup.succeeded).toBe(true)
+    // And the refusal itself is not allowed to carry the connection outward.
+    expect(outcome.summary).not.toContain('s3cr3t')
+  })
+
+  it('does not record migrations the branch was never read back as holding', async () => {
+    scripts.push({ match: names('migration', 'list'), respond: () => ({ exitCode: 1, stdout: '', stderr: '' }) })
+    const seen: string[] = []
+
+    const outcome = await observed(async (record) => { seen.push(record.action) }).run({ branchName: 'pr-7' })
+
+    expect(outcome.status).toBe('FAILED')
+    // The push exited zero. What is missing is the read that says the branch
+    // holds the history, and an unread migration is not an applied one.
+    expect(seen).toEqual(['preview-created', 'preview-deleted'])
+  })
+
+  it('reports a delete nobody could record as a cleanup failure', async () => {
+    const outcome = await observed(async (record) => {
+      if (record.action === 'preview-deleted') throw new Error('the journal is gone')
+    }).run({ branchName: 'pr-7' })
+
+    // The gates all passed and the branch is gone; what failed is the record of
+    // it going, which belongs on the cleanup side of the report.
+    expect(outcome.status).toBe('PASSED')
+    expect(outcome.cleanup.succeeded).toBe(false)
+    expect(outcome.cleanupFailure).toContain('preview-deleted')
   })
 })

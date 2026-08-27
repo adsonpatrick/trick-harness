@@ -52,6 +52,27 @@ the run (`primaryFailure`), and which ones were therefore never asked
 there is no test command — is not reported as skipped, because it was never
 planned.
 
+## What the run left in the cloud is written down as it happens
+
+Three things a run does outlast the run: it creates a branch, it applies a
+migration history to it, and it takes the branch away. Each is offered to
+`onMutation` after the read that confirmed it and before the next one starts,
+and an observer that rejects stops the run — a branch nobody recorded is a
+branch nobody knows to delete.
+
+The record names the child project ref and the branch name, and nothing else. It
+goes to a durable log, and the connection string, the database password and the
+CLI's access token are all values that would be read back by whoever opens that
+log next.
+
+`preview-created` fires at the identity read rather than at the create command,
+because the create command returns an intention and the read is what proves the
+branch is a child project rather than the parent. `migrations-applied` fires
+after the migration list is read back, not after the push exits zero: an unread
+migration is not an applied one. `preview-deleted` fires after the delete is
+confirmed, and a delete nobody could record is reported as a cleanup failure —
+the branch is gone, what failed is the record of it going.
+
 ## Cleanup is a separate report
 
 The branch is deleted whatever happened to the run, including cancellation, and the delete is deliberately not given the run's abort signal — a cancelled run is exactly the case where a hosted branch would otherwise be left behind. Whether the delete worked is reported in `cleanup`, apart from the run's own result, because a leaked branch costs money and needs a person while a failed migration needs a repair cycle. Cleanup runs in a `finally`, and it is orthogonal in both directions: a branch that would not go away never turns a passing run into a failure, and a branch that went away cleanly never redeems a gate that failed.

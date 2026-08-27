@@ -8,6 +8,31 @@
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { PreviewError } from './commands.ts'
 
+/**
+ * One hosted thing this capability made, changed or took away.
+ *
+ * Deliberately narrow. A record names the preview project and the branch, and
+ * nothing else: it is written to a durable log, and the connection string, the
+ * database password and the CLI's access token are all values that would be
+ * read back by whoever reads that log next.
+ */
+export interface SupabaseMutationRecord {
+  readonly action: 'preview-created' | 'migrations-applied' | 'preview-deleted'
+  /** The child project ref, which the run has already proven is not the parent. */
+  readonly previewProjectRef: string
+  /** The branch name this run owns. */
+  readonly branchName?: string
+}
+
+/**
+ * Somewhere durable for one confirmed hosted mutation to be written down.
+ *
+ * Called after the mutation has been verified and before the next one is
+ * attempted, and awaited. A rejection stops the run: a branch nobody recorded
+ * is a branch nobody knows to delete.
+ */
+export type SupabaseMutationObserver = (record: SupabaseMutationRecord) => Promise<void>
+
 /** How one preview capability is bound to one project. */
 export interface SupabasePreviewOptions {
   /** Absolute path of the repository whose migration history is applied. */
@@ -42,6 +67,8 @@ export interface SupabasePreviewOptions {
   readonly pollIntervalMs?: number | undefined
   /** Terminate escalation grace for each spawned command. */
   readonly graceMs?: number | undefined
+  /** Where each confirmed hosted mutation is checkpointed before the next one. */
+  readonly onMutation?: SupabaseMutationObserver | undefined
 }
 
 /** One request to validate the repository's migrations on a fresh branch. */

@@ -44,6 +44,7 @@ import type {
   PreviewGate,
   PreviewOutcome,
   PreviewRunRequest,
+  SupabaseMutationRecord,
   SupabasePreviewOptions,
 } from './types.ts'
 
@@ -310,7 +311,7 @@ export class SupabasePreview {
    */
   async #waitForHealthy(
     branchName: string,
-    identityConfirmed: () => void,
+    identityConfirmed: (previewProjectRef: string) => Promise<void>,
     signal?: AbortSignal,
   ): Promise<{ identity: PreviewBranchIdentity; connection: string }> {
     let confirmed = false
@@ -330,9 +331,9 @@ export class SupabasePreview {
           'the preview branch reports the parent project as its own ref, so it is not an isolated branch',
         )
       }
-      if (!confirmed) {
+      if (!confirmed && read.identity.projectRef !== undefined) {
         confirmed = true
-        identityConfirmed()
+        await identityConfirmed(read.identity.projectRef)
       }
       if (read.identity.healthy) {
         const connection = read.connection ?? ''
@@ -376,6 +377,33 @@ export class SupabasePreview {
   }
 
   /**
+   * Write one verified hosted mutation down before causing the next one.
+   *
+   * Ordered this way because a branch that was created and never recorded is a
+   * branch nobody knows to delete: it stays up, it costs money, and the run
+   * that made it has no way to say so afterwards. Stopping here leaves a run
+   * that did less than asked and said so, which cleanup can still act on.
+   * @param record - The mutation the world has already confirmed.
+   * @throws PreviewError when the observer will not accept the record.
+   */
+  async #checkpoint(record: SupabaseMutationRecord): Promise<void> {
+    const observer = this.#options.onMutation
+    if (observer === undefined) return
+    try {
+      await observer(record)
+    }
+    catch (error) {
+      // The observer's own message is redacted rather than trusted: it comes
+      // from a durable store whose errors may name a connection, and this
+      // string becomes a run summary.
+      throw new PreviewError(
+        'uncheckpointed-mutation',
+        `the ${record.action} was confirmed but could not be checkpointed: ${redactConnections(error instanceof Error ? error.message : 'the checkpoint was refused')}`,
+      )
+    }
+  }
+
+  /**
    * Delete the branch this run created, whatever happened to the run.
    *
    * Cleanup never throws. Its failure is a separate fact from the run's result
@@ -383,14 +411,20 @@ export class SupabasePreview {
    * failed migration needs a repair cycle, and confusing the two sends the
    * wrong call to the wrong place.
    * @param branchName - Branch to delete.
+   * @param previewProjectRef - The child ref, when the run got far enough to prove one.
    * @returns What happened to the branch.
    */
-  async #cleanup(branchName: string): Promise<CleanupResult> {
+  async #cleanup(branchName: string, previewProjectRef: string | undefined): Promise<CleanupResult> {
     try {
       // Deliberately not given the run's signal: a cancelled run is exactly the
       // case where the branch would otherwise be left behind.
       const result = await this.#run(branchDeleteArgv(this.#projectRef, branchName))
-      if (result.exitCode === 0) return { attempted: true, succeeded: true, message: undefined }
+      if (result.exitCode === 0) {
+        if (previewProjectRef !== undefined) {
+          await this.#checkpoint({ action: 'preview-deleted', previewProjectRef, branchName })
+        }
+        return { attempted: true, succeeded: true, message: undefined }
+      }
       return {
         attempted: true,
         succeeded: false,
@@ -428,6 +462,7 @@ export class SupabasePreview {
     const completed: PreviewGate[] = []
     let branch: PreviewBranchIdentity | undefined
     let created = false
+    let childRef: string | undefined
     let stoppedAt: PreviewGate | undefined
     let primaryFailure: { gate: PreviewGate; message: string } | undefined
     let blocker: PreviewError | undefined
@@ -450,8 +485,13 @@ export class SupabasePreview {
       completed.push('create')
 
       current = 'identity'
-      const healthy = await this.#waitForHealthy(branchName, () => {
+      const healthy = await this.#waitForHealthy(branchName, async (previewProjectRef) => {
         completed.push('identity')
+        childRef = previewProjectRef
+        // Recorded here and not at create: what the create command returned is
+        // an intention, and what makes the branch worth recording is the read
+        // that proved it is a child project rather than the parent.
+        await this.#checkpoint({ action: 'preview-created', previewProjectRef, branchName })
         current = 'health'
       }, signal)
       completed.push('health')
@@ -488,6 +528,11 @@ export class SupabasePreview {
           break
         }
         completed.push(command.gate)
+        if (command.gate === 'migration-list' && childRef !== undefined) {
+          // Not at push. The push says the command exited zero; the list is the
+          // read that says the branch now holds the history the repository has.
+          await this.#checkpoint({ action: 'migrations-applied', previewProjectRef: childRef, branchName })
+        }
       }
     }
     catch (error) {
@@ -501,7 +546,7 @@ export class SupabasePreview {
       // anticipate: a failure it did not name leaves the same hosted branch
       // behind as one it did, and a leaked branch costs money and needs a
       // person whatever raised it.
-      if (created) cleanup = await this.#cleanup(branchName)
+      if (created) cleanup = await this.#cleanup(branchName, childRef)
     }
 
     const skipped = stoppedAt === undefined

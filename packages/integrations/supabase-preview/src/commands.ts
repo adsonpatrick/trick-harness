@@ -44,6 +44,7 @@ export class PreviewError extends Error {
     | 'branch-unhealthy'
     | 'command-failed'
     | 'teardown-failed'
+    | 'uncheckpointed-mutation'
     | 'cancelled'
 
   /**
