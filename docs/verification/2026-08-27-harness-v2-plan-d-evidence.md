@@ -158,6 +158,64 @@ A run routed to `gpt-5.1-codex`, which this account cannot reach, returned `stat
 
 Quota exhaustion was not induced. The fallback and circuit-breaker evidence is the deterministic classified fixture at the provider boundary in `packages/core/routing/tests/availability.spec.ts`, which is what Plan D Task 4 Step 6 asks for in as many words — *"without intentionally exhausting paid quota"*. It is recorded as a fixture, not as a live outage.
 
+## Task 5 — core independence without a third executor
+
+Criterion 9 holds by construction rather than by configuration, which is a stronger reading of it than the toggle test the original plan described.
+
+No Claude executor exists anywhere in the composed scope. `profiles/plurora/routing-policy.ts` names exactly two executors across every rule — `codex` and `opencode` — and no source file in `profiles/`, `packages/composition/`, `packages/core/routing/src` or `packages/providers/` refers to a Claude runtime at all. The only occurrences of the string in that scope are inside `packages/composition/runtime/tests/`, where `claude-code` is an arbitrary name for a test double proving that an extra provider *can* be registered. Nothing composes one.
+
+So there is no toggle to flip. The whole deterministic suite has always run with no Claude executor present, and it is green; both remaining executors have now been driven against their real products under Tasks 3 and 4. Criterion 9 is PASS and criterion 8 is WITHDRAWN, citing the scope amendment.
+
+The independence property is not silently satisfied when only one executor is usable. `packages/core/routing/src/index.ts:309` appends the reason code `independence:unsatisfied` to the decision rather than failing the run or pretending the requirement was met, and `packages/core/routing/src/availability.ts:311` treats a decision carrying it as weakened. `packages/core/engineering-workflow/src/index.ts:762` reads the same code when deciding what a stage may certify. Three suites assert both directions — that the code appears when independence cannot be had, and that it does not appear when it can.
+
+## Task 9 — restart, replay and process quiescence
+
+A workflow was driven to a durable nonterminal stage through the real control server, with a provider that starts a genuine OS process and blocks until the run is cancelled. Everything below is read from the world or from the durable log, never from the run's own memory.
+
+### Reconstruction from the durable log alone
+
+While `implement-1` was still in flight, a **second** composition was built over the same session and asked about the workflow. It shares no run state with the first — only the durable events. It answered `state: interrupted`, `verdict: INCONCLUSIVE`, `openStages: ["implement-1"]`, `requiresWorldVerification: true`, and the summary *"workflow was interrupted; verify the world before retrying — stages still open: implement-1"*.
+
+That is criterion 28 exactly: the durable facts reconstruct, the in-flight stage whose effect is unknown becomes `interrupted` and `INCONCLUSIVE`, the reader is told to re-read the world before retrying, and nothing resumes. Building the second Harness started no work; it read.
+
+After the first Harness was disposed, the same reconstruction reported `state: terminal`, `verdict: INCONCLUSIVE`, `openStages: []` and the summary *"the run was canceled during verify"* — a clean cancellation is a terminal fact, and the log says which of the two it was rather than blurring them. A workflow id nobody ran reconstructs as nothing at all rather than as an empty success.
+
+### Quiescence, verified against the operating system
+
+The child process really existed and really went away. `tasklist` confirmed pid 11892 alive while the stage was running, and absent once `dispose()` returned. The socket was refused on the next request. Cancellation travelled the seam's own termination path — the run's `AbortSignal` was handed to the subprocess spec — rather than a kill the test performed itself, so what is proven is the Harness terminating its owned tree, not a script terminating a process. No orphan remained.
+
+### The durable payload holds facts, not reasoning
+
+Every key present anywhere in the nine durable events was enumerated: `cwd`, `data`, `durationMs`, `evidence`, `executor`, `objectiveId`, `outcome`, `permissionMode`, `policyVersion`, `profileId`, `reasonCodes`, `requirement`, `resolvedModel`, `risk`, `role`, `semanticModelTier`, `seq`, `stageId`, `state`, `summary`, `time`, `type`, `verdict`, `workflowId`, `workload`.
+
+There is no `reasoning`, `thinking`, `chainOfThought`, `transcript`, `rawOutput`, `output` or `prompt` key. Private chain-of-thought is neither required by replay nor persisted by it: everything the journal keeps is an observable fact about what was decided and what happened.
+
+### What Task 9 did not do
+
+Compaction and pruning were not exercised against a log large enough to trigger them; the reconstruction above ran on a nine-event log. The cancel half was exercised through the control server's own cancel route under Task 3 rather than through OpenCode's `harness_cancel` tool, which needs the `neuro-via` bridge.
+
+## Task 10 — independent verification, and the half that cannot run here
+
+The parts of Task 10 that live in this repository were carried out; the parts that need `neuro-via` were not, and are not reported as if they had been.
+
+**Boundaries.** R1 is proven by the static boundary test rather than by reading imports: `scripts/check-trick-boundaries.ts`, run through `pnpm run constraints`, reports that generic packages carry no project-policy dependency. R2 through R4 are proven by `profiles/plurora/tests/` and `tests/trick-harness/dual-profile.spec.ts`, which boot a minimal fixture profile with no Plurora policy loaded and run fixture workflows under both profiles from one build.
+
+**Trusted composition.** Inspected independently, and the inspection is what produced D2-01: the exclusion list was declared and never read. It is now enforced at composition time and proven by a refusal test. No self-modifying or model-authored runtime plugin is mounted anywhere in this repository, and a deployment that tried to mount one against the Plurora profile would now be refused rather than reviewed.
+
+**Mock-only certification.** The inspection found a real instance, and it is D2-02. The control-transcript snapshot had been certifying that a run reached a published branch through eight passing stages, when the composition it runs has no delivery capability at all and the lifecycle blocks before delivery. That is precisely the failure mode this step exists to catch: an artefact asserting an external effect that never occurred. It is repaired, and the artefact now records the block.
+
+**Not run here.** The `neuro-via` bridge, permission floor, database scripts, skills, CI and Security/Git-flow review cannot be performed, because the repository is absent. The standard Codex security audit over the bridge and database surfaces is likewise scoped to code that does not exist in this environment. The Harness-side security surfaces were verified directly under Tasks 3, 4 and 8 instead — keyless provider paths, unmodified global credential stores, an empty child environment, denied Supabase command paths, and a control server whose only unauthenticated route is `/health`.
+
+**Triage.** Two confirmed defects, both eligible for repair, both repaired in a separate pass and re-verified. No product or design decision was auto-fixed. The upstream `rescope-vendor:check` failure and the eleven upstream test files are reported and not repaired, because they are outside the fork's scope and Plan D does not authorise editing them.
+
+## Tasks 11 and 12 — not reachable in this environment
+
+Both tasks are written against `neuro-via`. Task 11 reconciles the pin in `neuro-via/plurora-harness.json` against the final Trick Harness SHA, re-runs the bridge health check and one read-only workflow against that pin, and writes the criteria artefact into `neuro-via/docs/agents/`. Task 12 activates V2 by editing operator documentation that lives in the same repository and by confirming the final pin.
+
+None of that can be done from here, and none of it is simulated. What this repository can supply toward them is complete: the criteria ledger above, the two PRO-OPTIONAL criteria named with their entitlement status, criterion 8 recorded as WITHDRAWN, no unresolved material finding, and a trusted composition that now refuses self-modifying and model-authored runtime plugins rather than merely listing them. The activation gate's remaining condition — that the final `neuro-via` pin match an independently verified Trick Harness SHA — is the one thing only `neuro-via` can satisfy.
+
+Merge, release and deploy authority was not touched by any of this work and remains human-controlled. The one real delivery Plan D performed opened a pull request and closed it unmerged.
+
 ## Task 6 and 7 — real delivery on a disposable branch
 
 The delivery capability was run against the real `adsonpatrick/trick-harness` remote on a disposable branch, `plan-d-task6-canary`.
@@ -206,7 +264,7 @@ Verdict vocabulary: **PASS** direct evidence exists; **PARTIAL** partly evidence
 | 6 | Codex executes on native ChatGPT-plan auth without an API key | Real `app-server` run completed; `auth_mode = chatgpt`, no key in the child environment | PASS |
 | 7 | Codex model/effort applies per run and does not mutate global defaults | Real run at `high` against a `medium` global default; both global files unchanged | PASS |
 | 8 | Claude Code executes as optional worker | Withdrawn by the 2026-08-27 scope amendment | NOT_APPLICABLE — withdrawn |
-| 9 | Disabling Claude does not break core OpenCode/Codex workflows | No Claude executor is composed; suite green, and both real executors ran | PASS |
+| 9 | Disabling Claude does not break core OpenCode/Codex workflows | No Claude executor exists in the composed scope at all, so the property holds by construction; both real executors ran | PASS |
 | 10 | Router uses versioned deterministic policy and logs every decision | `packages/core/routing`, green in the focused Plan D run | PASS |
 | 11 | Heavy implementation routes to MiMo V2.5 unless overridden | `profiles/plurora/tests/routing.spec.ts`, green | PASS |
 | 12 | Codex selection uses semantic registry and intentional effort | Real per-run effort override, plus the registry tests | PASS |
@@ -225,8 +283,8 @@ Verdict vocabulary: **PASS** direct evidence exists; **PARTIAL** partly evidence
 | 25 | No check requires local Docker Supabase or a Docker shadow DB | Denied command prefixes and flags in `commands.ts`; no script or DB workflow needs Docker | PASS |
 | 26 | Local-Docker DB gates retired so they cannot stay canonical | Work lives in `neuro-via` | BLOCKED — Plan C not run |
 | 27 | RLS changes verify denial and allowed access | Requires Pro entitlement | NOT_APPLICABLE — entitlement absent |
-| 28 | Replay reconstructs route/fallback/finding/verdict/delivery facts | `packages/core/journal`, green; journal carries no private reasoning | PASS |
-| 29 | Provider processes cancel/dispose to quiescence without orphans | Disposal suite green; two real Codex process trees came down with no cleanup fault | PASS |
+| 28 | Replay reconstructs route/fallback/finding/verdict/delivery facts | A second composition reconstructed an in-flight run from the durable log alone as `interrupted`/`INCONCLUSIVE` with the open stage named; every durable key is an observable fact | PASS |
+| 29 | Provider processes cancel/dispose to quiescence without orphans | `tasklist` confirmed a real child alive during the stage and gone once `dispose()` returned, with the socket refused; two real Codex process trees also came down with no cleanup fault | PASS |
 | 30 | Integration tests verify actual repo/GitHub/Supabase effects | GitHub half proven by world reads on the real remote; Supabase half entitlement-gated | PARTIAL — GitHub half only |
 | R1 | Generic packages carry no dependency on `profiles/plurora` or `neuro-via` | `pnpm run constraints`, run under Plan D | PASS |
 | R2 | `profiles/plurora` reproduces all binding Plurora behaviour | `profiles/plurora/tests/`, green | PASS |

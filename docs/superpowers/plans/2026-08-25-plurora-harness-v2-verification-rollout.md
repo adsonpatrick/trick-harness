@@ -142,11 +142,11 @@ Record only what these checks actually prove.
 
 **Amended 2026-08-27.** Claude Code is out of scope, so this task no longer runs a Claude smoke and no longer gates activation on a maintained Claude runtime. Criterion 8 is withdrawn; criterion 9 is retained as a standing property rather than a toggle test.
 
-- [ ] Run the core deterministic suite and confirm the OpenCode/Codex paths are green with no Claude executor composed at all.
-- [ ] Confirm no profile, composition root or provider registry names a Claude executor, so criterion 9 holds by construction and not by configuration.
-- [ ] Run a representative OpenCode→Codex workflow and record that its semantics do not depend on a third executor being present.
-- [ ] Record `independence:unsatisfied` behaviour when only one of the two remaining executors is usable, and confirm it is never silently satisfied.
-- [ ] Criterion 9 must PASS. Criterion 8 is reported WITHDRAWN, citing the scope amendment.
+- [x] Run the core deterministic suite and confirm the OpenCode/Codex paths are green with no Claude executor composed at all.
+- [x] Confirm no profile, composition root or provider registry names a Claude executor, so criterion 9 holds by construction and not by configuration.
+- [x] Run a representative OpenCode→Codex workflow and record that its semantics do not depend on a third executor being present.
+- [x] Record `independence:unsatisfied` behaviour when only one of the two remaining executors is usable, and confirm it is never silently satisfied.
+- [x] Criterion 9 must PASS. Criterion 8 is reported WITHDRAWN, citing the scope amendment.
 
 ---
 
