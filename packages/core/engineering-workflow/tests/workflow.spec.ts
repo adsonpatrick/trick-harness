@@ -18,7 +18,7 @@ import {
   permissionModeFor,
   planStages,
 } from '../src/index.ts'
-import type { StageSpec } from '../src/index.ts'
+import type { DeliveryCapabilityPort, StageSpec } from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
   policyVersion: 'test-v1.0.0',
@@ -150,6 +150,24 @@ describe('the stage plan', () => {
   })
 })
 
+/**
+ * A delivery capability that publishes without touching a remote.
+ *
+ * Every run in this file that reaches delivery gets one, because the runtime
+ * refuses to publish without a capability and there is no executor path left
+ * for it to take instead.
+ */
+function deliveryStub(stageIds?: string[]): DeliveryCapabilityPort {
+  return {
+    deliver: async (input) => {
+      stageIds?.push(input.stageId)
+      return { delivered: true, summary: 'the branch was pushed and its pull request updated', evidence: [], findings: [] }
+    },
+  }
+}
+
+const DELIVERY = deliveryStub()
+
 describe('role-specific permission modes', () => {
   it('gives every read-only role a read-only provider mode', () => {
     for (const role of ['refine', 'plan', 'debug', 'verify', 'review', 'security', 'qa'] as const) {
@@ -174,7 +192,7 @@ describe('a normal run', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
   it('walks implement to verify to delivery and completes', async () => {
@@ -193,7 +211,9 @@ describe('a normal run', () => {
     expect(outcome.state).toBe('completed')
     expect(outcome.verdict).toBe('PASS')
     expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'delivery'])
-    expect(seen).toEqual(['builder:workspace-write', 'reviewer:read-only', 'builder:workspace-write'])
+    // Delivery is the third stage and no executor was asked for it: publishing
+    // is a bounded command sequence, not a question put to a model.
+    expect(seen).toEqual(['builder:workspace-write', 'reviewer:read-only'])
   })
 
   it('hands back compact facts and never the executor output', async () => {
@@ -217,8 +237,12 @@ describe('a normal run', () => {
     const projection = projectWorkflow(session.events, 'wf-1')
 
     expect(projection.objective?.id).toBe('obj-1')
-    expect(projection.routes).toHaveLength(3)
+    // Two routed stages, three verdicts: delivery reports one without being routed.
+    expect(projection.routes).toHaveLength(2)
     expect(projection.verdicts).toHaveLength(3)
+    // The capability window opened and closed, so nothing is left open.
+    expect(projection.openCapabilities).toEqual([])
+    expect(JSON.stringify(session.events)).toContain('github-delivery')
     expect(projection.openStages).toEqual([])
     expect(projection.end?.state).toBe('completed')
   })
@@ -249,7 +273,7 @@ describe('a run that goes wrong', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
   it('stops on a cancelled run and reports it as inconclusive, not failed', async () => {
@@ -493,6 +517,7 @@ describe('a run that goes wrong', () => {
       policy: POLICY,
       executors,
       journal,
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
@@ -509,7 +534,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async (request) => {
       await new Promise((resolve) => { request.signal.addEventListener('abort', resolve, { once: true }) })
       return { status: 'aborted', output: '' }
@@ -526,7 +551,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     const aborted = vi.fn()
     let announce: () => void = () => {}
     const started = new Promise<void>((resolve) => { announce = resolve })
@@ -551,7 +576,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     runner.dispose()
 
     await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
@@ -564,7 +589,7 @@ describe('what a restart may conclude', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
     await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
@@ -696,7 +721,7 @@ describe('triage inside a run', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
   })
@@ -812,6 +837,7 @@ describe('independence the profile actually requires', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: SOLO_POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
     })
     const starts: string[] = []
     executors.register(provider('builder', async (request) => {
@@ -837,6 +863,7 @@ describe('independence the profile actually requires', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: SOLO_POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
 
@@ -857,6 +884,7 @@ describe('a pass the route it ran on cannot support', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['reviewer'],
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('spare', async () => passing('spare')))
@@ -878,6 +906,7 @@ describe('a pass the route it ran on cannot support', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['reviewer'],
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('spare', async () => passing('spare')))
@@ -902,6 +931,7 @@ describe('a stage the policy cannot answer for', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     const runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: NO_FALLBACK, executors, journal, degradedExecutors: ['builder'],
+      capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
 
@@ -922,7 +952,7 @@ describe('a plan that asks for a repair with nothing to repair', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
 
     const outcome = await runner.run({
@@ -947,7 +977,7 @@ describe('an executor that stops serving mid-run', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
   function failing(name: string, category: string, availability: boolean, seen: string[]): ExecutorProvider {
@@ -967,8 +997,9 @@ describe('an executor that stops serving mid-run', () => {
 
     expect(outcome.state).toBe('completed')
     expect(seen).toContain('spare')
-    // The reroute is a real start against a real product, so the budget sees it.
-    expect(outcome.executorStarts).toBeGreaterThan(outcome.stages.length)
+    // The reroute is a real start against a real product, so the budget sees it:
+    // two executor stages, three starts.
+    expect(outcome.executorStarts).toBeGreaterThan(2)
     const events = JSON.stringify(session.events)
     expect(events).toContain('harness/route-fallback')
     expect(events).toContain('usage-limit-exceeded')
@@ -1014,7 +1045,7 @@ describe('a human route override', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     seen = []
     for (const name of ['builder', 'reviewer', 'spare']) {
       executors.register(provider(name, async (request) => {
@@ -1099,6 +1130,7 @@ describe('the durable barrier in front of a dispatch', () => {
     })
     const runner = new WorkflowRunner('wf-barrier', {
       profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
     })
     const starts: string[] = []
     executors.register(provider('builder', async () => {
@@ -1129,6 +1161,7 @@ describe('the durable barrier in front of a dispatch', () => {
     const journal = new WorkflowJournal(session, 'wf-barrier-failed', async () => false)
     const runner = new WorkflowRunner('wf-barrier-failed', {
       profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
     })
     const starts: string[] = []
     executors.register(provider('builder', async () => {
@@ -1155,6 +1188,7 @@ describe('the durable barrier in front of a dispatch', () => {
     })
     const runner = new WorkflowRunner('wf-barrier-read', {
       profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
     })
     const starts: string[] = []
     executors.register(provider('builder', async () => {
@@ -1172,5 +1206,96 @@ describe('the durable barrier in front of a dispatch', () => {
     await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
       .rejects.toThrow(/durable checkpoint/)
     expect(starts).toEqual(['builder'])
+  })
+})
+
+describe('who is allowed to publish the work', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  })
+
+  it('asks the capability once and asks no executor to deliver anything', async () => {
+    const delivered: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: deliveryStub(delivered) },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('completed')
+    expect(delivered).toEqual(['delivery-1'])
+    // Nothing named delivery was ever put to a model.
+    for (const route of projectWorkflow(session.events, 'wf-1').routes) {
+      expect(route.role).not.toBe('delivery')
+    }
+  })
+
+  it('blocks a lifecycle that must publish when nothing was composed to publish with', async () => {
+    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no delivery capability')
+    // No substitute was reached for: the run stops rather than handing the
+    // remote to whatever executor happened to be routable.
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+    expect(JSON.stringify(session.events)).not.toContain('github-delivery')
+  })
+
+  it('fails the run when the capability reports it did not publish', async () => {
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: {
+        delivery: {
+          deliver: async () => ({ delivered: false, summary: 'the branch was rejected by the remote', evidence: [], findings: [] }),
+        },
+      },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('failed')
+    expect(outcome.verdict).toBe('FAIL')
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+
+  it('closes the capability window even when the capability throws', async () => {
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: {
+        delivery: {
+          deliver: async () => { throw new Error('the pull request could not be opened') },
+        },
+      },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('failed')
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+
+  it('spends no executor-start budget on publishing', async () => {
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.stages).toHaveLength(3)
+    // Implement and verify. The budget bounds how often a model is asked, and
+    // a bounded command sequence is not one of those times.
+    expect(outcome.executorStarts).toBe(2)
   })
 })

@@ -28,16 +28,18 @@ import {
   assessRestart,
 } from '@trick-harness/engineering-workflow'
 import type {
+  DeliveryCapabilityPort,
   RestartAssessment,
   StageInterpreter,
   StageSpec,
+  WorkflowDeliveryInput,
   WorkflowOutcome,
   WorkflowRunRequest,
 } from '@trick-harness/engineering-workflow'
 import { createExecutorRuntime } from '@trick-harness/executor'
 import type { ExecutorResult, HarnessExecutorRuntime } from '@trick-harness/executor'
 import { GitHubDelivery } from '@trick-harness/github-delivery'
-import type { GitHubDeliveryOptions } from '@trick-harness/github-delivery'
+import type { DeliveryRequest, GitHubDeliveryOptions } from '@trick-harness/github-delivery'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { JournalFlush } from '@trick-harness/journal'
 import { validateProfile } from '@trick-harness/profile'
@@ -71,6 +73,16 @@ export interface HarnessWorkflowHandlers {
   readonly plan?: (objective: WorkflowObjective) => readonly StageSpec[]
   readonly diagnose?: (stage: StageSpec, executor: string, result: ExecutorResult) => unknown
   readonly repairEvidence?: WorkflowRunRequest['repairEvidence']
+  /**
+   * What the run should publish, when it reaches delivery.
+   *
+   * No default, for the same reason `task` has none: the objective names a
+   * requirement, not a branch, a write set or a pull request body, and this
+   * package inventing those would be it deciding on a deployment's behalf what
+   * goes on the remote. Composed only when GitHub delivery is enabled; without
+   * it a lifecycle that must publish is blocked rather than improvised.
+   */
+  readonly describeDelivery?: (input: WorkflowDeliveryInput) => Omit<DeliveryRequest, 'signal'>
 }
 
 /** Integration seams a profile may enable. */
@@ -239,9 +251,46 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   const github = options.integrations?.github === undefined
     ? undefined
     : new GitHubDelivery(options.integrations.github)
+  // The capability exists only when both halves are there: something to deliver
+  // with, and something that says what to deliver. Half of it is not a weaker
+  // delivery, it is a push with nothing decided about what goes in it.
   const supabase = options.integrations?.supabase === undefined
     ? undefined
     : new SupabasePreview(options.integrations.supabase)
+
+  const describeDelivery = workflow.describeDelivery
+  const githubOptions = options.integrations?.github
+  /**
+   * Build the delivery capability for one run, bound to that run's journal.
+   *
+   * Built per run rather than once, because the observer that writes each
+   * confirmed mutation down is the journal of the run that caused it. A shared
+   * instance would either checkpoint into the wrong run's history or into none.
+   *
+   * The capability exists only when both halves are there: something to deliver
+   * with, and something that says what to deliver. Half of it is not a weaker
+   * delivery, it is a push with nothing decided about what goes in it.
+   * @param journal - the journal of the run asking to publish.
+   * @returns The capability, or nothing when this deployment cannot publish.
+   */
+  const deliveryFor = (journal: WorkflowJournal): DeliveryCapabilityPort | undefined => {
+    if (githubOptions === undefined || describeDelivery === undefined) return undefined
+    const client = new GitHubDelivery({
+      ...githubOptions,
+      onRecord: async (record) => { await journal.delivery(record) },
+    })
+    return {
+      deliver: async (input, signal) => {
+        const outcome = await client.deliver({ ...describeDelivery(input), signal })
+        return {
+          delivered: outcome.delivered,
+          summary: outcome.summary,
+          evidence: [],
+          findings: [],
+        }
+      },
+    }
+  }
 
   // Each in-flight run is held with the promise that settles it, because
   // disposal has to wait for that promise rather than for the runner object:
@@ -293,12 +342,14 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
     assertObjectiveProfile(objective, profile)
     const workflowId = nextWorkflowId()
     const journal = new WorkflowJournal(session, workflowId, flush)
+    const delivery = deliveryFor(journal)
     const runner = new WorkflowRunner(workflowId, {
       profile,
       policy,
       executors: runtime,
       journal,
       ...options.degradedExecutors === undefined ? {} : { degradedExecutors: options.degradedExecutors },
+      ...delivery === undefined ? {} : { capabilities: { delivery } },
     })
     const settled = runner.run({
       objective,

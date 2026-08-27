@@ -57,9 +57,11 @@ import type { RepairAuthorization, RepairEvidence } from './repair.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type {
+  DeliveryCapabilityPort,
   RestartAssessment,
   StageFacts,
   StageSpec,
+  WorkflowCapabilities,
   WorkflowOutcome,
   WorkflowRunRequest,
 } from './types.ts'
@@ -262,6 +264,15 @@ export interface WorkflowRuntimeOptions {
   readonly policy: RoutingPolicy
   readonly executors: HarnessExecutorRuntime
   readonly journal: WorkflowJournal
+  /**
+   * The deterministic capabilities this deployment composed, if any.
+   *
+   * A lifecycle stage that needs one and does not find it here is blocked. It is
+   * never handed to an executor with a shell instead: a model told to publish the
+   * work has authority over the remote that nothing in this file bounds, and the
+   * bound is the reason the capability exists.
+   */
+  readonly capabilities?: WorkflowCapabilities
   /** Executors the breaker has marked degraded for this run. */
   readonly degradedExecutors?: readonly string[]
   /** Injectable clock, so a stage's duration is measurable in a test. */
@@ -431,6 +442,33 @@ export class WorkflowRunner {
         }
       }
 
+      if (stage.role === 'delivery') {
+        const capability = this.#options.capabilities?.delivery
+        if (capability === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            `stage ${stage.stageId} publishes the work, and this deployment composed no delivery capability to do it`,
+          )
+        }
+        const published = await this.#publish(stage, objective, signal, capability)
+        stages.push(published.facts)
+        // Recorded like any other stage's verdict: a projection rebuilding the
+        // run should not have to know which stages were routed to see them all.
+        await journal.verdict(
+          stage.stageId, stage.role, published.facts.verdict, published.facts.summary, published.facts.evidence,
+        )
+        if (published.canceled) {
+          return await this.#end(objective, stages, repairCycles, executorStarts, 'canceled', 'INCONCLUSIVE',
+            `the run was canceled during ${stage.role}`)
+        }
+        if (published.facts.verdict !== 'PASS') {
+          return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'FAIL',
+            published.facts.summary)
+        }
+        delivered = true
+        continue
+      }
+
       executorStarts += 1
       const reroutesBefore = availability.rerouteStarts
       let dispatched: Dispatched
@@ -464,8 +502,6 @@ export class WorkflowRunner {
       if (permissionModeFor(stage.role) === 'workspace-write' && !dispatched.canceled) {
         lastMutator = dispatched.facts.executor
       }
-      if (stage.role === 'delivery' && !dispatched.canceled && !dispatched.failed) delivered = true
-
       if (dispatched.canceled) {
         return await this.#end(objective, stages, repairCycles, executorStarts, 'canceled', 'INCONCLUSIVE',
           `the run was canceled during ${stage.role}`)
@@ -908,6 +944,71 @@ export class WorkflowRunner {
   }
 
   /** Record a blocker and finish. */
+  /**
+   * Publish the work through the capability, with the journal opened around it.
+   *
+   * No executor start is counted: the budget bounds how many times a model is
+   * asked to think, and this is a bounded command sequence that either did what
+   * it says or reports that it did not. The `capability-start` record is flushed
+   * before the capability may act, so a run that dies mid-push leaves a window a
+   * restart can see is open rather than a silence it has to guess about.
+   */
+  async #publish(
+    stage: StageSpec,
+    objective: WorkflowObjective,
+    signal: AbortSignal,
+    capability: DeliveryCapabilityPort,
+  ): Promise<{ readonly facts: StageFacts; readonly canceled: boolean }> {
+    const { journal } = this.#options
+    const clock = this.#options.now ?? Date.now
+    const name = 'github-delivery'
+    await journal.beginCapability(stage.stageId, name, true)
+    const started = clock()
+    const base = { stageId: stage.stageId, role: stage.role, executor: name, permissionMode: 'workspace-write' } as const
+    try {
+      const result = await capability.deliver({ stageId: stage.stageId, objective }, signal)
+      const durationMs = clock() - started
+      await journal.endCapability(
+        stage.stageId, name, result.delivered ? 'completed' : 'error', durationMs,
+        result.delivered ? undefined : 'delivery-refused',
+      )
+      return {
+        facts: {
+          ...base,
+          verdict: result.delivered ? 'PASS' : 'FAIL',
+          summary: result.summary,
+          findings: result.findings,
+          evidence: result.evidence,
+          durationMs,
+        },
+        canceled: false,
+      }
+    }
+    catch (error) {
+      const durationMs = clock() - started
+      const canceled = signal.aborted
+      await journal.endCapability(
+        stage.stageId, name, canceled ? 'aborted' : 'error', durationMs,
+        canceled ? 'canceled' : 'delivery-error',
+      )
+      return {
+        facts: {
+          ...base,
+          verdict: 'INCONCLUSIVE',
+          // The capability's own message is bounded by contract; nothing from a
+          // command's output or environment reaches it.
+          summary: canceled
+            ? 'delivery was canceled before it could publish'
+            : error instanceof Error ? error.message : 'delivery ended without saying why',
+          findings: [],
+          evidence: [],
+          durationMs,
+        },
+        canceled,
+      }
+    }
+  }
+
   async #blocked(
     objective: WorkflowObjective,
     stages: readonly StageFacts[],

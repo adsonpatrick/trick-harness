@@ -124,8 +124,12 @@ Use `composeHarnessRuntime(runtime, options)` instead to add providers to a runt
 
 The check is identity, not compatibility. Every rule the run would be held to — which executors it may reach, which integrations are enabled, what delivery is allowed to touch — comes from the composed profile, and an objective authored against a different one never agreed to any of them.
 
-## The deterministic capabilities are composed, not wired to the journal yet
+## Publishing is a capability, never a prompt
 
-`composeHarness` builds the GitHub delivery and Supabase preview capabilities from the profile's own ids and options, and Plurora's composition test drives a real preview run through them to prove no local, linked or shared-database path is reachable from the composed object.
+A run reaches delivery through `capabilities.delivery`, a port whose whole vocabulary is "publish this stage's work". Composition builds it from two halves: `integrations.github`, which is what publishes, and `workflow.describeDelivery`, which is what says what to publish — the branch, the write set, the commit message and the pull request body. Neither half is invented here. The objective names a requirement, not a branch, so a default would be this package deciding on a deployment's behalf what goes on a remote.
 
-What it does not yet do is hand those capabilities the journal's checkpoint observers. `onRecord` and `onMutation` exist on both capabilities and are covered by their own tests; connecting them to the workflow journal so a confirmed mutation is durable before the next one is attempted belongs to the workflow-authority work, not here. Until then a composed run records its stages and its executors, and the hosted mutations inside a stage are recorded only in the capability's returned result.
+A lifecycle that must publish and finds no capability is blocked. It is not rerouted to an executor with a writable tree and a shell: a model asked to push has authority over the remote that nothing bounds, and the bound is the reason the port exists. Publishing also spends no executor-start budget, because that budget counts how often a model is asked a question and a bounded command sequence is not one of those times.
+
+The capability is built once per run rather than once per composition, because the observer that writes each confirmed mutation down is the journal of the run that caused it. Every commit, push and pull request the delivery re-read from the world becomes a durable `harness/delivery` record before the next mutation is attempted, and a `harness/capability-start` record is flushed before the delivery may act at all — so a run that dies mid-push leaves a window a restart can see is open rather than a silence it has to guess about.
+
+The Supabase preview capability is composed and reachable, but is not yet wired to a workflow stage; that is the database-gate work in the same remediation.

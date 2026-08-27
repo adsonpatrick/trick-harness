@@ -6,7 +6,8 @@ import { planPullRequestStages } from '@trick-harness/engineering-workflow'
 import type { ExecutorProvider, ExecutorStartRequest } from '@trick-harness/executor'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
-import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import type { DeliveryRequest } from '@trick-harness/github-delivery'
+import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import {
   BundleCompositionError,
   CONTROL_SERVER_CAPABILITY,
@@ -100,6 +101,43 @@ function interpret(stage: { readonly role: StageResult['role'] }, executor: stri
 let composed: ComposedHarness[] = []
 
 /**
+ * A settled command over a fixed answer, shaped like the subprocess seam.
+ * @param stdout - what the command wrote.
+ * @returns the handle.
+ */
+function answered(stdout: string): SubprocessHandle {
+  const empty = { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) }
+  return {
+    pid: -1,
+    stdin: undefined,
+    stdout: undefined,
+    stderr: undefined,
+    collected: { stdout: { readFrom: () => ({ text: stdout, nextOffset: stdout.length, lossy: false }) }, stderr: empty },
+    done: Promise.resolve({ exitCode: 0, signal: null }),
+    terminate: () => {},
+    waitForExit: () => Promise.resolve(true),
+  }
+}
+
+/**
+ * Every command a successful delivery issues, answered without a remote.
+ *
+ * This is not a GitHub test — those live next to the capability. It is here so
+ * a composed run can reach the end of its lifecycle, which it cannot do without
+ * something to publish with.
+ * @param spec - the command the capability constructed.
+ * @returns the handle.
+ */
+function deliveringSpawn(spec: SubprocessSpawnSpec): SubprocessHandle {
+  const argv = spec.argv.join(' ')
+  if (argv.includes('--abbrev-ref')) return answered('feature')
+  if (argv.includes('--cached --name-only') || argv.includes('diff --cached')) return answered('src/thing.ts')
+  if (argv.includes('rev-parse')) return answered('4b825dc642cb6eb9a060e54bf8d69288fbee4904')
+  if (argv.startsWith('gh pr view')) return answered('{"number":7,"url":"https://example.invalid/pr/7","state":"OPEN","headRefName":"feature"}')
+  return answered('')
+}
+
+/**
  * Compose one Harness the tests will dispose.
  * @param options - the composition options.
  * @returns the composed Harness.
@@ -117,12 +155,28 @@ function compose(options: HarnessCompositionOptions): ComposedHarness {
  * @returns the options.
  */
 function baseOptions(profile: HarnessProfile, started: ExecutorStartRequest[]): HarnessCompositionOptions {
+  // A profile that enabled delivery gets something to deliver with, because the
+  // runtime blocks a lifecycle that must publish and cannot.
+  const delivering = profile.integrationPolicy.enabled.includes(GITHUB_DELIVERY_CAPABILITY)
   return {
     profile,
     registry: REGISTRY,
     session: Session.create(SessionId('compose')),
     flush: async () => true,
-    workflow: { interpret, task: stage => `${stage.role}: do the work`, plan: planPullRequestStages },
+    workflow: {
+      interpret,
+      task: stage => `${stage.role}: do the work`,
+      plan: planPullRequestStages,
+      describeDelivery: (input): Omit<DeliveryRequest, 'signal'> => ({
+        branch: 'feature',
+        files: ['src/thing.ts'],
+        message: `deliver ${input.stageId}`,
+        pullRequest: { title: 'the thing', body: 'what it does', base: 'main' },
+      }),
+    },
+    ...delivering
+      ? { integrations: { github: { cwd: '/repo', spawn: deliveringSpawn } } }
+      : {},
     providers: {
       extraProviders: [
         fakeProvider('builder', started),
@@ -190,14 +244,14 @@ describe('what the profile decides exists', () => {
     const started: ExecutorStartRequest[] = []
 
     expect(() => composeHarness({
-      ...baseOptions(profileEnabling([]), started),
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
       control: { host: '127.0.0.1', port: 0, token: 'a-token-long-enough' },
     })).toThrow(BundleCompositionError)
   })
 
   it('refuses a profile routing to an executor nobody registered', () => {
     const started: ExecutorStartRequest[] = []
-    const options = baseOptions(profileEnabling([]), started)
+    const options = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
 
     expect(() => composeHarness({
       ...options,
@@ -207,7 +261,7 @@ describe('what the profile decides exists', () => {
 
   it('resolves the routing policy from the profile and the deployment registry', () => {
     const started: ExecutorStartRequest[] = []
-    const harness = compose(baseOptions(profileEnabling([]), started))
+    const harness = compose(baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started))
 
     expect(harness.policy.policyVersion).toBe('plurora-test-v1.0.0')
     expect(harness.policy.registry).toEqual(REGISTRY)
@@ -217,8 +271,8 @@ describe('what the profile decides exists', () => {
 describe('the Claude overlay stays optional', () => {
   it('composes without it, and composes with it when a deployment supplies one', () => {
     const started: ExecutorStartRequest[] = []
-    const without = compose(baseOptions(profileEnabling([]), started))
-    const base = baseOptions(profileEnabling([]), started)
+    const without = compose(baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started))
+    const base = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
     const withOverlay = compose({
       ...base,
       providers: {
@@ -259,7 +313,7 @@ describe('a workflow through the real control-server entry path', () => {
   it('runs, reports a bounded status and settles on disposal', async () => {
     const started: ExecutorStartRequest[] = []
     const harness = compose({
-      ...baseOptions(profileEnabling([CONTROL_SERVER_CAPABILITY]), started),
+      ...baseOptions(profileEnabling([CONTROL_SERVER_CAPABILITY, GITHUB_DELIVERY_CAPABILITY]), started),
       control: { host: '127.0.0.1' },
     })
     const server = harness.server
@@ -284,15 +338,16 @@ describe('a workflow through the real control-server entry path', () => {
     expect(status.stages.map(stage => stage.role)).toEqual([
       'implement', 'verify', 'delivery', 'review', 'verify',
     ])
+    // Four starts for five stages: delivery is the one nothing was asked about.
     expect(started.map(request => request.route.model)).toEqual([
-      'mimo-v2.5', 'deepseek-v4-flash', 'mimo-v2.5', 'deepseek-v4-flash', 'deepseek-v4-flash',
+      'mimo-v2.5', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash',
     ])
   })
 
   it('routes around a degraded executor through the profile fallback table', async () => {
     const started: ExecutorStartRequest[] = []
     const harness = compose({
-      ...baseOptions(profileEnabling([]), started),
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
       degradedExecutors: ['builder'],
     })
 
@@ -305,7 +360,7 @@ describe('a workflow through the real control-server entry path', () => {
 
   it('cancels the run when the caller aborts the signal it passed in', async () => {
     const started: ExecutorStartRequest[] = []
-    const harness = compose(baseOptions(profileEnabling([]), started))
+    const harness = compose(baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started))
     const controller = new AbortController()
 
     const running = harness.run(OBJECTIVE, controller.signal)
@@ -318,7 +373,7 @@ describe('a workflow through the real control-server entry path', () => {
   it('answers a status for a workflow it is not running out of the journal', async () => {
     const started: ExecutorStartRequest[] = []
     const harness = compose({
-      ...baseOptions(profileEnabling([CONTROL_SERVER_CAPABILITY]), started),
+      ...baseOptions(profileEnabling([CONTROL_SERVER_CAPABILITY, GITHUB_DELIVERY_CAPABILITY]), started),
       control: { port: 0, token: 'a-control-token-long-enough' },
     })
     const server = harness.server
@@ -340,10 +395,14 @@ describe('a workflow through the real control-server entry path', () => {
 
   it('runs the default working-tree plan when the deployment names none', async () => {
     const started: ExecutorStartRequest[] = []
-    const base = baseOptions(profileEnabling([]), started)
+    const base = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
     const harness = compose({
       ...base,
-      workflow: { interpret: base.workflow.interpret, task: base.workflow.task },
+      workflow: {
+        interpret: base.workflow.interpret,
+        task: base.workflow.task,
+        ...base.workflow.describeDelivery === undefined ? {} : { describeDelivery: base.workflow.describeDelivery },
+      },
     })
 
     const outcome = await harness.run(OBJECTIVE)
@@ -355,7 +414,7 @@ describe('a workflow through the real control-server entry path', () => {
 
   it('hands the deployment its own diagnosis and repair readers to the runner', async () => {
     const started: ExecutorStartRequest[] = []
-    const base = baseOptions(profileEnabling([]), started)
+    const base = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
     const seen: string[] = []
     const harness = compose({
       ...base,
@@ -381,7 +440,7 @@ describe('a workflow through the real control-server entry path', () => {
 
   it('disposes a run that is still in flight', async () => {
     const started: ExecutorStartRequest[] = []
-    const harness = composeHarness(baseOptions(profileEnabling([]), started))
+    const harness = composeHarness(baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started))
 
     const running = harness.run(OBJECTIVE)
     await harness.dispose()
@@ -392,7 +451,7 @@ describe('a workflow through the real control-server entry path', () => {
 
   it('reads a finished workflow back out of the durable journal', async () => {
     const started: ExecutorStartRequest[] = []
-    const harness = compose(baseOptions(profileEnabling([]), started))
+    const harness = compose(baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started))
 
     const finished = await harness.run(OBJECTIVE)
 
@@ -405,7 +464,7 @@ describe('a workflow through the real control-server entry path', () => {
 describe('a human route override in a composed runtime', () => {
   it('reaches the run without touching the profile or the providers', async () => {
     const started: ExecutorStartRequest[] = []
-    const profile = profileEnabling([])
+    const profile = profileEnabling([GITHUB_DELIVERY_CAPABILITY])
     const harness = compose(baseOptions(profile, started))
     const tableBefore = JSON.stringify(harness.policy)
 
@@ -420,12 +479,12 @@ describe('a human route override in a composed runtime', () => {
     // One run, one decision. The table the next objective routes on is the one
     // the profile shipped, and no provider was reconfigured to serve it.
     expect(JSON.stringify(harness.policy)).toBe(tableBefore)
-    expect(JSON.stringify(profile.routingPolicy)).toBe(JSON.stringify(profileEnabling([]).routingPolicy))
+    expect(JSON.stringify(profile.routingPolicy)).toBe(JSON.stringify(profileEnabling([GITHUB_DELIVERY_CAPABILITY]).routingPolicy))
   })
 
   it('routes on the table when the caller sends none', async () => {
     const started: ExecutorStartRequest[] = []
-    const harness = compose(baseOptions(profileEnabling([]), started))
+    const harness = compose(baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started))
 
     const outcome = await harness.run(OBJECTIVE)
 
@@ -439,7 +498,7 @@ describe('what identifies one execution', () => {
     const session = Session.create(SessionId('identity'))
     const ids = ['wf-101', 'wf-102']
     const harness = compose({
-      ...baseOptions(profileEnabling([]), started),
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
       session,
       workflowIdFactory: () => ids.shift() ?? 'exhausted',
     })
@@ -467,7 +526,7 @@ describe('what identifies one execution', () => {
     const started: ExecutorStartRequest[] = []
     const session = Session.create(SessionId('identity-repeat'))
     const harness = compose({
-      ...baseOptions(profileEnabling([]), started),
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
       session,
       workflowIdFactory: () => 'wf-same',
     })
@@ -487,7 +546,7 @@ describe('what survives a composed run losing its process', () => {
     const session = Session.create(SessionId('composed-restart'))
     const ids = ['wf-201', 'wf-202']
     const harness = compose({
-      ...baseOptions(profileEnabling([]), started),
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
       session,
       workflowIdFactory: () => ids.shift() ?? 'exhausted',
     })
@@ -513,7 +572,7 @@ describe('what survives a composed run losing its process', () => {
     const started: ExecutorStartRequest[] = []
     const session = Session.create(SessionId('composed-barrier'))
     const harness = compose({
-      ...baseOptions(profileEnabling([]), started),
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
       session,
       // The first checkpoint this run asks for is the one in front of its first
       // dispatch. Refusing it is refusing to let anything touch the tree.
@@ -556,7 +615,7 @@ describe('what survives a composed run losing its process', () => {
 describe('an objective written for another deployment', () => {
   it('starts nothing at all when it names a profile this Harness was not composed from', async () => {
     const started: ExecutorStartRequest[] = []
-    const options = baseOptions(profileEnabling([]), started)
+    const options = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
     const harness = compose(options)
 
     await expect(harness.run({ ...OBJECTIVE, profileId: 'other' })).rejects.toThrow(BundleCompositionError)
@@ -573,7 +632,7 @@ describe('an objective written for another deployment', () => {
     const ids = ['wf-refused', 'wf-accepted']
     let next = 0
     const harness = compose({
-      ...baseOptions(profileEnabling([]), started),
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
       workflowIdFactory: () => ids[next++] ?? 'wf-overflow',
     })
 
@@ -588,11 +647,47 @@ describe('an objective written for another deployment', () => {
 
   it('runs normally when the objective names the composed profile', async () => {
     const started: ExecutorStartRequest[] = []
-    const harness = compose(baseOptions(profileEnabling([]), started))
+    const harness = compose(baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started))
 
     const outcome = await harness.run({ ...OBJECTIVE, profileId: 'plurora-test' })
 
     expect(outcome.verdict).toBe('PASS')
     expect(started.length).toBeGreaterThan(0)
+  })
+})
+
+describe('publishing from a composed deployment', () => {
+  it('writes every confirmed mutation into the journal of the run that caused it', async () => {
+    const started: ExecutorStartRequest[] = []
+    const options = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
+    const harness = compose(options)
+
+    const outcome = await harness.run(OBJECTIVE)
+    const projection = projectWorkflow(options.session.events, outcome.workflowId)
+
+    expect(outcome.verdict).toBe('PASS')
+    expect(projection.deliveries.map(record => record.action)).toEqual(['commit', 'push', 'pr-update'])
+    // The branch is the one the deployment described, not one the runtime chose.
+    for (const record of projection.deliveries) expect(record.branch).toBe('feature')
+    // No delivery stage was ever put to an executor.
+    for (const request of started) expect(request.task).not.toContain('delivery')
+  })
+
+  it('cannot publish when the deployment says nothing about what to publish', async () => {
+    const started: ExecutorStartRequest[] = []
+    const base = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
+    const harness = compose({
+      ...base,
+      workflow: {
+        interpret: base.workflow.interpret,
+        task: base.workflow.task,
+        ...base.workflow.plan === undefined ? {} : { plan: base.workflow.plan },
+      },
+    })
+
+    const outcome = await harness.run(OBJECTIVE)
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no delivery capability')
   })
 })

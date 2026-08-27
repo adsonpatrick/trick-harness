@@ -224,7 +224,17 @@ describe('Plurora policy driving a live run', () => {
           evidence: [],
         }),
         task: stage => `${stage.role}: do the work`,
+        describeDelivery: input => ({
+          branch: 'feature',
+          files: ['src/thing.ts'],
+          message: `deliver ${input.stageId}`,
+          pullRequest: { title: 'the thing', body: 'what it does', base: 'main' },
+        }),
       },
+      // A lifecycle that publishes needs something to publish with, and this
+      // deployment's profile enables delivery. The commands are answered here
+      // rather than sent anywhere: what this file tests is routing, not GitHub.
+      integrations: { github: { cwd: '/repo', spawn: deliveringSpawn } },
       providers: {
         extraProviders: [
           scriptedProvider('opencode', role => answer('opencode', role), seen),
@@ -235,6 +245,39 @@ describe('Plurora policy driving a live run', () => {
     })
     harnesses.push(harness)
     return { harness, session }
+  }
+
+  /**
+   * A settled command over a fixed answer, shaped like the subprocess seam.
+   * @param stdout - what the command wrote.
+   * @returns the handle.
+   */
+  function answered(stdout: string): SubprocessHandle {
+    const empty = { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) }
+    return {
+      pid: -1,
+      stdin: undefined,
+      stdout: undefined,
+      stderr: undefined,
+      collected: { stdout: { readFrom: () => ({ text: stdout, nextOffset: stdout.length, lossy: false }) }, stderr: empty },
+      done: Promise.resolve({ exitCode: 0, signal: null }),
+      terminate: () => {},
+      waitForExit: () => Promise.resolve(true),
+    }
+  }
+
+  /**
+   * Every command a successful delivery issues, answered without a remote.
+   * @param spec - the command the capability constructed.
+   * @returns the handle.
+   */
+  function deliveringSpawn(spec: SubprocessSpawnSpec): SubprocessHandle {
+    const argv = spec.argv.join(' ')
+    if (argv.includes('--abbrev-ref')) return answered('feature')
+    if (argv.includes('diff --cached')) return answered('src/thing.ts')
+    if (argv.includes('rev-parse')) return answered('4b825dc642cb6eb9a060e54bf8d69288fbee4904')
+    if (argv.startsWith('gh pr view')) return answered('{"number":7,"url":"https://example.invalid/pr/7","state":"OPEN","headRefName":"feature"}')
+    return answered('')
   }
 
   const passes = (executor: string): ExecutorResult => ({ status: 'completed', output: `${executor} ran` })

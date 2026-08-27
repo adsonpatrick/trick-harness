@@ -12,7 +12,7 @@ import type { HarnessProfile } from '@trick-harness/profile'
 import type { RoutingPolicy } from '@trick-harness/routing'
 import type { DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import { WorkflowRunner, assessPullRequest, planPullRequestStages } from '../src/index.ts'
-import type { PullRequestOutcome, StageSpec } from '../src/index.ts'
+import type { DeliveryCapabilityPort, PullRequestOutcome, StageSpec } from '../src/index.ts'
 
 /**
  * The Plurora shape of the policy: heavy implementation and repair go to the
@@ -217,11 +217,23 @@ async function runLifecycle(objective: WorkflowObjective = OBJECTIVE): Promise<P
   return assessPullRequest(outcome)
 }
 
+/** A delivery capability that publishes without touching a remote. */
+function deliveryStub(stageIds?: string[]): DeliveryCapabilityPort {
+  return {
+    deliver: async (input) => {
+      stageIds?.push(input.stageId)
+      return { delivered: true, summary: 'the branch was pushed and its pull request updated', evidence: [], findings: [] }
+    },
+  }
+}
+
+const DELIVERY = deliveryStub()
+
 beforeEach(() => {
   session = Session.create(SessionId('s'))
   executors = createExecutorRuntime()
   journal = new WorkflowJournal(session, 'wf-1', async () => true)
-  runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+  runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   started = []
   scripted = new Map()
   for (const name of ['builder', 'reviewer', 'spare-builder', 'spare-reviewer']) {
@@ -292,6 +304,7 @@ describe('two confirmed bugs and one improvement', () => {
     scripted.set('review-1', [bug('bug-a')])
     runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['builder'],
+      capabilities: { delivery: DELIVERY },
     })
 
     await runLifecycle()

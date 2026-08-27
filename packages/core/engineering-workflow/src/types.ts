@@ -130,3 +130,73 @@ export interface WorkflowRunRequest {
    */
   readonly repairEvidence?: (stage: StageSpec, executor: string, result: ExecutorResult) => RepairEvidence
 }
+
+/**
+ * What the runtime tells a delivery capability about the stage asking for it.
+ *
+ * Deliberately thin. The runtime does not know which files changed or what the
+ * pull request should say — those are the caller's, the same way task text is —
+ * so it names the stage and the objective and nothing more. Whatever turns that
+ * into a branch, a write set and a pull request lives on the composition side,
+ * where the project's own answer to that question already is.
+ */
+export interface WorkflowDeliveryInput {
+  readonly stageId: string
+  readonly objective: WorkflowObjective
+}
+
+/** What a delivery capability reports back, in the vocabulary a stage records. */
+export interface WorkflowDeliveryResult {
+  /** True when the commit, the push and the pull request all landed. */
+  readonly delivered: boolean
+  /** Bounded human-readable outcome, naming no credential or command output. */
+  readonly summary: string
+  /** Anything the capability wants a later stage to be able to follow. */
+  readonly evidence: readonly EvidenceRef[]
+  /** Findings the failure raised, when it failed. */
+  readonly findings: readonly Finding[]
+}
+
+/**
+ * Publishing work is a deterministic act, so it is a port rather than a prompt.
+ *
+ * An LLM executor handed a shell to run `git push` with is an executor with
+ * unbounded authority over the remote, and the bound is the whole point: the
+ * capability behind this port may push the current branch and open or update
+ * its pull request, and has no way to express force-pushing, rewriting history
+ * or merging.
+ */
+export interface DeliveryCapabilityPort {
+  deliver(input: WorkflowDeliveryInput, signal: AbortSignal): Promise<WorkflowDeliveryResult>
+}
+
+/** What the runtime tells a database preview capability about the stage. */
+export interface WorkflowDatabasePreviewInput {
+  readonly stageId: string
+  readonly objective: WorkflowObjective
+}
+
+/** What a database preview capability reports back. */
+export interface WorkflowDatabasePreviewResult {
+  /** `PASSED`, `FAILED` on a branch that really existed, or `BLOCKED`. */
+  readonly status: 'PASSED' | 'FAILED' | 'BLOCKED'
+  readonly summary: string
+  readonly evidence: readonly EvidenceRef[]
+  readonly findings: readonly Finding[]
+}
+
+/** Validating migrations is deterministic too, and bounded the same way. */
+export interface DatabasePreviewCapabilityPort {
+  verify(input: WorkflowDatabasePreviewInput, signal: AbortSignal): Promise<WorkflowDatabasePreviewResult>
+}
+
+/**
+ * The deterministic capabilities a run may reach, if a deployment supplied them.
+ *
+ * Absent is not the same as unnecessary. A lifecycle that needs one and does not
+ * have it is BLOCKED, never rerouted to an executor that could approximate it.
+ */
+export interface WorkflowCapabilities {
+  readonly delivery?: DeliveryCapabilityPort
+  readonly databasePreview?: DatabasePreviewCapabilityPort
+}
