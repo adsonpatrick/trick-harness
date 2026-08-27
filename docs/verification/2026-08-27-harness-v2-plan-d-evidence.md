@@ -46,15 +46,22 @@ The twelve passing hygiene gates ran on this tree. No credential, connection str
 
 A focused re-run of the criterion-bearing suites — `tests/trick-harness`, `packages/core/routing`, `packages/core/engineering-workflow`, `packages/core/executor`, `packages/core/journal` — passes 12 files and 270 tests.
 
-### The whole-repository suites fail, and the failures are upstream
+### The whole-repository suites fail, and the failing set is unstable in both trees
 
-`pnpm run test` (the entire monorepo, not just the fork's scope) fails. Two runs were made; they disagree on the count, which is itself worth stating: the first reported 16 failed files and 39 failed tests, the second 11 failed files. The second run used the JSON reporter and so can name them:
+`pnpm run test` (the entire monorepo, not just the fork's scope) fails, and it does not fail the same way twice. Four whole-repository runs were made, three on the fork's frozen HEAD and one on the upstream baseline `b150a551b8` checked out in a separate worktree and installed from its own lockfile. They are reported as measured:
 
-`packages/client/ui-primitives/tests/code-block.client.spec.tsx`, `packages/client/ui-trajectory/tests/client-bundle.client.spec.ts`, `packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts`, `packages/session/session-persistence-sqlite/tests/differential.spec.ts`, `packages/shell/pwsh-sandbox/tests/sandbox.spec.ts`, `packages/shell/tool-pwsh-persistent/tests/loader-composition.spec.ts`, `packages/subagent/subagent-claude-code/tests/real-product.spec.ts`, `packages/test-support/acp-snapshot/tests/harness.spec.ts`, `scripts/change-scope.spec.ts`, `scripts/oxlint-contract.spec.ts`, `scripts/test-invariants.spec.ts`.
+| Run | Tree | Files run | Failed files | Failed tests |
+| --- | --- | --- | --- | --- |
+| 1 | fork HEAD | not captured | 16 | 39 |
+| 2 | fork HEAD | 865 | 11 | not captured |
+| 3 | fork HEAD | 865 | 7 | 29 |
+| baseline | upstream `b150a551b8` | 836 | 9 | 29 |
 
-The attribution is conclusive and was measured, not assumed: `git log b150a551b8..HEAD` returns **zero** commits for every one of those eleven paths. No Harness V2 commit has touched any of them. They are upstream areas — client UI, the Windows ACL sandbox, SQLite session persistence, the PowerShell shell, the Claude Code subagent, ACP test support, and repository scripts — failing at the baseline this fork inherited.
+The baseline run is what makes the attribution an observation rather than an inference, and it makes a narrower claim than this document previously made. Six files fail in **every** run that named its failures, the upstream baseline included: `packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts`, `packages/shell/pwsh-sandbox/tests/sandbox.spec.ts`, `packages/subagent/subagent-claude-code/tests/real-product.spec.ts`, `packages/test-support/acp-snapshot/tests/harness.spec.ts`, `scripts/oxlint-contract.spec.ts` and `scripts/test-invariants.spec.ts`. Those six are inherited: they fail on upstream's own commit, with upstream's own dependency tree, before any fork code exists to blame.
 
-That the count differs between runs means at least five of them are order- or load-sensitive rather than deterministic. That instability is also upstream's, and it is recorded rather than chased.
+Six further files appear in some runs and not others — `packages/client/ui-primitives/tests/code-block.client.spec.tsx`, `packages/client/ui-trajectory/tests/client-bundle.client.spec.ts`, `packages/sdk/server/tests/server.spec.ts`, `packages/session/session-persistence-sqlite/tests/differential.spec.ts`, `packages/shell/tool-pwsh-persistent/tests/loader-composition.spec.ts` and `scripts/change-scope.spec.ts`. Three of them fail on the baseline and pass on a HEAD run; two fail on a HEAD run and pass on the baseline; one has only ever been seen failing once. Run in isolation at HEAD, `client-bundle.client.spec.ts` and `differential.spec.ts` both pass. The instability is therefore present on the upstream tree as well as on the fork's, and it is not a property of any particular file's contents.
+
+What can be said about the fork's part in it is bounded, and the bound is stated rather than resolved. `git log b150a551b8..HEAD` returns zero commits for all twelve paths, so no fork commit edited the failing code or its tests. But the fork did change shared configuration — `vitest.config.ts`, `package.json`, `pnpm-lock.yaml` and `tsconfig.base.json` — and the `vitest.config.ts` change adds three include patterns that put the fork's own 29 extra test files into the same whole-repository run. A larger run under the same worker concurrency is a plausible reason for the flaky set to shift, and this document does not claim to have excluded it. What it claims is the two things measured: the six stable failures are upstream's, and the fork edited none of the twelve files.
 
 `packages/subagent/subagent-claude-code/tests/real-product.spec.ts` deserves a line of its own: it fails because the Claude Code product is not installed. Under the 2026-08-27 amendment Claude Code is not an executor of this harness, so this failure is consistent with the agreed scope rather than a gap in it.
 
@@ -216,7 +223,7 @@ The parts of Task 10 that live in this repository were carried out; the parts th
 
 **Not run here.** The `neuro-via` bridge, permission floor, database scripts, skills, CI and Security/Git-flow review cannot be performed, because the repository is absent. The standard Codex security audit over the bridge and database surfaces is likewise scoped to code that does not exist in this environment. The Harness-side security surfaces were verified directly under Tasks 3, 4 and 8 instead — keyless provider paths, unmodified global credential stores, an empty child environment, denied Supabase command paths, and a control server whose only unauthenticated route is `/health`.
 
-**Triage.** Two confirmed defects, both eligible for repair, both repaired in a separate pass and re-verified. No product or design decision was auto-fixed. The upstream `rescope-vendor:check` failure and the eleven upstream test files are reported and not repaired, because they are outside the fork's scope and Plan D does not authorise editing them.
+**Triage.** Two confirmed defects, both eligible for repair, both repaired in a separate pass and re-verified. No product or design decision was auto-fixed. The upstream `rescope-vendor:check` failure and the whole-repository test failures are reported and not repaired, because the fork edited none of those files and Plan D does not authorise editing them.
 
 ## Tasks 11 and 12 — not reachable in this environment
 
