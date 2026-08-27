@@ -332,6 +332,68 @@ describe('what a restart may say', () => {
     expect(status.objectiveId).toBe('obj-earlier')
     expect(seen).toEqual([])
   })
+
+  it('reads a canceled run`s world check out of the durable log, not out of nothing', async () => {
+    const { base, auth } = await serve({
+      start: starter(['wf-run-1'], async (_record, canceled) => {
+        const reason = await canceled
+        throw new Error(reason)
+      }),
+      restart: async workflowId => ({
+        workflowId,
+        objectiveId: 'obj-1',
+        state: 'interrupted',
+        verdict: 'INCONCLUSIVE',
+        openStages: [],
+        // A delivery was in flight when the cancel landed.
+        requiresWorldVerification: true,
+        summary: 'capabilities still open: deliver-1:github-delivery',
+      }),
+    })
+
+    const created = await post(base, auth)
+    const canceled = await fetch(`${base}/workflows/${created.status.workflowId}/cancel`, {
+      method: 'POST', headers: auth,
+    })
+    const status = (await canceled.json()) as ControlWorkflowStatus
+
+    // A cancel is not proof that nothing happened. Reporting `false` here would
+    // tell an operator their aborted delivery left no trace.
+    expect(status.state).toBe('canceled')
+    expect(status.requiresWorldVerification).toBe(true)
+  })
+
+  it('carries no event payload into the status it hands back', async () => {
+    const { base, auth } = await serve({
+      start: starter(['wf-run-1']),
+      restart: async workflowId => ({
+        workflowId,
+        objectiveId: 'obj-earlier',
+        state: 'interrupted',
+        verdict: 'INCONCLUSIVE',
+        openStages: ['deliver-1'],
+        requiresWorldVerification: true,
+        summary: 'workflow was interrupted; verify the world before retrying',
+      }),
+    })
+
+    const read = await fetch(`${base}/workflows/wf-earlier`, { headers: auth })
+    const status = (await read.json()) as ControlWorkflowStatus
+
+    // The bounded schema and nothing else: no route payloads, no findings, no
+    // capability records, nothing an event carried.
+    expect(Object.keys(status).sort()).toStrictEqual([
+      'executorStarts',
+      'objectiveId',
+      'repairCycles',
+      'requiresWorldVerification',
+      'stages',
+      'state',
+      'summary',
+      'verdict',
+      'workflowId',
+    ])
+  })
 })
 
 describe('what disposal owes', () => {

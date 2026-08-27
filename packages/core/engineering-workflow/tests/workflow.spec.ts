@@ -609,6 +609,43 @@ describe('what a restart may conclude', () => {
     expect(assessment.requiresWorldVerification).toBe(true)
   })
 
+  it('demands a world check when even a read-only stage was in flight', () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    journal.executorStart({
+      stageId: 'review-1',
+      role: 'review',
+      decision: {
+        executor: 'reviewer',
+        semanticModelTier: 'reasoning',
+        resolvedModel: 'mimo-v2.5',
+        permissionMode: 'read-only',
+        reasonCodes: [],
+        policyVersion: 'test-v1.0.0',
+      },
+    })
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    // Deliberately conservative. The log records the permission the route
+    // carried, not what the process on the other end actually did with it, and
+    // a restart that trusts the label is trusting the wrong record.
+    expect(assessment.requiresWorldVerification).toBe(true)
+  })
+
+  it('demands a world check when a preview-branch capability was in flight', async () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    await journal.beginCapability('verify-1', 'supabase-preview', true)
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    expect(assessment.requiresWorldVerification).toBe(true)
+    expect(assessment.summary).toContain('verify-1:supabase-preview')
+  })
+
   it('demands a world check when a capability was in flight', async () => {
     const session = Session.create(SessionId('s'))
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)

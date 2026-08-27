@@ -294,13 +294,22 @@ export class HarnessControlServer {
     }
     const settled = started.outcome
       .then(outcome => statusOfOutcome(outcome))
-      .catch((error: unknown) => Object.freeze({
-        ...runningStatus(workflowId, objective.id),
-        state: this.#runs.get(workflowId)?.canceled === true ? ('canceled' as const) : ('failed' as const),
-        summary: this.#runs.get(workflowId)?.canceled === true
-          ? 'the workflow was canceled'
-          : `the workflow ended without a result: ${bounded(error instanceof Error ? error.message : 'unknown failure')}`,
-      }))
+      .catch(async (error: unknown) => {
+        const canceled = this.#runs.get(workflowId)?.canceled === true
+        // A run that threw or was cancelled wrote no terminal end, so what it
+        // may have left behind is a question only the durable log can answer.
+        // Reading it back here rather than assuming `false` is what keeps a
+        // cancelled delivery from being reported as having touched nothing.
+        const assessment = await this.#options.restart?.(workflowId).catch(() => undefined)
+        return Object.freeze({
+          ...runningStatus(workflowId, objective.id),
+          state: canceled ? ('canceled' as const) : ('failed' as const),
+          summary: canceled
+            ? 'the workflow was canceled'
+            : `the workflow ended without a result: ${bounded(error instanceof Error ? error.message : 'unknown failure')}`,
+          requiresWorldVerification: assessment?.requiresWorldVerification ?? false,
+        })
+      })
       .then((status) => {
         const stored = this.#runs.get(workflowId)
         if (stored !== undefined) stored.status = status
