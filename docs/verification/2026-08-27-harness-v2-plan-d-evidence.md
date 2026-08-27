@@ -82,11 +82,9 @@ This matters to Plan D specifically. Task 12's activation gate requires that the
 
 The cause is an identity confusion the control-server contract explicitly warns about. `statusThroughHttp` posts an objective and then reads back `GET /workflows/${objective.id}`. But the workflow id is minted by the Harness, not taken from the objective: `packages/composition/runtime/src/harness.ts:373` mints it with `options.workflowIdFactory ?? randomUUID`, and the snapshot supplies no factory. The contract in `packages/core/control-server/src/types.ts` states the rule outright — *"The objective's own id is not that identity — the same objective may be run again — so nothing here derives one from the payload."*
 
-So the read returns 404 with an error body, and `degradedStatus.stages` is `undefined`. The recorded expectation at `scripts/snapshots/harness-control-transcript/transcript.expected.json` still shows `"workflowId": "wf-transcript-1"` equal to the objective id, which means the artefact was recorded against an earlier composition and was never re-recorded when id minting changed.
+So the read returns 404 with an error body, and `degradedStatus.stages` is `undefined`. The recorded expectation at `scripts/snapshots/harness-control-transcript/transcript.expected.json` shows a well-formed status whose `workflowId` equals the objective id, so the read did once resolve: the artefact was recorded before minting moved to `randomUUID` and was never re-recorded afterwards.
 
-The failure is worse than a broken test. The first call in the same script, `statusThroughHttp(certified, OBJECTIVE)`, does not call `.map` on its result, so it never crashed — it serialised the 404 error body straight into the transcript's `status` field. The snapshot that is supposed to demonstrate what a bridge renders has been demonstrating a 404.
-
-The fix is to read back the `workflowId` the `202` response already carries instead of the objective id. That is what the contract says a caller must do, and the response body is already in hand at the call site.
+The failure is worse than a broken test, and repairing it showed why. Once the read is addressed correctly the transcript changes substance, not just identity: the recorded artefact claimed eight passing stages ending in a published branch, and the truth is that this composition has no delivery capability and the lifecycle blocks at `delivery-1`. The stale snapshot had been asserting that a run publishes work that no capability port was ever composed to publish.
 
 ## Task 3 — OpenCode cockpit, bridge, and worker
 
@@ -202,7 +200,7 @@ Verdict vocabulary: **PASS** direct evidence exists; **PARTIAL** partly evidence
 | --- | --- | --- | --- |
 | 1 | Fork runs without hosted DSH service | Whole suite, four gates and every canary ran locally against no hosted service | PASS |
 | 2 | Upstream licence/provenance preserved | Fork parent and `LICENSE` blob identity read from the GitHub API | PASS |
-| 3 | OpenCode TUI starts/observes workflow through stable bridge | Control server exercised over real HTTP; cockpit side needs `neuro-via` | PARTIAL — Harness side only |
+| 3 | OpenCode TUI starts/observes workflow through stable bridge | Control server exercised over real HTTP, and the transcript snapshot repaired to read the minted id; cockpit side needs `neuro-via` | PARTIAL — Harness side only |
 | 4 | OpenCode executes as worker without screen-driving the TUI | Real `@opencode-ai/sdk` server and session; no pty or terminal anywhere in the provider | PASS |
 | 5 | Router-selected OpenCode model does not mutate global/cockpit defaults | Global config and auth hashes and mtimes identical across a real run | PASS |
 | 6 | Codex executes on native ChatGPT-plan auth without an API key | Real `app-server` run completed; `auth_mode = chatgpt`, no key in the child environment | PASS |
@@ -243,3 +241,35 @@ Two criteria, 26 and R5, live in `adsonpatrick/neuro-via`, which Plan C has not 
 Two criteria, 23 and 27, plus the Supabase half of 30, are entitlement-gated by the scope amendment and are reported NOT_APPLICABLE rather than skipped in silence. They become required the moment the organisation holds the Pro plan, with no other change to this plan.
 
 Two defects found by Plan D, D2-01 and D2-02, are recorded above and repaired in the consolidation section below rather than in the verification pass that found them.
+
+## Consolidation — the two findings, repaired and re-verified
+
+Plan D's verification pass is read-only, so both defects were recorded first and repaired afterwards, in this section, with the suites re-run against the repairs.
+
+### D2-02 repaired — the snapshot now names the run the Harness minted
+
+`statusThroughHttp` now reads back the `workflowId` carried by the `202` response instead of the objective id, which is what the control-server contract says a caller must do, and it polls until the run leaves `running` rather than reading once. `harnessWith` supplies a deterministic `workflowIdFactory`, the supported way to make an execution id readable without pretending the objective supplies one.
+
+The re-recorded transcript is materially different from the stale one, and the difference is the finding's real weight. All three surfaces now settle at `BLOCKED` with the summary *"stage delivery-1 publishes the work, and this deployment composed no delivery capability to do it"*. That is correct: publishing is a capability port and never a stage handed to an executor, and this keyless composition has no such port. The snapshot's own documentation was updated to say so, because an artefact that showed a branch published here would be showing a model improvising a mutation nobody granted.
+
+The consequence for coverage is stated rather than hidden. The transcript no longer exercises the review-to-repair loop, because the lifecycle now stops before reaching it. That loop remains covered deterministically by `packages/core/engineering-workflow`, which is green. Restoring it in this artefact would require a seam for composing a delivery capability from a double, which composition does not offer today and which is a design change rather than a verification one; it is not made here.
+
+`vitest run --config vitest.snapshot.config.ts scripts/harness-control-transcript.snapshot.ts` passes.
+
+### D2-01 repaired — the exclusion list now refuses
+
+`trustedComposition.excludedPluginIds` is now enforced at the one boundary where a plugin id can enter a composed Harness. `HarnessCompositionOptions` gained `pluginIds`, the ids a deployment intends to mount, and `assertAuthorised` throws `BundleCompositionError` when any of them appears in the profile's exclusion list. A deployment that mounts nothing passes nothing and the check is a no-op, which is every composition in this repository today.
+
+The point of the change is that the property is now provable by refusal rather than by reading a list. `packages/composition/runtime/tests/harness.spec.ts` asserts both halves: composing with `self-modifying-workflow-plugin` against a profile that excludes it throws, and composing with an unexcluded plugin id does not. That is what Task 12's activation gate needs in order to be satisfiable by a demonstration.
+
+### Gates re-run after both repairs
+
+| Gate | Result |
+| --- | --- |
+| `pnpm run constraints` | pass — generic packages carry no project-policy dependency |
+| `pnpm run typecheck` | pass |
+| `pnpm run lint` | pass |
+| `pnpm run test:trick` | pass — 85 files, 1952 tests |
+| the control-transcript snapshot | pass |
+
+The test count rose by one, from 1951 to 1952, which is the exclusion-refusal test. Nothing else in the fork's scope changed verdict.

@@ -2,9 +2,9 @@
   "status": {
     "workflowId": "wf-transcript-1",
     "objectiveId": "wf-transcript-1",
-    "state": "completed",
-    "verdict": "PASS",
-    "summary": "all 8 stages passed",
+    "state": "blocked",
+    "verdict": "BLOCKED",
+    "summary": "stage delivery-1 publishes the work, and this deployment composed no delivery capability to do it",
     "stages": [
       {
         "stageId": "implement-1",
@@ -19,61 +19,19 @@
         "executor": "reviewer",
         "verdict": "PASS",
         "summary": "verify found nothing outstanding"
-      },
-      {
-        "stageId": "delivery-1",
-        "role": "delivery",
-        "executor": "builder",
-        "verdict": "PASS",
-        "summary": "delivery found nothing outstanding"
-      },
-      {
-        "stageId": "review-1",
-        "role": "review",
-        "executor": "reviewer",
-        "verdict": "FAIL",
-        "summary": "the branch is published but one test asserts a stale constant"
-      },
-      {
-        "stageId": "repair-1",
-        "role": "repair",
-        "executor": "builder",
-        "verdict": "PASS",
-        "summary": "repair found nothing outstanding"
-      },
-      {
-        "stageId": "delivery-2",
-        "role": "delivery",
-        "executor": "builder",
-        "verdict": "PASS",
-        "summary": "delivery found nothing outstanding"
-      },
-      {
-        "stageId": "review-2",
-        "role": "review",
-        "executor": "reviewer",
-        "verdict": "PASS",
-        "summary": "review found nothing outstanding"
-      },
-      {
-        "stageId": "verify-final",
-        "role": "verify",
-        "executor": "reviewer",
-        "verdict": "PASS",
-        "summary": "verify found nothing outstanding"
       }
     ],
-    "repairCycles": 1,
-    "executorStarts": 8,
+    "repairCycles": 0,
+    "executorStarts": 2,
     "requiresWorldVerification": false
   },
   "pullRequest": {
     "outcome": {
       "workflowId": "wf-transcript-2",
       "objectiveId": "wf-transcript-2",
-      "state": "completed",
-      "verdict": "PASS",
-      "summary": "all 8 stages passed",
+      "state": "blocked",
+      "verdict": "BLOCKED",
+      "summary": "stage delivery-1 publishes the work, and this deployment composed no delivery capability to do it",
       "stages": [
         {
           "stageId": "implement-1",
@@ -94,97 +52,22 @@
           "summary": "verify found nothing outstanding",
           "findings": [],
           "evidence": []
-        },
-        {
-          "stageId": "delivery-1",
-          "role": "delivery",
-          "executor": "builder",
-          "permissionMode": "workspace-write",
-          "verdict": "PASS",
-          "summary": "delivery found nothing outstanding",
-          "findings": [],
-          "evidence": []
-        },
-        {
-          "stageId": "review-1",
-          "role": "review",
-          "executor": "reviewer",
-          "permissionMode": "read-only",
-          "verdict": "FAIL",
-          "summary": "the branch is published but one test asserts a stale constant",
-          "findings": [
-            {
-              "id": "finding-1",
-              "class": "TEST_DEFECT",
-              "raisedBy": "review",
-              "summary": "the new test asserts a constant the module no longer exports",
-              "confirmed": true,
-              "evidence": [
-                {
-                  "kind": "test",
-                  "locator": "packages/thing/tests/thing.spec.ts",
-                  "summary": "the failing assertion"
-                }
-              ]
-            }
-          ],
-          "evidence": []
-        },
-        {
-          "stageId": "repair-1",
-          "role": "repair",
-          "executor": "builder",
-          "permissionMode": "workspace-write",
-          "verdict": "PASS",
-          "summary": "repair found nothing outstanding",
-          "findings": [],
-          "evidence": []
-        },
-        {
-          "stageId": "delivery-2",
-          "role": "delivery",
-          "executor": "builder",
-          "permissionMode": "workspace-write",
-          "verdict": "PASS",
-          "summary": "delivery found nothing outstanding",
-          "findings": [],
-          "evidence": []
-        },
-        {
-          "stageId": "review-2",
-          "role": "review",
-          "executor": "reviewer",
-          "permissionMode": "read-only",
-          "verdict": "PASS",
-          "summary": "review found nothing outstanding",
-          "findings": [],
-          "evidence": []
-        },
-        {
-          "stageId": "verify-final",
-          "role": "verify",
-          "executor": "reviewer",
-          "permissionMode": "read-only",
-          "verdict": "PASS",
-          "summary": "verify found nothing outstanding",
-          "findings": [],
-          "evidence": []
         }
       ],
-      "repairCycles": 1,
-      "executorStarts": 8
+      "repairCycles": 0,
+      "executorStarts": 2
     },
-    "state": "PR_READY",
+    "state": "BLOCKED",
     "openDefects": [],
     "reportedFindings": [],
-    "summary": "the pull request is ready for a person after 1 repair cycle(s)"
+    "summary": "stage delivery-1 publishes the work, and this deployment composed no delivery capability to do it"
   },
   "fallback": {
     "degradedExecutors": [
       "builder"
     ],
-    "state": "completed",
-    "verdict": "PASS",
+    "state": "blocked",
+    "verdict": "BLOCKED",
     "stages": [
       {
         "stageId": "implement-1",
@@ -193,36 +76,6 @@
       },
       {
         "stageId": "verify-1",
-        "role": "verify",
-        "executor": "reviewer"
-      },
-      {
-        "stageId": "delivery-1",
-        "role": "delivery",
-        "executor": "spare-builder"
-      },
-      {
-        "stageId": "review-1",
-        "role": "review",
-        "executor": "reviewer"
-      },
-      {
-        "stageId": "repair-1",
-        "role": "repair",
-        "executor": "spare-builder"
-      },
-      {
-        "stageId": "delivery-2",
-        "role": "delivery",
-        "executor": "spare-builder"
-      },
-      {
-        "stageId": "review-2",
-        "role": "review",
-        "executor": "reviewer"
-      },
-      {
-        "stageId": "verify-final",
         "role": "verify",
         "executor": "reviewer"
       }

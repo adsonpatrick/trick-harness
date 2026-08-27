@@ -149,6 +149,16 @@ export interface HarnessCompositionOptions {
    * never to reuse one: a repeat is refused rather than merged.
    */
   readonly workflowIdFactory?: () => string
+  /**
+   * Ids of the runtime plugins this deployment intends to mount.
+   *
+   * Declared here so the profile's `trustedComposition.excludedPluginIds` has
+   * something to refuse. A plugin able to rewrite the workflow state machine at
+   * runtime would make every other policy advisory, so the exclusion has to be
+   * a refusal at composition time rather than a list a reviewer reads. A
+   * deployment that mounts nothing passes nothing, and the check is a no-op.
+   */
+  readonly pluginIds?: readonly string[]
 }
 
 /** One assembled Harness and everything it owns. */
@@ -225,6 +235,14 @@ function assertAuthorised(profile: HarnessProfile, options: HarnessCompositionOp
     throw new BundleCompositionError(
       `profile ${JSON.stringify(profile.id)} does not enable ${CONTROL_SERVER_CAPABILITY}`,
     )
+  }
+  const excluded = profile.trustedComposition.excludedPluginIds
+  for (const pluginId of options.pluginIds ?? []) {
+    if (excluded.includes(pluginId)) {
+      throw new BundleCompositionError(
+        `profile ${JSON.stringify(profile.id)} excludes plugin ${JSON.stringify(pluginId)} from trusted composition`,
+      )
+    }
   }
 }
 

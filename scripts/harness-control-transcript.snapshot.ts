@@ -10,6 +10,12 @@
  * The transcript is three surfaces: the bounded status the control server hands
  * a bridge, the findings a report renders from the run's own outcome, and what a
  * degraded executor looks like once the profile's fallback table has answered.
+ *
+ * All three settle at BLOCKED, and that is the point rather than a shortfall.
+ * This composition has no delivery capability, and publishing is a capability
+ * port and never a stage handed to an executor, so the lifecycle stops at
+ * `delivery-1` and says so. A transcript that showed the branch published here
+ * would be showing a model having improvised a mutation nobody granted.
  */
 
 import { access, mkdir, writeFile } from 'node:fs/promises'
@@ -120,8 +126,16 @@ function interpret(stage: StageSpec, executor: string): StageResult {
  * @param degradedExecutors - Executors the breaker has already marked degraded.
  * @returns The composed Harness.
  */
-function harnessWith(degradedExecutors: readonly string[]): ComposedHarness {
+function harnessWith(degradedExecutors: readonly string[], idPrefix: string): ComposedHarness {
+  // The Harness mints the execution id, and by default that is a UUID a
+  // snapshot could never record. A deterministic factory is the supported way
+  // to make the identity readable without pretending the objective supplies it.
+  let minted = 0
   return composeHarness({
+    workflowIdFactory: () => {
+      minted += 1
+      return `${idPrefix}-${String(minted)}`
+    },
     profile: PROFILE,
     registry: REGISTRY,
     session: Session.create(SessionId('transcript')),
@@ -157,14 +171,22 @@ async function statusThroughHttp(
   const base = `http://${host}:${String(port)}`
   const created = await fetch(`${base}/workflows`, { method: 'POST', headers, body: JSON.stringify(objective) })
   expect(created.status).toBe(202)
-  const read = await fetch(`${base}/workflows/${objective.id}`, { headers })
-  return (await read.json()) as ControlWorkflowStatus
+  // The run is named by the id the Harness minted and handed back, never by the
+  // objective's own id: the same objective may be run more than once, so a read
+  // addressed to `objective.id` names nothing and answers 404.
+  const { workflowId } = (await created.json()) as ControlWorkflowStatus
+  for (;;) {
+    const read = await fetch(`${base}/workflows/${workflowId}`, { headers })
+    expect(read.status).toBe(200)
+    const status = (await read.json()) as ControlWorkflowStatus
+    if (status.state !== 'running') return status
+  }
 }
 
 describe('harness control transcript runnable snapshot', () => {
-  it('records the status, the findings and the fallback a person actually sees', async () => {
-    const certified = harnessWith([])
-    const degraded = harnessWith(['builder'])
+  it('records the status, the block and the fallback a person actually sees', async () => {
+    const certified = harnessWith([], 'wf-transcript')
+    const degraded = harnessWith(['builder'], 'wf-degraded')
     let transcript: string
     try {
       const status = await statusThroughHttp(certified, OBJECTIVE)

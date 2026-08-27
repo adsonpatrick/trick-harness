@@ -269,6 +269,24 @@ describe('what the profile decides exists', () => {
     })).toThrow(BundleCompositionError)
   })
 
+  it('refuses a plugin the profile excludes from trusted composition, and allows one it does not', () => {
+    const started: ExecutorStartRequest[] = []
+    const profile = {
+      ...profileEnabling([GITHUB_DELIVERY_CAPABILITY]),
+      trustedComposition: { excludedPluginIds: ['self-modifying-workflow-plugin'] },
+    }
+
+    expect(() => composeHarness({
+      ...baseOptions(profile, started),
+      pluginIds: ['telemetry-plugin', 'self-modifying-workflow-plugin'],
+    })).toThrow(/excludes plugin "self-modifying-workflow-plugin"/)
+
+    expect(() => composeHarness({
+      ...baseOptions(profile, started),
+      pluginIds: ['telemetry-plugin'],
+    })).not.toThrow()
+  })
+
   it('refuses a profile routing to an executor nobody registered', () => {
     const started: ExecutorStartRequest[] = []
     const options = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
