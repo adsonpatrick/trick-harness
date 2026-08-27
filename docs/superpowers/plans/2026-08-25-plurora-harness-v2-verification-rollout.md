@@ -6,9 +6,11 @@
 
 **Architecture:** Verification is evidence-first and independent from implementation claims. Plans R/A/B provide the reusable runtime and Plurora profile; Plan C provides the `neuro-via` bridge. Plan D first exhausts keyless deterministic evidence, then runs controlled real-product/infrastructure smokes in disposable branches/Preview Branches, verifies replay and teardown, performs independent engineering/security review, remediates confirmed bugs through the approved loop, and only then reconciles the pinned Trick Harness revision and activates V2.
 
-**Tech Stack:** `adsonpatrick/trick-harness`, `adsonpatrick/neuro-via`, Cordis/DSH tests and snapshots, OpenCode TUI/server/SDK, OpenCode Go models, Codex CLI/app-server with ChatGPT-plan auth, Claude Agent SDK/Claude Code CLI, Git/GitHub CLI/API, Supabase Branching/CLI/Postgres/pgTAP, Node/Playwright/CI, Codex Engineering Guardrails, Codex Security.
+**Tech Stack:** `adsonpatrick/trick-harness`, `adsonpatrick/neuro-via`, Cordis/DSH tests and snapshots, OpenCode TUI/server/SDK, OpenCode Go models, Codex CLI/app-server with ChatGPT-plan auth, Git/GitHub CLI/API, Supabase Branching/CLI/Postgres/pgTAP, Node/Playwright/CI, Codex Engineering Guardrails, Codex Security.
 
-**Spec:** `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-design.md` + approved reusable-core amendment.
+**Spec:** `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-design.md` + approved reusable-core amendment + the executor and database scope amendment `docs/superpowers/specs/2026-08-27-harness-v2-scope-amendment.md`.
+
+> **Normative override, 2026-08-27.** The scope amendment withdraws criterion 8, retains and strengthens criterion 9, keeps criteria 24, 25 and 26 required, and reclassifies criteria 23, 27 and the Supabase half of criterion 30 as PRO-OPTIONAL. Claude Code is not an executor of this harness. Where this plan still reads as though a maintained Claude runtime or a paid Supabase entitlement were required, the amendment governs.
 
 **Requires:** Plans R, A, B, and C complete on reviewable branches with no unresolved confirmed material bug.
 
@@ -31,7 +33,7 @@
 
 ## Acceptance-Criterion Traceability
 
-Base criteria 1-30 are exactly those in the approved Spec. Additional reusable-core criteria are:
+Base criteria 1-30 are exactly those in the approved Spec, as amended on 2026-08-27: criterion 8 is WITHDRAWN, and criteria 23, 27 and the Supabase half of 30 are PRO-OPTIONAL. Additional reusable-core criteria are:
 
 - **R1:** generic Core/provider/integration packages have no dependency on `profiles/plurora` or `neuro-via`.
 - **R2:** `profiles/plurora` reproduces all binding Plurora routing/fallback/QA/security/DB/delivery behavior.
@@ -46,10 +48,10 @@ Primary evidence owners:
 | 1-2, R1 | Tasks 1-2, 10 |
 | 3-5, 11 | Task 3 |
 | 6-7, 12-14 | Task 4 |
-| 8-9 | Task 5 |
+| 9 (8 withdrawn) | Task 5 |
 | 10, 15-20, 22, R2-R4 | Tasks 2, 7, 10 |
 | 21, 30 | Task 6 |
-| 23-27, 30 | Task 8 |
+| 24-26 required; 23, 27 pro-optional; 30 split | Task 8 |
 | 28-29 | Task 9 |
 | R5 | Tasks 3, 10-11 |
 
@@ -136,12 +138,15 @@ Record only what these checks actually prove.
 
 ---
 
-## Task 5: Prove Claude Native Compatibility and Core Independence
+## Task 5: Prove Core Independence Without a Third Executor
 
-- [ ] Run core deterministic suite with Claude disabled; OpenCode/Codex core paths remain green.
-- [ ] Using maintained valid Claude Code native runtime/account, run one read-only official Agent SDK/CLI worker smoke; no credential extraction into Harness state.
-- [ ] Disable Claude again and rerun representative OpenCode→Codex workflow; semantics unchanged.
-- [ ] Criteria 8 and 9 must both PASS under current Spec; unavailable maintained Claude runtime blocks activation unless owner amends Spec.
+**Amended 2026-08-27.** Claude Code is out of scope, so this task no longer runs a Claude smoke and no longer gates activation on a maintained Claude runtime. Criterion 8 is withdrawn; criterion 9 is retained as a standing property rather than a toggle test.
+
+- [ ] Run the core deterministic suite and confirm the OpenCode/Codex paths are green with no Claude executor composed at all.
+- [ ] Confirm no profile, composition root or provider registry names a Claude executor, so criterion 9 holds by construction and not by configuration.
+- [ ] Run a representative OpenCode→Codex workflow and record that its semantics do not depend on a third executor being present.
+- [ ] Record `independence:unsatisfied` behaviour when only one of the two remaining executors is usable, and confirm it is never silently satisfied.
+- [ ] Criterion 9 must PASS. Criterion 8 is reported WITHDRAWN, citing the scope amendment.
 
 ---
 
@@ -182,11 +187,13 @@ Record only what these checks actually prove.
 
 **Target parent:** `uljaajwwnygopsyvwsre`.
 
+**Amended 2026-08-27.** Preview branching is a Pro entitlement the organisation does not hold. The steps below are split: the entitlement-free steps stay required and must run, and the preview-dependent steps are PRO-OPTIONAL and are reported `NOT_APPLICABLE — entitlement absent` rather than skipped silently. No step may be satisfied by a seam test, a scripted double or an MCP call. If the entitlement is ever acquired, every PRO-OPTIONAL step below becomes required again with no other change.
+
 - [ ] Prove temporary acceptance object absent on parent and record parent migration head.
 - [ ] Create disposable DB-changing Git branch with one forward migration, RLS enabled, minimal allowed policy and explicit denied case, plus pgTAP allow/deny tests.
-- [ ] Start Harness DB-changing workflow; it must provision isolated hosted Preview Branch. Provision failure => `BLOCKED`, no parent/local fallback.
-- [ ] Verify preview ref differs from parent via authoritative Supabase state.
-- [ ] Verify migration exists/applied only in preview.
+- [ ] PRO-OPTIONAL. Start Harness DB-changing workflow; it must provision isolated hosted Preview Branch. Provision failure => `BLOCKED`, no parent/local fallback.
+- [ ] PRO-OPTIONAL. Verify preview ref differs from parent via authoritative Supabase state.
+- [ ] PRO-OPTIONAL. Verify migration exists/applied only in preview.
 - [ ] Run remote gates with explicit preview environment:
 
 ```bash
@@ -195,11 +202,11 @@ npm run test:db
 npm run db:verify
 ```
 
-- [ ] Verify allow and deny RLS assertions separately.
+- [ ] PRO-OPTIONAL. Verify allow and deny RLS assertions separately.
 - [ ] Re-read parent migration/object state; expected unchanged.
-- [ ] Verify preview cleanup; cleanup failure is separate operational defect.
-- [ ] Run unavailable-branch fixture and prove BLOCKED instead of shared/local fallback.
-- [ ] Clean disposable Git branch/PR and record criteria 23-27,30.
+- [ ] PRO-OPTIONAL. Verify preview cleanup; cleanup failure is separate operational defect.
+- [ ] REQUIRED. Run unavailable-branch fixture and prove BLOCKED instead of shared/local fallback. Already demonstrated against the real API on 2026-08-27, which answered HTTP 402; re-run and record it here.
+- [ ] Clean disposable Git branch/PR. Record criteria 24, 25, 26 and the GitHub half of 30 as required results, and criteria 23, 27 and the Supabase half of 30 as PRO-OPTIONAL with their entitlement status.
 
 ---
 
@@ -249,8 +256,9 @@ npm run db:verify
 
 ## Task 12: Activate V2 as Default Engineering Path Without Auto-Merge
 
-**Activation gate:** all **35 criteria PASS**, no unresolved material engineering/security finding, trusted Plurora profile excludes self-modification/model-authored runtime plugins, and final `neuro-via` pin matches independently verified Trick Harness SHA.
+**Activation gate (amended 2026-08-27):** all **retained criteria PASS**, every PRO-OPTIONAL criterion explicitly reported with its entitlement status rather than assumed, criterion 8 recorded as WITHDRAWN, no unresolved material engineering/security finding, trusted Plurora profile excludes self-modification/model-authored runtime plugins, and final `neuro-via` pin matches independently verified Trick Harness SHA.
 
+- [ ] Record in the activation artefact which criteria were PRO-OPTIONAL and unmet, so activation states what it did not prove.
 - [ ] Change operator docs from candidate/rollout wording to default V2 path.
 - [ ] Mark Spec `Approved / Implemented` only after evidence gate; approval exists now, implementation status is earned here.
 - [ ] Mark V1 docs historical/superseded where V2 conflicts, preserving record.
@@ -261,4 +269,4 @@ npm run db:verify
 
 ## Plan D Completion Contract
 
-Plan D is complete only when all **30 base acceptance criteria + R1-R5** have fresh direct PASS evidence, final `neuro-via` pin references independently verified Trick Harness SHA, real OpenCode/Codex/maintained-Claude native paths ran successfully, real GitHub delivery/repair and Supabase Preview/RLS effects were independently observed, replay/quiescence were proven, reusable boundaries and dual-profile behavior were proven, confirmed bugs were closed/re-reviewed, product/design decisions remained un-invented, and V2 was activated without automatic merge authority.
+Plan D is complete only when all **retained base acceptance criteria + R1-R5** have fresh direct PASS evidence and every PRO-OPTIONAL criterion carries an explicit entitlement status, final `neuro-via` pin references independently verified Trick Harness SHA, real OpenCode and Codex native paths ran successfully, real GitHub delivery/repair effects were independently observed, replay/quiescence were proven, reusable boundaries and dual-profile behavior were proven, confirmed bugs were closed/re-reviewed, product/design decisions remained un-invented, and V2 was activated without automatic merge authority.

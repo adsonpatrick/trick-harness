@@ -290,10 +290,12 @@ No PR-ready claim is allowed unless this review is PASS and both real canaries a
 12/12 PR #2 findings closed
 all focused + full-repo gates green
 GitHub canary PASS
-Supabase Preview canary PASS
-fresh independent review PASS
+Supabase Preview canary PASS on its fail-closed half; positive half PRO-OPTIONAL
+fresh independent review PASS or PARTIAL for pro-optional reasons only
 zero confirmed material bugs
 merge/release/deploy still human-only
 ```
 
 Only then may Plan C / NeuroVia integration resume.
+
+**Amended 2026-08-27** by `docs/superpowers/specs/2026-08-27-harness-v2-scope-amendment.md`. The Supabase positive canary is PRO-OPTIONAL, because preview branching is a paid entitlement the organisation deliberately does not hold. Its absence therefore no longer holds Plan C back. The final review's PARTIAL verdict was issued under the previous contract and is not rewritten; under the amended contract its single open reason is pro-optional, so Plan C is released. Nothing else in this contract is relaxed: a confirmed material bug still blocks, and merge/release/deploy stay human-only.
