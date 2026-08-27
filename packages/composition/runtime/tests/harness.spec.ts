@@ -231,6 +231,30 @@ describe('the Claude overlay stays optional', () => {
   })
 })
 
+/**
+ * Poll one workflow's status until it is no longer running.
+ *
+ * The POST answers before the run does anything, so reading once would be a
+ * guess about scheduling rather than a wait for a result.
+ * @param base - the server's base URL.
+ * @param workflowId - the execution to read.
+ * @param auth - the authorised headers.
+ * @returns the settled status.
+ */
+async function settledStatus(
+  base: string,
+  workflowId: string,
+  auth: Record<string, string>,
+): Promise<ControlWorkflowStatus> {
+  const deadline = Date.now() + 5000
+  for (;;) {
+    const read = await fetch(`${base}/workflows/${workflowId}`, { headers: auth })
+    const status = (await read.json()) as ControlWorkflowStatus
+    if (status.state !== 'running' || Date.now() > deadline) return status
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
 describe('a workflow through the real control-server entry path', () => {
   it('runs, reports a bounded status and settles on disposal', async () => {
     const started: ExecutorStartRequest[] = []
@@ -247,10 +271,14 @@ describe('a workflow through the real control-server entry path', () => {
     const created = await fetch(`${base}/workflows`, {
       method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE),
     })
-    const read = await fetch(`${base}/workflows/${OBJECTIVE.id}`, { headers: auth })
-    const status = (await read.json()) as ControlWorkflowStatus
+    const accepted = (await created.json()) as ControlWorkflowStatus
+    const status = await settledStatus(base, accepted.workflowId, auth)
 
     expect(created.status).toBe(202)
+    // The identity came back from the Harness. Nothing in the posted body
+    // decided it, and the objective's own id is carried beside it.
+    expect(accepted.workflowId).not.toBe(OBJECTIVE.id)
+    expect(accepted.objectiveId).toBe(OBJECTIVE.id)
     expect(status.state).toBe('completed')
     expect(status.verdict).toBe('PASS')
     expect(status.stages.map(stage => stage.role)).toEqual([

@@ -154,8 +154,16 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
   const { end } = projection
   const interrupted = projection.openStages.length > 0
   const mutated = projection.deliveries.length > 0
+  // An id, not a fallback to the execution id: a projection with no start
+  // event is not a workflow this harness can speak for, and `restartOf` refuses
+  // it before ever reaching here.
+  const identity = {
+    workflowId: projection.workflowId,
+    objectiveId: projection.objective?.id ?? projection.workflowId,
+  }
   if (end !== undefined) {
     return Object.freeze({
+      ...identity,
       state: 'terminal' as const,
       verdict: end.verdict,
       openStages: Object.freeze([]),
@@ -167,6 +175,7 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
   if (interrupted) reasons.push(`stages still open: ${projection.openStages.join(', ')}`)
   for (const delivery of projection.deliveries) reasons.push(`recorded ${delivery.action} on ${delivery.branch}`)
   return Object.freeze({
+    ...identity,
     state: 'interrupted' as const,
     verdict: 'INCONCLUSIVE' as const,
     openStages: projection.openStages,

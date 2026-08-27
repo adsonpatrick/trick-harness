@@ -27,8 +27,9 @@ const EXPECTED_LOOPBACK = ['127.0.0.1', '::1', 'localhost']
 const EXPECTED_REFUSED = ['0.0.0.0', '::', '192.168.1.10']
 
 /** A start function the invariant never actually calls. */
-const NEVER_STARTED = (): Promise<never> =>
-  Promise.reject(new Error('the invariant never starts a workflow'))
+const NEVER_STARTED = (): never => {
+  throw new Error('the invariant never starts a workflow')
+}
 
 /**
  * Check that the server binds loopback and refuses everything else.

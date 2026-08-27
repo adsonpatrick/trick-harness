@@ -64,6 +64,16 @@ export interface WorkflowOutcome {
 
 /** What a restart may conclude about a workflow it finds in a durable log. */
 export interface RestartAssessment {
+  /** The execution this assessment is about. */
+  readonly workflowId: string
+  /**
+   * The logical objective that execution was one attempt at.
+   *
+   * Carried so a reader who has only an execution id can still say what was
+   * being attempted. Two assessments sharing an objective id are two attempts
+   * at one thing, which is a fact worth being able to see.
+   */
+  readonly objectiveId: string
   /** `terminal` when the log records an end; `interrupted` when it does not. */
   readonly state: 'terminal' | 'interrupted'
   readonly verdict: WorkflowVerdict

@@ -253,11 +253,21 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
     return workflowId
   }
 
-  const run = async (
+  /**
+   * Start one execution and hand back its identity immediately.
+   *
+   * Synchronous up to the id on purpose: a caller — the control server above
+   * all — has to be able to name the run it just asked for before the run has
+   * done anything, and an id that only appeared in the outcome would leave a
+   * status poll with nothing to address in between.
+   * @param objective - What to run.
+   * @param routeOverride - One human routing choice, spent on a single stage.
+   * @returns The minted id, the promise it settles on, and how to end it.
+   */
+  const begin = (
     objective: WorkflowObjective,
-    signal?: AbortSignal,
     routeOverride?: StageRouteOverride,
-  ): Promise<WorkflowOutcome> => {
+  ): { workflowId: string; outcome: Promise<WorkflowOutcome>; cancel: (reason: string) => void } => {
     const workflowId = nextWorkflowId()
     const journal = new WorkflowJournal(session, workflowId, flush)
     const runner = new WorkflowRunner(workflowId, {
@@ -267,10 +277,6 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       journal,
       ...options.degradedExecutors === undefined ? {} : { degradedExecutors: options.degradedExecutors },
     })
-    const stop = (): void => {
-      runner.cancel('the caller canceled this workflow')
-    }
-    signal?.addEventListener('abort', stop, { once: true })
     const settled = runner.run({
       objective,
       interpret: workflow.interpret,
@@ -281,12 +287,34 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       ...routeOverride === undefined ? {} : { routeOverride },
     })
     runners.set(runner, settled)
-    try {
-      return await settled
-    } finally {
-      signal?.removeEventListener('abort', stop)
+    const outcome = settled.finally(() => {
       runners.delete(runner)
       runner.dispose()
+    })
+    return {
+      workflowId,
+      outcome,
+      cancel: (reason: string): void => {
+        runner.cancel(reason)
+      },
+    }
+  }
+
+  const run = async (
+    objective: WorkflowObjective,
+    signal?: AbortSignal,
+    routeOverride?: StageRouteOverride,
+  ): Promise<WorkflowOutcome> => {
+    const started = begin(objective, routeOverride)
+    const stop = (): void => {
+      started.cancel('the caller canceled this workflow')
+    }
+    if (signal?.aborted === true) stop()
+    signal?.addEventListener('abort', stop, { once: true })
+    try {
+      return await started.outcome
+    } finally {
+      signal?.removeEventListener('abort', stop)
     }
   }
 
@@ -297,7 +325,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   }
 
   const serverOptions: ControlServerOptions = {
-    start: run,
+    start: begin,
     restart: (workflowId: string): Promise<RestartAssessment | undefined> =>
       Promise.resolve(restartOf(workflowId)),
     ...options.control?.host === undefined ? {} : { host: options.control.host },

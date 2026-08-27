@@ -14,6 +14,12 @@ Every request but `GET /health` carries a bearer token the server mints per proc
 
 `readObjective` runs before a workflow id exists. It requires every field the workflow needs, refuses a blank one, and refuses a risk or workload outside the closed set the contracts fix. A malformed request therefore never produces a durable record of a run that was never attempted, and never produces a half-started run somebody has to clean up.
 
+## The caller names the objective; the Harness names the run
+
+`POST /workflows` accepts an objective and answers `202` with the execution id the Harness minted for it. That id is not the objective's own. An objective is a thing a person asked for and may ask for again; an execution is one attempt at it, and only the attempt's id can say which of several runs a status is about. There is no field in the request body that sets it, so a caller cannot address a run it does not own or quietly continue a finished one's history.
+
+`GET /workflows/:id` and `POST /workflows/:id/cancel` both address that generated id. A run leaves the live set when it settles and its last status is kept a while; past that, the durable journal answers for it, for exactly the execution asked about.
+
 ## A status is a projection, not a stream
 
 `ControlWorkflowStatus` carries the workflow id, a state, a verdict, a bounded summary, a capped list of stages with their own bounded summaries, and two counters. It has no field for provider output, no field for a finding's evidence, and no field for anything a stage reasoned about privately. A bridge that rendered those into a chat window would be publishing somebody's working notes, so there is nowhere for them to go.
@@ -34,12 +40,12 @@ An id with neither a live run nor a durable record is a `404`, not an empty stat
 
 ```ts
 import { HarnessControlServer } from '@trick-harness/control-server'
+import type { ControlStartedWorkflow } from '@trick-harness/control-server'
 import type { WorkflowObjective } from '@trick-harness/contracts'
-import type { WorkflowOutcome } from '@trick-harness/engineering-workflow'
 
-declare const runWorkflow: (objective: WorkflowObjective, signal: AbortSignal) => Promise<WorkflowOutcome>
+declare const startWorkflow: (objective: WorkflowObjective) => ControlStartedWorkflow
 
-const server = new HarnessControlServer({ start: runWorkflow })
+const server = new HarnessControlServer({ start: startWorkflow })
 const { host, port } = await server.listen()
 const response = await fetch(`http://${host}:${String(port)}/workflows`, {
   method: 'POST',

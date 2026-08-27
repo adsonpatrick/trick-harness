@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import type { StageRouteOverride } from '@trick-harness/contracts'
+import type { StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 import { ControlError, HarnessControlServer } from '../src/index.ts'
-import type { ControlServerOptions, ControlWorkflowStatus } from '../src/index.ts'
+import type {
+  ControlServerOptions,
+  ControlStartedWorkflow,
+  ControlWorkflowStarter,
+  ControlWorkflowStatus,
+} from '../src/index.ts'
 
 const OBJECTIVE = {
-  id: 'wf-1',
+  id: 'obj-1',
   cwd: '/repo',
   requirement: 'add the thing',
   risk: 'low',
@@ -15,13 +20,14 @@ const OBJECTIVE = {
 
 /**
  * A finished workflow, as the runner would hand one back.
- * @param workflowId - the workflow the outcome belongs to.
+ * @param workflowId - the execution the outcome belongs to.
+ * @param objectiveId - the logical objective that execution attempted.
  * @returns the outcome.
  */
-function outcome(workflowId: string): WorkflowOutcome {
+function outcome(workflowId: string, objectiveId: string): WorkflowOutcome {
   return {
     workflowId,
-    objectiveId: workflowId,
+    objectiveId,
     state: 'completed',
     verdict: 'PASS',
     summary: 'everything passed',
@@ -40,6 +46,48 @@ function outcome(workflowId: string): WorkflowOutcome {
     ],
     repairCycles: 0,
     executorStarts: 1,
+  }
+}
+
+/** One start, as the fake starter was given it. */
+interface StartRecord {
+  readonly objective: WorkflowObjective
+  readonly workflowId: string
+  readonly routeOverride: StageRouteOverride | undefined
+}
+
+/**
+ * A starter that mints its own execution ids, the way the Harness does.
+ *
+ * The id never comes from the objective. Deriving one there is the defect this
+ * whole surface is being corrected for: the same objective may be attempted
+ * more than once, and a status poll has to be able to say which attempt.
+ * @param ids - the execution ids to hand out, in order.
+ * @param run - what a started run does; by default it finishes immediately.
+ * @param seen - where each start is recorded.
+ * @returns the starter.
+ */
+function starter(
+  ids: string[],
+  run: (record: StartRecord, canceled: Promise<string>) => Promise<WorkflowOutcome>
+    = async record => outcome(record.workflowId, record.objective.id),
+  seen: StartRecord[] = [],
+): ControlWorkflowStarter {
+  return (objective, routeOverride): ControlStartedWorkflow => {
+    const workflowId = ids.shift() ?? 'wf-exhausted'
+    const record: StartRecord = { objective, workflowId, routeOverride }
+    seen.push(record)
+    let stop: (reason: string) => void = () => undefined
+    const canceled = new Promise<string>((resolve) => {
+      stop = resolve
+    })
+    return {
+      workflowId,
+      outcome: run(record, canceled),
+      cancel: (reason: string): void => {
+        stop(reason)
+      },
+    }
   }
 }
 
@@ -65,6 +113,24 @@ async function serve(options: ControlServerOptions): Promise<{
   }
 }
 
+/**
+ * Post one objective and read the status the server answered with.
+ * @param base - the server's base URL.
+ * @param auth - the authorised headers.
+ * @param body - the request body.
+ * @returns the HTTP status and the parsed control status.
+ */
+async function post(
+  base: string,
+  auth: Record<string, string>,
+  body: unknown = OBJECTIVE,
+): Promise<{ code: number; status: ControlWorkflowStatus }> {
+  const response = await fetch(`${base}/workflows`, {
+    method: 'POST', headers: auth, body: JSON.stringify(body),
+  })
+  return { code: response.status, status: (await response.json()) as ControlWorkflowStatus }
+}
+
 afterEach(async () => {
   const open = servers
   servers = []
@@ -73,14 +139,14 @@ afterEach(async () => {
 
 describe('what the control server will bind', () => {
   it('refuses any address that is not loopback', () => {
-    expect(() => new HarnessControlServer({ start: async () => outcome('x'), host: '0.0.0.0' }))
+    expect(() => new HarnessControlServer({ start: starter(['wf-1']), host: '0.0.0.0' }))
       .toThrow(ControlError)
-    expect(() => new HarnessControlServer({ start: async () => outcome('x'), host: '10.0.0.4' }))
+    expect(() => new HarnessControlServer({ start: starter(['wf-1']), host: '10.0.0.4' }))
       .toThrow(/loopback/)
   })
 
   it('mints a token per process and refuses a request that does not carry it', async () => {
-    const { base } = await serve({ start: async () => outcome('wf-1') })
+    const { base } = await serve({ start: starter(['wf-1']) })
 
     const health = await fetch(`${base}/health`)
     const workflows = await fetch(`${base}/workflows`, { method: 'POST', body: '{}' })
@@ -92,82 +158,97 @@ describe('what the control server will bind', () => {
 
 describe('an objective the server will not run', () => {
   it('refuses a missing field and a value outside its closed set', async () => {
-    const { base, auth } = await serve({ start: async () => outcome('wf-1') })
+    const { base, auth } = await serve({ start: starter(['wf-1']) })
 
-    const missing = await fetch(`${base}/workflows`, {
-      method: 'POST', headers: auth, body: JSON.stringify({ ...OBJECTIVE, requirement: '  ' }),
-    })
-    const unknownRisk = await fetch(`${base}/workflows`, {
-      method: 'POST', headers: auth, body: JSON.stringify({ ...OBJECTIVE, risk: 'apocalyptic' }),
-    })
+    const missing = await post(base, auth, { ...OBJECTIVE, requirement: '  ' })
+    const unknownRisk = await post(base, auth, { ...OBJECTIVE, risk: 'apocalyptic' })
     const notJson = await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: 'nope' })
 
-    expect(missing.status).toBe(400)
-    expect(unknownRisk.status).toBe(400)
+    expect(missing.code).toBe(400)
+    expect(unknownRisk.code).toBe(400)
     expect(notJson.status).toBe(400)
-    expect(((await missing.json()) as { error: string }).error).toBe('invalid-objective')
+    expect((missing.status as unknown as { error: string }).error).toBe('invalid-objective')
   })
 
   it('starts nothing when the objective is refused', async () => {
-    const started: string[] = []
-    const { base, auth } = await serve({
-      start: async (objective) => {
-        started.push(objective.id)
-        return outcome(objective.id)
-      },
-    })
+    const seen: StartRecord[] = []
+    const { base, auth } = await serve({ start: starter(['wf-1'], undefined, seen) })
 
-    await fetch(`${base}/workflows`, {
-      method: 'POST', headers: auth, body: JSON.stringify({ ...OBJECTIVE, cwd: '' }),
-    })
+    await post(base, auth, { ...OBJECTIVE, cwd: '' })
 
-    expect(started).toEqual([])
+    expect(seen).toEqual([])
   })
 })
 
 describe('run, status and cancel', () => {
-  it('returns a durable workflow id and then the finished projection', async () => {
-    const { base, auth } = await serve({ start: async objective => outcome(objective.id) })
+  it('answers with the id the Harness minted, not the one the objective carries', async () => {
+    const { base, auth } = await serve({ start: starter(['wf-run-1']) })
 
-    const created = await fetch(`${base}/workflows`, {
-      method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE),
-    })
-    const accepted = (await created.json()) as ControlWorkflowStatus
-    const read = await fetch(`${base}/workflows/wf-1`, { headers: auth })
+    const created = await post(base, auth)
+    const read = await fetch(`${base}/workflows/${created.status.workflowId}`, { headers: auth })
     const status = (await read.json()) as ControlWorkflowStatus
 
-    expect(created.status).toBe(202)
-    expect(accepted.workflowId).toBe('wf-1')
-    expect(accepted.state).toBe('running')
+    expect(created.code).toBe(202)
+    expect(created.status.workflowId).toBe('wf-run-1')
+    // The objective's own id is carried, and it is not the identity. A caller
+    // that addressed `obj-1` would be naming a thing that may have been
+    // attempted several times.
+    expect(created.status.objectiveId).toBe('obj-1')
+    expect(created.status.state).toBe('running')
     expect(status.state).toBe('completed')
     expect(status.verdict).toBe('PASS')
     expect(status.stages.map(stage => stage.stageId)).toEqual(['implement-1'])
   })
 
-  it('cancels an owned run and waits for it to settle before answering', async () => {
-    let settled = false
+  it('gives the same objective posted twice two ids that answer separately', async () => {
     const { base, auth } = await serve({
-      start: async (objective, signal) => {
-        await new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => {
-            resolve()
-          }, { once: true })
-        })
-        settled = true
-        return { ...outcome(objective.id), state: 'canceled', verdict: 'INCONCLUSIVE' }
-      },
+      start: starter(['wf-run-1', 'wf-run-2'], async (record) => {
+        const finished = outcome(record.workflowId, record.objective.id)
+        return record.workflowId === 'wf-run-2'
+          ? { ...finished, state: 'failed', verdict: 'FAIL', summary: 'the retry failed', stages: [] }
+          : finished
+      }),
     })
 
-    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
-    const canceled = await fetch(`${base}/workflows/wf-1/cancel`, { method: 'POST', headers: auth })
+    const first = await post(base, auth)
+    await fetch(`${base}/workflows/${first.status.workflowId}`, { headers: auth })
+    const second = await post(base, auth)
+    const one = (await (await fetch(`${base}/workflows/wf-run-1`, { headers: auth })).json()) as ControlWorkflowStatus
+    const two = (await (await fetch(`${base}/workflows/wf-run-2`, { headers: auth })).json()) as ControlWorkflowStatus
+
+    expect(first.status.workflowId).not.toBe(second.status.workflowId)
+    expect(first.status.objectiveId).toBe(second.status.objectiveId)
+    // Each id answers for its own attempt only. A status that merged them would
+    // report the retry's failure against the attempt that passed.
+    expect(one.verdict).toBe('PASS')
+    expect(one.stages.length).toBe(1)
+    expect(two.verdict).toBe('FAIL')
+    expect(two.stages).toEqual([])
+  })
+
+  it('cancels the owned run the generated id names, and waits for it to settle', async () => {
+    let settled = false
+    const { base, auth } = await serve({
+      start: starter(['wf-run-1'], async (record, canceled) => {
+        await canceled
+        settled = true
+        return { ...outcome(record.workflowId, record.objective.id), state: 'canceled', verdict: 'INCONCLUSIVE' }
+      }),
+    })
+
+    const created = await post(base, auth)
+    const canceled = await fetch(`${base}/workflows/${created.status.workflowId}/cancel`, {
+      method: 'POST', headers: auth,
+    })
     const status = (await canceled.json()) as ControlWorkflowStatus
 
     expect(settled).toBe(true)
     expect(status.state).toBe('canceled')
+    expect(status.workflowId).toBe('wf-run-1')
   })
 
   it('answers 404 for a workflow it neither runs nor has a record of', async () => {
-    const { base, auth } = await serve({ start: async objective => outcome(objective.id) })
+    const { base, auth } = await serve({ start: starter(['wf-run-1']) })
 
     const missing = await fetch(`${base}/workflows/wf-nobody`, { headers: auth })
     const cancel = await fetch(`${base}/workflows/wf-nobody/cancel`, { method: 'POST', headers: auth })
@@ -177,62 +258,47 @@ describe('run, status and cancel', () => {
     expect(((await missing.json()) as { error: string }).error).toBe('unknown-workflow')
   })
 
-  it('keeps concurrent workflow ids apart and refuses a duplicate id', async () => {
-    const release = new Map<string, () => void>()
+  it('keeps concurrent runs apart and refuses an id a starter handed out twice', async () => {
+    const release: (() => void)[] = []
     const { base, auth } = await serve({
-      start: async (objective) => {
+      start: starter(['wf-run-1', 'wf-run-2', 'wf-run-1'], async (record) => {
         await new Promise<void>((resolve) => {
-          release.set(objective.id, resolve)
+          release.push(resolve)
         })
-        return outcome(objective.id)
-      },
+        return outcome(record.workflowId, record.objective.id)
+      }),
     })
 
-    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
-    await fetch(`${base}/workflows`, {
-      method: 'POST', headers: auth, body: JSON.stringify({ ...OBJECTIVE, id: 'wf-2' }),
-    })
-    const duplicate = await fetch(`${base}/workflows`, {
-      method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE),
-    })
+    await post(base, auth)
+    await post(base, auth)
+    const duplicate = await post(base, auth)
 
-    expect(duplicate.status).toBe(409)
-    expect(((await fetch(`${base}/workflows/wf-1`, { headers: auth })).status)).toBe(200)
-    expect(((await fetch(`${base}/workflows/wf-2`, { headers: auth })).status)).toBe(200)
-    for (const resolve of release.values()) resolve()
-  })
-
-  it('lets a finished id be started again instead of holding 409 forever', async () => {
-    const { base, auth } = await serve({ start: async objective => outcome(objective.id) })
-
-    const first = await fetch(`${base}/workflows`, {
-      method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE),
-    })
-    await fetch(`${base}/workflows/wf-1`, { headers: auth })
-    const again = await fetch(`${base}/workflows`, {
-      method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE),
-    })
-
-    expect(first.status).toBe(202)
-    expect(again.status).toBe(202)
+    // A starter that repeats a live id is broken, and continuing would give two
+    // runs one status. The refusal is the server refusing to lose one of them.
+    expect(duplicate.code).toBe(409)
+    expect((await fetch(`${base}/workflows/wf-run-1`, { headers: auth })).status).toBe(200)
+    expect((await fetch(`${base}/workflows/wf-run-2`, { headers: auth })).status).toBe(200)
+    for (const resolve of release) resolve()
   })
 
   it('answers cancel on a finished run with its status rather than a 404', async () => {
-    const { base, auth } = await serve({ start: async objective => outcome(objective.id) })
+    const { base, auth } = await serve({ start: starter(['wf-run-1']) })
 
-    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
-    await fetch(`${base}/workflows/wf-1`, { headers: auth })
-    const canceled = await fetch(`${base}/workflows/wf-1/cancel`, { method: 'POST', headers: auth })
+    const created = await post(base, auth)
+    await fetch(`${base}/workflows/${created.status.workflowId}`, { headers: auth })
+    const canceled = await fetch(`${base}/workflows/${created.status.workflowId}/cancel`, {
+      method: 'POST', headers: auth,
+    })
 
     expect(canceled.status).toBe(200)
     expect(((await canceled.json()) as ControlWorkflowStatus).state).toBe('completed')
   })
 
   it('reports live runs on /health, not everything it has ever run', async () => {
-    const { base, auth } = await serve({ start: async objective => outcome(objective.id) })
+    const { base, auth } = await serve({ start: starter(['wf-run-1']) })
 
-    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
-    await fetch(`${base}/workflows/wf-1`, { headers: auth })
+    const created = await post(base, auth)
+    await fetch(`${base}/workflows/${created.status.workflowId}`, { headers: auth })
     const health = (await (await fetch(`${base}/health`)).json()) as { workflows: number }
 
     expect(health.workflows).toBe(0)
@@ -242,18 +308,17 @@ describe('run, status and cancel', () => {
 describe('what a restart may say', () => {
   it('surfaces an interrupted workflow instead of resuming it', async () => {
     const assessment: RestartAssessment = {
+      workflowId: 'wf-earlier',
+      objectiveId: 'obj-earlier',
       state: 'interrupted',
       verdict: 'INCONCLUSIVE',
       openStages: ['repair-1'],
       requiresWorldVerification: true,
       summary: 'a repair was in flight when the process stopped',
     }
-    const started: string[] = []
+    const seen: StartRecord[] = []
     const { base, auth } = await serve({
-      start: async (objective) => {
-        started.push(objective.id)
-        return outcome(objective.id)
-      },
+      start: starter(['wf-run-1'], undefined, seen),
       restart: async () => assessment,
     })
 
@@ -262,7 +327,10 @@ describe('what a restart may say', () => {
 
     expect(status.state).toBe('interrupted')
     expect(status.requiresWorldVerification).toBe(true)
-    expect(started).toEqual([])
+    // The durable record names the objective; the status does not invent one
+    // out of the execution id it was asked about.
+    expect(status.objectiveId).toBe('obj-earlier')
+    expect(seen).toEqual([])
   })
 })
 
@@ -270,16 +338,12 @@ describe('what disposal owes', () => {
   it('cancels every owned run and waits for quiescence before closing', async () => {
     let running = 0
     const server = new HarnessControlServer({
-      start: async (objective, signal) => {
+      start: starter(['wf-run-1'], async (record, canceled) => {
         running += 1
-        await new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => {
-            resolve()
-          }, { once: true })
-        })
+        await canceled
         running -= 1
-        return { ...outcome(objective.id), state: 'canceled', verdict: 'INCONCLUSIVE' }
-      },
+        return { ...outcome(record.workflowId, record.objective.id), state: 'canceled', verdict: 'INCONCLUSIVE' }
+      }),
     })
     const { port } = await server.listen()
     const auth = { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' }
@@ -297,14 +361,14 @@ describe('what disposal owes', () => {
 describe('what a status is allowed to carry', () => {
   it('bounds the summary and carries no provider output', async () => {
     const { base, auth, server } = await serve({
-      start: async objective => ({
-        ...outcome(objective.id),
+      start: starter(['wf-run-1'], async record => ({
+        ...outcome(record.workflowId, record.objective.id),
         summary: 'x'.repeat(2000),
-      }),
+      })),
     })
 
-    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
-    const status = await server.statusOf('wf-1')
+    const created = await post(base, auth)
+    const status = await server.statusOf(created.status.workflowId)
 
     expect(status.summary.length).toBeLessThanOrEqual(501)
     expect(JSON.stringify(status)).not.toContain('findings')
@@ -328,13 +392,8 @@ async function started(seen: readonly unknown[]): Promise<void> {
 
 describe('a start request that carries a human route override', () => {
   it('hands the override to the starter alongside the objective', async () => {
-    const seen: (StageRouteOverride | undefined)[] = []
-    const { base, auth } = await serve({
-      start: async (objective, _signal, routeOverride) => {
-        seen.push(routeOverride)
-        return outcome(objective.id)
-      },
-    })
+    const seen: StartRecord[] = []
+    const { base, auth } = await serve({ start: starter(['wf-run-1'], undefined, seen) })
     const routeOverride = {
       role: 'review',
       executor: 'codex',
@@ -342,48 +401,36 @@ describe('a start request that carries a human route override', () => {
       reasoningEffort: 'xhigh',
     }
 
-    const response = await fetch(`${base}/workflows`, {
-      method: 'POST',
-      headers: auth,
-      body: JSON.stringify({ ...OBJECTIVE, routeOverride }),
-    })
+    const response = await post(base, auth, { ...OBJECTIVE, routeOverride })
 
-    expect(response.status).toBe(202)
+    expect(response.code).toBe(202)
     await started(seen)
-    expect(seen).toEqual([routeOverride])
+    expect(seen.map(record => record.routeOverride)).toEqual([routeOverride])
   })
 
   it('starts nothing at all when the override is malformed', async () => {
-    let starts = 0
-    const { base, auth } = await serve({
-      start: async (objective) => { starts += 1; return outcome(objective.id) },
-    })
+    const seen: StartRecord[] = []
+    const { base, auth } = await serve({ start: starter(['wf-run-1'], undefined, seen) })
 
-    const response = await fetch(`${base}/workflows`, {
-      method: 'POST',
-      headers: auth,
-      body: JSON.stringify({ ...OBJECTIVE, routeOverride: { role: 'vibes', executor: 'codex' } }),
+    const response = await post(base, auth, {
+      ...OBJECTIVE,
+      routeOverride: { role: 'vibes', executor: 'codex' },
     })
 
     // A refusal, not a quiet fall back to the table: the caller asked for a
     // specific executor, and a status that said 'running' would not tell them
     // their request had been dropped.
-    expect(response.status).toBe(400)
-    expect(starts).toBe(0)
+    expect(response.code).toBe(400)
+    expect(seen).toEqual([])
   })
 
   it('runs on the profile table when no override is sent', async () => {
-    const seen: (StageRouteOverride | undefined)[] = []
-    const { base, auth } = await serve({
-      start: async (objective, _signal, routeOverride) => {
-        seen.push(routeOverride)
-        return outcome(objective.id)
-      },
-    })
+    const seen: StartRecord[] = []
+    const { base, auth } = await serve({ start: starter(['wf-run-1'], undefined, seen) })
 
-    await fetch(`${base}/workflows`, { method: 'POST', headers: auth, body: JSON.stringify(OBJECTIVE) })
+    await post(base, auth)
 
     await started(seen)
-    expect(seen).toEqual([undefined])
+    expect(seen.map(record => record.routeOverride)).toEqual([undefined])
   })
 })

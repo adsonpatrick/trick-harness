@@ -153,7 +153,7 @@ function statusOfRestart(
 ): ControlWorkflowStatus {
   return Object.freeze({
     workflowId,
-    objectiveId: workflowId,
+    objectiveId: assessment.objectiveId,
     state: assessment.state === 'interrupted' ? 'interrupted' : 'completed',
     verdict: assessment.verdict,
     summary: bounded(assessment.summary),
@@ -167,8 +167,11 @@ function statusOfRestart(
 /** One workflow this process owns. */
 interface LiveRun {
   readonly objectiveId: string
-  readonly controller: AbortController
+  /** Ends the run; the server holds this rather than the runner that obeys it. */
+  readonly cancel: (reason: string) => void
   readonly settled: Promise<ControlWorkflowStatus>
+  /** Set when this server asked for the stop, so a cancel is not read as a failure. */
+  canceled: boolean
   status: ControlWorkflowStatus
 }
 
@@ -253,7 +256,10 @@ export class HarnessControlServer {
     // the abort and the wait retires itself out of the live set, and disposal
     // would then return without having waited for the one it just canceled.
     const live = [...this.#runs.values()]
-    for (const run of live) run.controller.abort()
+    for (const run of live) {
+      run.canceled = true
+      run.cancel('the control server is being disposed')
+    }
     await Promise.allSettled(live.map(run => run.settled))
     await new Promise<void>((resolve) => {
       this.#server.close(() => {
@@ -264,40 +270,51 @@ export class HarnessControlServer {
 
   /**
    * Start one workflow this server will own.
+   *
+   * The identity comes back from the Harness, never from the payload. A caller
+   * that could name its own workflow id could address somebody else's run, or
+   * quietly continue a finished one's history; the objective it posts is what
+   * it gets to decide.
    * @param objective - The objective to run.
    * @param routeOverride - One human routing choice for a single stage, if given.
-   * @returns The status the caller sees immediately.
-   * @throws {ControlError} when a workflow of that id is already running here.
+   * @returns The status the caller sees immediately, naming the minted id.
+   * @throws {ControlError} when the Harness hands back an id already running here.
    */
   startWorkflow(objective: WorkflowObjective, routeOverride?: StageRouteOverride): ControlWorkflowStatus {
-    if (this.#runs.has(objective.id)) {
+    const started = this.#options.start(objective, routeOverride)
+    const { workflowId } = started
+    if (this.#runs.has(workflowId)) {
+      // The Harness handed back an id this server is already running under,
+      // which means its factory repeated one. The run it just started is ended
+      // and its rejection absorbed rather than left to surface as an unhandled
+      // one somewhere with no request to attribute it to.
+      started.cancel('the control server was handed a workflow id already in use')
+      started.outcome.catch(() => undefined)
       throw new ControlError('duplicate-workflow', 409, 'a workflow of that id is already running')
     }
-    const controller = new AbortController()
-    const settled = Promise.resolve()
-      .then(async () => statusOfOutcome(
-        await this.#options.start(objective, controller.signal, routeOverride),
-      ))
+    const settled = started.outcome
+      .then(outcome => statusOfOutcome(outcome))
       .catch((error: unknown) => Object.freeze({
-        ...runningStatus(objective.id, objective.id),
-        state: controller.signal.aborted ? ('canceled' as const) : ('failed' as const),
-        summary: controller.signal.aborted
+        ...runningStatus(workflowId, objective.id),
+        state: this.#runs.get(workflowId)?.canceled === true ? ('canceled' as const) : ('failed' as const),
+        summary: this.#runs.get(workflowId)?.canceled === true
           ? 'the workflow was canceled'
           : `the workflow ended without a result: ${bounded(error instanceof Error ? error.message : 'unknown failure')}`,
       }))
       .then((status) => {
-        const stored = this.#runs.get(objective.id)
+        const stored = this.#runs.get(workflowId)
         if (stored !== undefined) stored.status = status
-        this.#retire(objective.id, status)
+        this.#retire(workflowId, status)
         return status
       })
     const run: LiveRun = {
       objectiveId: objective.id,
-      controller,
+      cancel: started.cancel,
       settled,
-      status: runningStatus(objective.id, objective.id),
+      canceled: false,
+      status: runningStatus(workflowId, objective.id),
     }
-    this.#runs.set(objective.id, run)
+    this.#runs.set(workflowId, run)
     return run.status
   }
 
@@ -355,7 +372,8 @@ export class HarnessControlServer {
       if (finished !== undefined) return finished
       throw new ControlError('unknown-workflow', 404, 'no workflow of that id is running here')
     }
-    run.controller.abort()
+    run.canceled = true
+    run.cancel('the caller canceled this workflow')
     return await run.settled
   }
 
