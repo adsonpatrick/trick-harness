@@ -20,7 +20,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
+import type { EvidenceRef, StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import { HarnessControlServer } from '@trick-harness/control-server'
 import type { ControlServerOptions, ControlWorkflowStatus } from '@trick-harness/control-server'
 import {
@@ -28,10 +28,13 @@ import {
   assessRestart,
 } from '@trick-harness/engineering-workflow'
 import type {
+  DatabasePreviewCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
   StageInterpreter,
   StageSpec,
+  WorkflowDatabaseChange,
+  WorkflowDatabasePreviewInput,
   WorkflowDeliveryInput,
   WorkflowOutcome,
   WorkflowRunRequest,
@@ -46,7 +49,7 @@ import { validateProfile } from '@trick-harness/profile'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { ModelRegistry, RoutingPolicy } from '@trick-harness/routing'
 import { SupabasePreview } from '@trick-harness/supabase-preview'
-import type { SupabasePreviewOptions } from '@trick-harness/supabase-preview'
+import type { PreviewRunRequest, SupabasePreviewOptions } from '@trick-harness/supabase-preview'
 import { BundleCompositionError, composeHarnessRuntime } from './index.ts'
 import type { HarnessRuntimeBundleOptions } from './index.ts'
 
@@ -83,6 +86,24 @@ export interface HarnessWorkflowHandlers {
    * it a lifecycle that must publish is blocked rather than improvised.
    */
   readonly describeDelivery?: (input: WorkflowDeliveryInput) => Omit<DeliveryRequest, 'signal'>
+  /**
+   * Which isolated branch a schema change is verified on.
+   *
+   * Names a branch and nothing else. Where that branch lives and what
+   * authenticates to it stay in the CLI's own configuration, because a
+   * connection string that passed through here would be one a status poll or an
+   * error summary could later repeat.
+   */
+  readonly describeDatabasePreview?: (input: WorkflowDatabasePreviewInput) => Pick<PreviewRunRequest, 'branchName'>
+  /**
+   * Whether this objective changes a database, answered before the run starts.
+   *
+   * A function of the objective alone, like the plan, so a replay of the same
+   * objective is gated the same way. Answering `undefined` means the run touches
+   * no schema; answering `required` means it may not publish until an isolated
+   * preview says the migrations survive.
+   */
+  readonly databaseChange?: (objective: WorkflowObjective) => WorkflowDatabaseChange | undefined
 }
 
 /** Integration seams a profile may enable. */
@@ -257,6 +278,53 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   const supabase = options.integrations?.supabase === undefined
     ? undefined
     : new SupabasePreview(options.integrations.supabase)
+  const supabaseOptions = options.integrations?.supabase
+  const describePreview = workflow.describeDatabasePreview
+
+  /**
+   * Build the database preview capability for one run.
+   *
+   * Built per run for the same reason delivery is: what the run left in the
+   * cloud is recorded against the run that left it. Each confirmed mutation
+   * becomes a gate evidence line on the stage's verdict, naming the action and
+   * the child project ref the run already proved is not the parent — never a
+   * connection string, and never anything that authenticates.
+   * @returns The capability, or nothing when this deployment cannot verify one.
+   */
+  const databasePreviewFor = (): DatabasePreviewCapabilityPort | undefined => {
+    if (supabaseOptions === undefined || describePreview === undefined) return undefined
+    return {
+      verify: async (input, signal) => {
+        const mutations: EvidenceRef[] = []
+        const client = new SupabasePreview({
+          ...supabaseOptions,
+          onMutation: async (record) => {
+            mutations.push({
+              kind: 'gate',
+              locator: `supabase:${record.action}`,
+              summary: `${record.action} on preview project ${record.previewProjectRef}`,
+            })
+            await Promise.resolve()
+          },
+        })
+        const outcome = await client.run({ ...describePreview(input), signal })
+        const gates = outcome.gates.map((gate): EvidenceRef => ({
+          kind: 'gate',
+          locator: `supabase:${gate.name}`,
+          summary: gate.passed ? `the ${gate.name} gate passed` : `the ${gate.name} gate failed`,
+        }))
+        return {
+          status: outcome.status,
+          summary: outcome.primaryFailure === undefined
+            ? `every preview gate passed: ${outcome.completedGates.join(', ')}`
+            : `the ${outcome.primaryFailure.gate} gate stopped the run: ${outcome.primaryFailure.message}`,
+          evidence: [...gates, ...mutations],
+          findings: [],
+        }
+      },
+    }
+  }
+  const databasePreview = databasePreviewFor()
 
   const describeDelivery = workflow.describeDelivery
   const githubOptions = options.integrations?.github
@@ -349,8 +417,12 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       executors: runtime,
       journal,
       ...options.degradedExecutors === undefined ? {} : { degradedExecutors: options.degradedExecutors },
-      ...delivery === undefined ? {} : { capabilities: { delivery } },
+      capabilities: {
+        ...delivery === undefined ? {} : { delivery },
+        ...databasePreview === undefined ? {} : { databasePreview },
+      },
     })
+    const change = workflow.databaseChange?.(objective)
     const settled = runner.run({
       objective,
       interpret: workflow.interpret,
@@ -359,6 +431,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       ...workflow.diagnose === undefined ? {} : { diagnose: workflow.diagnose },
       ...workflow.repairEvidence === undefined ? {} : { repairEvidence: workflow.repairEvidence },
       ...routeOverride === undefined ? {} : { routeOverride },
+      ...change === undefined ? {} : { databaseChange: change },
     })
     runners.set(runner, settled)
     const outcome = settled.finally(() => {

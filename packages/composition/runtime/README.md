@@ -132,4 +132,10 @@ A lifecycle that must publish and finds no capability is blocked. It is not rero
 
 The capability is built once per run rather than once per composition, because the observer that writes each confirmed mutation down is the journal of the run that caused it. Every commit, push and pull request the delivery re-read from the world becomes a durable `harness/delivery` record before the next mutation is attempted, and a `harness/capability-start` record is flushed before the delivery may act at all — so a run that dies mid-push leaves a window a restart can see is open rather than a silence it has to guess about.
 
-The Supabase preview capability is composed and reachable, but is not yet wired to a workflow stage; that is the database-gate work in the same remediation.
+## A schema change is verified somewhere isolated before it is published
+
+`workflow.databaseChange` answers, from the objective alone, whether a run changes a database. When it says yes, the run may not reach delivery until `capabilities.databasePreview` has provisioned an isolated branch, applied the migrations, read them back and passed its gates. No preview composed means the run is blocked — never rerouted to an executor that could approximate one, and never pointed at a shared development database.
+
+The three outcomes stay distinct. `PASSED` publishes. `FAILED` describes the repository's migrations and ends the run as a failure. `BLOCKED` means no safe preview database could be reached at all, which is a fact about the world rather than about the work, so the run is blocked instead. The verification is ordered before delivery on purpose: a pull request is what a person reviews, and a reviewer reading a migration nobody has applied anywhere is reading a guess.
+
+`workflow.describeDatabasePreview` names the branch and nothing else. Where that branch lives and what authenticates to it stay in the CLI's own configuration. What the run left in the cloud — the branch it created, the migrations it applied, the branch it deleted — becomes gate evidence on the stage's verdict, naming the action and the child project ref; connection strings and passwords reach no durable record.

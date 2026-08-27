@@ -57,6 +57,7 @@ import type { RepairAuthorization, RepairEvidence } from './repair.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type {
+  DatabasePreviewCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
   StageFacts,
@@ -407,6 +408,9 @@ export class WorkflowRunner {
     // by a fresh delivery, so the stage that re-reads the work reads the diff a
     // person would now see rather than the one that provoked the repair.
     let delivered = false
+    // Whether the isolated preview has already passed for this run. A repair
+    // and a fresh delivery do not re-verify a schema nothing touched again.
+    let schemaVerified = false
     const availability = availabilityState()
     const humanOverride: OverrideBox = { override: request.routeOverride, spent: false }
 
@@ -443,6 +447,38 @@ export class WorkflowRunner {
       }
 
       if (stage.role === 'delivery') {
+        // The schema is verified before the branch is published, not after: a
+        // pull request is what a person reviews and a reviewer reading a
+        // migration nobody has applied anywhere is reading a guess.
+        if (request.databaseChange?.required === true && !schemaVerified) {
+          const preview = this.#options.capabilities?.databasePreview
+          if (preview === undefined) {
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external',
+              'this run changes a database, and this deployment composed no isolated preview to verify it against',
+            )
+          }
+          const verified = await this.#verifySchema(stage, objective, signal, preview)
+          stages.push(verified.facts)
+          await journal.verdict(
+            `${stage.stageId}-database`, 'verify', verified.facts.verdict, verified.facts.summary,
+            verified.facts.evidence,
+          )
+          if (verified.canceled) {
+            return await this.#end(objective, stages, repairCycles, executorStarts, 'canceled', 'INCONCLUSIVE',
+              'the run was canceled while its schema change was being verified')
+          }
+          if (verified.facts.verdict === 'BLOCKED') {
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external', verified.facts.summary,
+            )
+          }
+          if (verified.facts.verdict !== 'PASS') {
+            return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'FAIL',
+              verified.facts.summary)
+          }
+          schemaVerified = true
+        }
         const capability = this.#options.capabilities?.delivery
         if (capability === undefined) {
           return await this.#blocked(
@@ -1000,6 +1036,69 @@ export class WorkflowRunner {
           summary: canceled
             ? 'delivery was canceled before it could publish'
             : error instanceof Error ? error.message : 'delivery ended without saying why',
+          findings: [],
+          evidence: [],
+          durationMs,
+        },
+        canceled,
+      }
+    }
+  }
+
+  /**
+   * Verify the schema change on an isolated preview, with the window journaled.
+   *
+   * Like publishing, this is a bounded command sequence rather than a question
+   * put to a model, so it spends no executor-start budget. A capability that
+   * cannot reach a preview at all reports `BLOCKED`, which is a different fact
+   * from a migration that applied and then failed its checks.
+   */
+  async #verifySchema(
+    stage: StageSpec,
+    objective: WorkflowObjective,
+    signal: AbortSignal,
+    capability: DatabasePreviewCapabilityPort,
+  ): Promise<{ readonly facts: StageFacts; readonly canceled: boolean }> {
+    const { journal } = this.#options
+    const clock = this.#options.now ?? Date.now
+    const name = 'supabase-preview'
+    const stageId = `${stage.stageId}-database`
+    await journal.beginCapability(stageId, name, true)
+    const started = clock()
+    const base = { stageId, role: 'verify', executor: name, permissionMode: 'read-only' } as const
+    try {
+      const result = await capability.verify({ stageId, objective }, signal)
+      const durationMs = clock() - started
+      await journal.endCapability(
+        stageId, name, result.status === 'PASSED' ? 'completed' : 'error', durationMs,
+        result.status === 'PASSED' ? undefined : `preview-${result.status.toLowerCase()}`,
+      )
+      return {
+        facts: {
+          ...base,
+          verdict: result.status === 'PASSED' ? 'PASS' : result.status === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
+          summary: result.summary,
+          findings: result.findings,
+          evidence: result.evidence,
+          durationMs,
+        },
+        canceled: false,
+      }
+    }
+    catch (error) {
+      const durationMs = clock() - started
+      const canceled = signal.aborted
+      await journal.endCapability(
+        stageId, name, canceled ? 'aborted' : 'error', durationMs,
+        canceled ? 'canceled' : 'preview-error',
+      )
+      return {
+        facts: {
+          ...base,
+          verdict: canceled ? 'INCONCLUSIVE' : 'BLOCKED',
+          summary: canceled
+            ? 'the schema verification was canceled before it finished'
+            : error instanceof Error ? error.message : 'the preview ended without saying why',
           findings: [],
           evidence: [],
           durationMs,

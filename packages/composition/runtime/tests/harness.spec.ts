@@ -137,6 +137,26 @@ function deliveringSpawn(spec: SubprocessSpawnSpec): SubprocessHandle {
   return answered('')
 }
 
+const PARENT_REF = 'abcdefghijklmnop'
+const PREVIEW_REF = 'qrstuvwxyzabcdef'
+
+/**
+ * Every command an isolated preview run issues, answered without a cloud.
+ * @param spec - the command the capability constructed.
+ * @returns the handle.
+ */
+function previewSpawn(spec: SubprocessSpawnSpec): SubprocessHandle {
+  if (spec.argv.includes('branches') && spec.argv.includes('get')) {
+    return answered(JSON.stringify({
+      id: 'br_1',
+      project_ref: PREVIEW_REF,
+      status: 'MIGRATIONS_PASSED',
+      db_url: `postgresql://postgres:s3cr3t@db.${PREVIEW_REF}.supabase.co:5432/postgres`,
+    }))
+  }
+  return answered('')
+}
+
 /**
  * Compose one Harness the tests will dispose.
  * @param options - the composition options.
@@ -689,5 +709,64 @@ describe('publishing from a composed deployment', () => {
 
     expect(outcome.state).toBe('blocked')
     expect(outcome.summary).toContain('no delivery capability')
+  })
+})
+
+describe('a composed run that changes a database', () => {
+  /**
+   * Options for a deployment that verifies schema changes on an isolated branch.
+   * @param started - where provider starts are recorded.
+   * @param describePreview - whether the deployment says which branch to use.
+   * @returns the options.
+   */
+  function withPreview(
+    started: ExecutorStartRequest[],
+    describePreview: boolean,
+  ): HarnessCompositionOptions {
+    const base = baseOptions(
+      profileEnabling([GITHUB_DELIVERY_CAPABILITY, SUPABASE_PREVIEW_CAPABILITY]),
+      started,
+    )
+    return {
+      ...base,
+      workflow: {
+        ...base.workflow,
+        databaseChange: () => ({ required: true, migrationPaths: ['supabase/migrations/0001_thing.sql'] }),
+        ...describePreview ? { describeDatabasePreview: () => ({ branchName: 'preview-run' }) } : {},
+      },
+      integrations: {
+        github: { cwd: '/repo', spawn: deliveringSpawn },
+        supabase: { cwd: '/repo', spawn: previewSpawn, projectRef: PARENT_REF, pollIntervalMs: 1, readyTimeoutMs: 50 },
+      },
+    }
+  }
+
+  it('verifies the migrations on an isolated branch before it publishes anything', async () => {
+    const started: ExecutorStartRequest[] = []
+    const options = withPreview(started, true)
+    const harness = compose(options)
+
+    const outcome = await harness.run(OBJECTIVE)
+    const projection = projectWorkflow(options.session.events, outcome.workflowId)
+
+    expect(outcome.verdict).toBe('PASS')
+    const ids = outcome.stages.map(stage => stage.stageId)
+    expect(ids.indexOf('delivery-1-database')).toBeLessThan(ids.indexOf('delivery-1'))
+    expect(projection.openCapabilities).toEqual([])
+    // What the run left in the cloud is recorded, and what reaches it is not.
+    const events = JSON.stringify(options.session.events)
+    expect(events).toContain('supabase:preview-created')
+    expect(events).not.toContain('postgresql://')
+    expect(events).not.toContain('s3cr3t')
+  })
+
+  it('blocks a schema change when the deployment named no branch to verify it on', async () => {
+    const started: ExecutorStartRequest[] = []
+    const harness = compose(withPreview(started, false))
+
+    const outcome = await harness.run(OBJECTIVE)
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no isolated preview')
   })
 })

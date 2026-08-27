@@ -18,7 +18,7 @@ import {
   permissionModeFor,
   planStages,
 } from '../src/index.ts'
-import type { DeliveryCapabilityPort, StageSpec } from '../src/index.ts'
+import type { DatabasePreviewCapabilityPort, DeliveryCapabilityPort, StageSpec } from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
   policyVersion: 'test-v1.0.0',
@@ -1297,5 +1297,129 @@ describe('who is allowed to publish the work', () => {
     // Implement and verify. The budget bounds how often a model is asked, and
     // a bounded command sequence is not one of those times.
     expect(outcome.executorStarts).toBe(2)
+  })
+})
+
+describe('a run that changes a database', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+  const CHANGE = { required: true, migrationPaths: ['supabase/migrations/0001_thing.sql'] } as const
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  })
+
+  /**
+   * A runner with a scripted preview.
+   * @param databasePreview - the preview capability, if any.
+   * @param delivered - where delivery stage ids are recorded.
+   * @returns the runner.
+   */
+  function runnerWith(
+    databasePreview: DatabasePreviewCapabilityPort | undefined,
+    delivered: string[],
+  ): WorkflowRunner {
+    return new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: {
+        delivery: deliveryStub(delivered),
+        ...databasePreview === undefined ? {} : { databasePreview },
+      },
+    })
+  }
+
+  it('blocks before publishing when no isolated preview was composed', async () => {
+    const delivered: string[] = []
+    const outcome = await runnerWith(undefined, delivered).run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no isolated preview')
+    expect(delivered).toEqual([])
+    // Nothing stood in for it: no executor was asked to touch a database.
+    expect(JSON.stringify(session.events)).not.toContain('supabase')
+  })
+
+  it('never publishes a schema change whose migrations did not survive the preview', async () => {
+    const delivered: string[] = []
+    const outcome = await runnerWith({
+      verify: async () => ({
+        status: 'FAILED',
+        summary: 'the lint gate failed on the preview branch',
+        evidence: [],
+        findings: [],
+      }),
+    }, delivered).run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    expect(outcome.state).toBe('failed')
+    expect(outcome.verdict).toBe('FAIL')
+    expect(delivered).toEqual([])
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+
+  it('blocks rather than fails when the preview could not be reached at all', async () => {
+    const delivered: string[] = []
+    const outcome = await runnerWith({
+      verify: async () => ({
+        status: 'BLOCKED',
+        summary: 'no preview branch could be created for this run',
+        evidence: [],
+        findings: [],
+      }),
+    }, delivered).run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(delivered).toEqual([])
+  })
+
+  it('verifies the schema after the work is read and before the branch is published', async () => {
+    const order: string[] = []
+    const delivered: string[] = []
+    executors = createExecutorRuntime()
+    executors.register(provider('builder', async () => { order.push('implement'); return passing('builder') }))
+    executors.register(provider('reviewer', async () => { order.push('verify'); return passing('reviewer') }))
+    const runner = runnerWith({
+      verify: async () => {
+        order.push('supabase-preview')
+        return { status: 'PASSED', summary: 'the migrations applied and every gate passed', evidence: [], findings: [] }
+      },
+    }, delivered)
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(order).toEqual(['implement', 'verify', 'supabase-preview'])
+    expect(delivered).toEqual(['delivery-1'])
+    expect(outcome.stages.map(stage => stage.stageId)).toContain('delivery-1-database')
+    // A bounded command sequence, so the budget that counts questions to models
+    // is untouched by it.
+    expect(outcome.executorStarts).toBe(2)
+  })
+
+  it('leaves a run that changes no database alone', async () => {
+    const delivered: string[] = []
+    let asked = 0
+    const outcome = await runnerWith({
+      verify: async () => {
+        asked += 1
+        return { status: 'PASSED', summary: 'never reached', evidence: [], findings: [] }
+      },
+    }, delivered).run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+
+    expect(outcome.state).toBe('completed')
+    expect(asked).toBe(0)
+    expect(delivered).toEqual(['delivery-1'])
   })
 })

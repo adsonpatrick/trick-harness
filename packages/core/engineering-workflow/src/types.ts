@@ -129,6 +129,15 @@ export interface WorkflowRunRequest {
    * focused green run, because silence is not evidence.
    */
   readonly repairEvidence?: (stage: StageSpec, executor: string, result: ExecutorResult) => RepairEvidence
+  /**
+   * That this run changes a database, so it may not publish unverified.
+   *
+   * Declared by the caller rather than inferred from a diff: a runtime guessing
+   * at which files are migrations would sometimes guess that a schema change is
+   * not one, and the failure mode of that guess is a migration reaching a real
+   * database with nothing having read it back.
+   */
+  readonly databaseChange?: WorkflowDatabaseChange
 }
 
 /**
@@ -168,6 +177,20 @@ export interface WorkflowDeliveryResult {
  */
 export interface DeliveryCapabilityPort {
   deliver(input: WorkflowDeliveryInput, signal: AbortSignal): Promise<WorkflowDeliveryResult>
+}
+
+/**
+ * A run that changes a database, and says so before it publishes anything.
+ *
+ * Carries paths, never credentials. Where the isolated branch lives, who may
+ * reach it and what authenticates to it are the capability's own configuration,
+ * read from the places the CLI already reads them; a connection string that
+ * arrived in a run request would be one a journal, a status poll or an error
+ * summary could later repeat.
+ */
+export interface WorkflowDatabaseChange {
+  readonly required: true
+  readonly migrationPaths: readonly string[]
 }
 
 /** What the runtime tells a database preview capability about the stage. */
