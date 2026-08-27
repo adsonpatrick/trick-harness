@@ -425,9 +425,11 @@ describe('what settling a command means', () => {
     const leak = new Error('gh: token ghp_secretsecretsecret rejected')
     const capability = new GitHubDelivery({ cwd: work, spawn: () => lingering(Promise.reject(leak)) })
 
-    await expect(capability.inspect()).rejects.not.toThrow(/ghp_/)
-    await capability.inspect().catch((error: unknown) => {
-      expect(String((error as Error).message)).not.toContain('ghp_')
-    })
+    const error = await capability.inspect().catch((caught: unknown) => caught as Error)
+
+    // The cause is dropped rather than wrapped: this message reaches a durable
+    // event, and a rejection out of `gh` can carry an authentication hint.
+    expect(error.message).not.toContain('ghp_')
+    expect(error.message).toContain('could not be reaped')
   })
 })
