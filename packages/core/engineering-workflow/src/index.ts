@@ -58,7 +58,7 @@ import { planPullRequestStages } from './lifecycle.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type {
-  DatabasePreviewCapabilityPort,
+  DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
   StageFacts,
@@ -448,14 +448,15 @@ export class WorkflowRunner {
         // pull request is what a person reviews and a reviewer reading a
         // migration nobody has applied anywhere is reading a guess.
         if (request.databaseChange?.required === true && !schemaVerified) {
-          const preview = this.#options.capabilities?.databasePreview
-          if (preview === undefined) {
+          const verifier = this.#options.capabilities?.databaseVerification
+          if (verifier === undefined) {
             return await this.#blocked(
               objective, stages, repairCycles, executorStarts, 'external',
-              'this run changes a database, and this deployment composed no isolated preview to verify it against',
+              'this run changes a database, and this deployment composed no database verification capability '
+              + 'to verify it against',
             )
           }
-          const verified = await this.#verifySchema(stage, objective, signal, preview)
+          const verified = await this.#verifySchema(stage, objective, signal, verifier)
           stages.push(verified.facts)
           await journal.verdict(
             `${stage.stageId}-database`, 'verify', verified.facts.verdict, verified.facts.summary,
@@ -1053,22 +1054,23 @@ export class WorkflowRunner {
   }
 
   /**
-   * Verify the schema change on an isolated preview, with the window journaled.
+   * Verify the schema change against a real database, with the window journaled.
    *
    * Like publishing, this is a bounded command sequence rather than a question
    * put to a model, so it spends no executor-start budget. A capability that
-   * cannot reach a preview at all reports `BLOCKED`, which is a different fact
-   * from a migration that applied and then failed its checks.
+   * cannot reach a database at all reports `BLOCKED`, which is a different fact
+   * from a migration that applied and then failed its checks. Which database it
+   * reached is the capability's own business.
    */
   async #verifySchema(
     stage: StageSpec,
     objective: WorkflowObjective,
     signal: AbortSignal,
-    capability: DatabasePreviewCapabilityPort,
+    capability: DatabaseVerificationCapabilityPort,
   ): Promise<{ readonly facts: StageFacts; readonly canceled: boolean }> {
     const { journal } = this.#options
     const clock = this.#options.now ?? Date.now
-    const name = 'supabase-preview'
+    const name = 'database-verification'
     const stageId = `${stage.stageId}-database`
     await journal.beginCapability(stageId, name, true)
     const started = clock()
@@ -1078,7 +1080,7 @@ export class WorkflowRunner {
       const durationMs = clock() - started
       await journal.endCapability(
         stageId, name, result.status === 'PASSED' ? 'completed' : 'error', durationMs,
-        result.status === 'PASSED' ? undefined : `preview-${result.status.toLowerCase()}`,
+        result.status === 'PASSED' ? undefined : `database-${result.status.toLowerCase()}`,
       )
       return {
         facts: {
@@ -1097,7 +1099,7 @@ export class WorkflowRunner {
       const canceled = signal.aborted
       await journal.endCapability(
         stageId, name, canceled ? 'aborted' : 'error', durationMs,
-        canceled ? 'canceled' : 'preview-error',
+        canceled ? 'canceled' : 'database-error',
       )
       return {
         facts: {
@@ -1105,7 +1107,7 @@ export class WorkflowRunner {
           verdict: canceled ? 'INCONCLUSIVE' : 'BLOCKED',
           summary: canceled
             ? 'the schema verification was canceled before it finished'
-            : error instanceof Error ? error.message : 'the preview ended without saying why',
+            : error instanceof Error ? error.message : 'the database verification ended without saying why',
           findings: [],
           evidence: [],
           durationMs,

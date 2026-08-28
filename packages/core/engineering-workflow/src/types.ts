@@ -193,25 +193,45 @@ export interface WorkflowDatabaseChange {
   readonly migrationPaths: readonly string[]
 }
 
-/** What the runtime tells a database preview capability about the stage. */
-export interface WorkflowDatabasePreviewInput {
+/** What the runtime tells a database verification capability about the stage. */
+export interface WorkflowDatabaseVerificationInput {
   readonly stageId: string
   readonly objective: WorkflowObjective
 }
 
-/** What a database preview capability reports back. */
-export interface WorkflowDatabasePreviewResult {
-  /** `PASSED`, `FAILED` on a branch that really existed, or `BLOCKED`. */
+/** What a database verification capability reports back. */
+export interface WorkflowDatabaseVerificationResult {
+  /** `PASSED`, `FAILED` against a database that really existed, or `BLOCKED`. */
   readonly status: 'PASSED' | 'FAILED' | 'BLOCKED'
   readonly summary: string
   readonly evidence: readonly EvidenceRef[]
   readonly findings: readonly Finding[]
 }
 
-/** Validating migrations is deterministic too, and bounded the same way. */
-export interface DatabasePreviewCapabilityPort {
-  verify(input: WorkflowDatabasePreviewInput, signal: AbortSignal): Promise<WorkflowDatabasePreviewResult>
+/**
+ * Validating migrations is deterministic too, and bounded the same way.
+ *
+ * How the migrations are validated is the deployment's choice, not the
+ * runtime's: an isolated preview branch, a shared development database reached
+ * through a fixed project command, or anything else that can answer in these
+ * bounded terms. The runtime asks the question and reads the verdict; it never
+ * learns which strategy answered it.
+ */
+export interface DatabaseVerificationCapabilityPort {
+  verify(
+    input: WorkflowDatabaseVerificationInput,
+    signal: AbortSignal,
+  ): Promise<WorkflowDatabaseVerificationResult>
 }
+
+/** @deprecated Use {@link WorkflowDatabaseVerificationInput}. Kept for one cycle. */
+export type WorkflowDatabasePreviewInput = WorkflowDatabaseVerificationInput
+
+/** @deprecated Use {@link WorkflowDatabaseVerificationResult}. Kept for one cycle. */
+export type WorkflowDatabasePreviewResult = WorkflowDatabaseVerificationResult
+
+/** @deprecated Use {@link DatabaseVerificationCapabilityPort}. Kept for one cycle. */
+export type DatabasePreviewCapabilityPort = DatabaseVerificationCapabilityPort
 
 /**
  * The deterministic capabilities a run may reach, if a deployment supplied them.
@@ -221,5 +241,5 @@ export interface DatabasePreviewCapabilityPort {
  */
 export interface WorkflowCapabilities {
   readonly delivery?: DeliveryCapabilityPort
-  readonly databasePreview?: DatabasePreviewCapabilityPort
+  readonly databaseVerification?: DatabaseVerificationCapabilityPort
 }

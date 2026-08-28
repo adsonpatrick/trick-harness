@@ -28,7 +28,7 @@ import {
   assessRestart,
 } from '@trick-harness/engineering-workflow'
 import type {
-  DatabasePreviewCapabilityPort,
+  DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
   StageInterpreter,
@@ -309,7 +309,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
    * connection string, and never anything that authenticates.
    * @returns The capability, or nothing when this deployment cannot verify one.
    */
-  const databasePreviewFor = (): DatabasePreviewCapabilityPort | undefined => {
+  const databasePreviewFor = (): DatabaseVerificationCapabilityPort | undefined => {
     if (supabaseOptions === undefined || describePreview === undefined) return undefined
     return {
       verify: async (input, signal) => {
@@ -437,7 +437,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       ...options.degradedExecutors === undefined ? {} : { degradedExecutors: options.degradedExecutors },
       capabilities: {
         ...delivery === undefined ? {} : { delivery },
-        ...databasePreview === undefined ? {} : { databasePreview },
+        ...databasePreview === undefined ? {} : { databaseVerification: databasePreview },
       },
     })
     const change = workflow.databaseChange?.(objective)

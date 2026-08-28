@@ -781,13 +781,13 @@ describe('a composed run that changes a database', () => {
     expect(events).not.toContain('s3cr3t')
   })
 
-  it('blocks a schema change when the deployment named no branch to verify it on', async () => {
+  it('blocks a schema change when the deployment composed no way to verify it', async () => {
     const started: ExecutorStartRequest[] = []
     const harness = compose(withPreview(started, false))
 
     const outcome = await harness.run(OBJECTIVE)
 
     expect(outcome.state).toBe('blocked')
-    expect(outcome.summary).toContain('no isolated preview')
+    expect(outcome.summary).toContain('no database verification capability')
   })
 })
