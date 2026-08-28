@@ -115,15 +115,28 @@ and the affected gates were rerun after those.
 
 ## 6. Known-good SHA
 
-The reviewed tree is commit `8551738cfa14173f05e34f388335ad8c4978cb0c` — the commit that added everything above.
-This file's own commit adds nothing but this paragraph, so the two trees differ by
-documentation alone.
+The tree that was reviewed is commit `8551738cfa14173f05e34f388335ad8c4978cb0c`. The
+review of it raised six findings — a `deliveryBranch` that derived refnames git refuses and
+bounded them at nothing, a finding's own evidence list left unredacted, an unbounded commit
+subject, an `AbortSignal` documented as stopping a started host and never wired to one, a
+stranded plugin fiber on a failed session-store attach, and a cast asserting the control
+block's shape. All six were fixed in `4d820dd0fb`, with a test pinning each, and the whole
+branch was merged as `c9f9cc168b`.
 
-Plan C and its successors may pin exactly one initial SHA, and it is:
+Every gate in section 1 was rerun on the fixed tree: lint, typecheck, 113 host tests and
+2073 tests across 92 files, all passing. The catalogue, HTTP smoke and quiescence evidence
+in sections 2 and 3 was produced against the reviewed tree and is unaffected by the six
+fixes, none of which touch a catalogue read, the listener or disposal ordering.
+
+Plan C and its successors may pin exactly one initial SHA, and it is the merged head — the
+reviewed tree plus the fixes its review required:
 
 ```text
-8551738cfa14173f05e34f388335ad8c4978cb0c
+c9f9cc168b
 ```
+
+Pinning `8551738cfa` instead would pin the defects above, which is why that SHA is recorded
+here as reviewed rather than as known-good.
 
 Anything not listed as proven above is not proven at this SHA. In particular the NeuroVia
 database canary is pending Plan C, and the Supabase Preview path is unproven for want of
