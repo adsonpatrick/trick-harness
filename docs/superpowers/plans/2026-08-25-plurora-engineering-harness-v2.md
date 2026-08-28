@@ -2,27 +2,30 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement these plans task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Operate Plurora through the reusable Trick Harness runtime while preserving explicit project policy, deterministic mutation authority, native OpenCode/Codex authentication, approved-artifact traceability, Definition of Done certification, and evidence-first activation.
+**Goal:** Operate Plurora through the reusable Trick Harness runtime while preserving explicit project policy, deterministic mutation authority, native OpenCode/Codex authentication, approved-artifact traceability, Definition of Done certification, deterministic change-impact/risk enforcement, and evidence-first activation.
 
-## Current Status — Runtime Built, Deployment/Conformance Enablement Pending
+## Current Status — Runtime Built, Deployment/Conformance/Impact Enablement Pending
 
-Plans R, A, B and the Harness-side Plan D verification/remediation work have been implemented and merged in `adsonpatrick/trick-harness`. Remaining work is: cloud-development/host enablement, the newly approved Implementation Conformance & DoD gate, the NeuroVia installation/wiring, then final Plan D reconciliation and activation.
+Plans R, A, B and the Harness-side Plan D verification/remediation work have been implemented and merged in `adsonpatrick/trick-harness`. Remaining work is: cloud-development/host enablement, Implementation Conformance & DoD, deterministic Change Impact/Risk enforcement, the NeuroVia installation/wiring, then final Plan D reconciliation and activation.
 
 The active database decision remains: `neurovia-dev` (`uljaajwwnygopsyvwsre`) is the explicitly authorized Supabase Cloud **development** database. Preview Branches remain an optional future isolation strategy, not a prerequisite or fallback.
 
 The active PR-readiness decision added on 2026-08-28 is: a PR cannot become `PR_READY` unless a first-class read-only `conformance` stage proves the final published implementation satisfies the approved Spec, approved Superpowers Plan and applicable Plurora DoD, followed by fresh final verification.
+
+The active change-impact decision added on 2026-08-28 is: planned and actual repository change sets deterministically drive effective risk, QA/Security requirements, database verification, routing facts and evidence profiles. Classification may preserve or raise risk; it may never lower an approved or previously observed risk floor.
 
 ## Normative Documents — Precedence
 
 Apply these in order:
 
 1. explicit owner decisions;
-2. `docs/superpowers/specs/2026-08-28-harness-v2-implementation-conformance-dod-amendment.md` for approved-artifact traceability, conformance/DoD certification, routing and `PR_READY`;
-3. `docs/superpowers/specs/2026-08-27-neurovia-harness-deployment-cloud-dev-amendment.md` for NeuroVia deployment, model registry and cloud-development DB authority;
-4. `docs/superpowers/specs/2026-08-27-harness-v2-scope-amendment.md` for Claude removal and historical Preview-entitlement scope where not superseded;
-5. `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-reusable-core-amendment.md` for reusable-core/profile boundaries;
-6. `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-design.md` for the base V2 architecture;
-7. the active plan overlays below before historical Plans C/D where they conflict.
+2. `docs/superpowers/specs/2026-08-28-harness-v2-change-impact-risk-policy-enforcement-amendment.md` for planned/actual impact, monotonic risk, executable QA/Security policy, routing facts and DB/evidence-profile enforcement;
+3. `docs/superpowers/specs/2026-08-28-harness-v2-implementation-conformance-dod-amendment.md` for approved-artifact traceability, conformance/DoD certification, routing and `PR_READY`;
+4. `docs/superpowers/specs/2026-08-27-neurovia-harness-deployment-cloud-dev-amendment.md` for NeuroVia deployment, model registry and cloud-development DB authority;
+5. `docs/superpowers/specs/2026-08-27-harness-v2-scope-amendment.md` for Claude removal and historical Preview-entitlement scope where not superseded;
+6. `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-reusable-core-amendment.md` for reusable-core/profile boundaries;
+7. `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-design.md` for the base V2 architecture;
+8. the active plan overlays below before historical Plans C/D where they conflict.
 
 ## Active Plan Graph
 
@@ -46,8 +49,14 @@ E. Trick cloud-dev / Plurora host enablement
 F. Implementation Conformance & DoD gate
               |
               v
+G. Change Impact / Risk / Policy Enforcement
+              |
+              v
+H. GitHub Harness Certification Gate (separate plan to be authored/approved)
+              |
+              v
 C*. NeuroVia installation
-    + Conformance/DoD wiring overlay
+    + Conformance/DoD + impact wiring
               |
               v
 D11/D12. Final pin reconciliation + V2 activation
@@ -93,7 +102,7 @@ Real OpenCode, Codex, GitHub delivery, replay/quiescence and Supabase fail-close
 
 Adds the generic database-verification seam, keeps Preview as an optional strategy, creates the private runnable Plurora host inside the Trick checkout, validates native product model ids and adapts the fixed NeuroVia cloud DB verifier.
 
-Any SHA recorded at the end of Plan E is **intermediate** after the 2026-08-28 conformance decision. NeuroVia may pin only the final independently reviewed post-Plan-F SHA.
+Any SHA recorded at the end of Plan E is intermediate. NeuroVia may pin only the final independently reviewed SHA after Plans F/G and the certification-control work that precedes installation.
 
 ## Pending Plan F — Implementation Conformance & Definition of Done
 
@@ -113,6 +122,26 @@ Plan F adds:
 
 The current deployment intent maps `codex.balanced` to the Terra class and `codex.frontier` to the Sol class, while actual product-native ids and supported efforts are discovered/validated from the authenticated Codex `model/list` catalogue.
 
+## Pending Plan G — Change Impact, Risk & Policy Enforcement
+
+`2026-08-28-trick-harness-change-impact-risk-policy-enforcement.md`
+
+Plan G adds:
+
+- reusable deterministic `@trick-harness/change-impact` mechanism using profile-owned Picomatch path rules;
+- planned impact from the exact approved Superpowers Plan write set before mutation;
+- actual impact from the published Git branch diff before certification and after every repair/redelivery;
+- monotonic effective risk `max(objective, planned, actual)`;
+- accumulated surfaces, task classes, required capabilities and evidence-profile IDs;
+- factual write volume from the change set while preserving read-only `none`;
+- executable QA/Security policy resolution so matching profile rows actually add/strengthen certifying stages;
+- database-mutation detection that cannot be disabled by omitted caller metadata;
+- repair/redelivery recertification that may preserve or strengthen but never weaken requirements;
+- bounded `unplannedPaths` evidence for Review/Conformance;
+- journal/control visibility for impact facts without raw diffs, file contents or reasoning.
+
+Plan G requires Plan E and Plan F complete and independently reviewed.
+
 ## Pending Plan C* — NeuroVia Installation
 
 Primary installation overlay:
@@ -123,9 +152,11 @@ Additional mandatory conformance wiring overlay:
 
 `2026-08-28-neurovia-conformance-dod-wiring.md`
 
-Execute both in the same NeuroVia integration branch. The conformance overlay requires `/implement` to identify the exact approved Spec and Plan, computes SHA-256 deterministically under the active worktree, sends those references through the bounded bridge, rejects path/symlink escape, updates `pr-readiness` to consume Harness conformance, and proves with a real fixture that an intentionally missing planned task prevents `PR_READY`.
+Execute both in the same NeuroVia integration branch only after the final reviewed control-plane SHA is available. The conformance overlay requires `/implement` to identify the exact approved Spec and Plan, computes SHA-256 deterministically under the active worktree, sends those references through the bounded bridge, rejects path/symlink escape, updates `pr-readiness` to consume Harness conformance, and proves with a real fixture that an intentionally missing planned task prevents `PR_READY`.
 
-The installed topology remains:
+Plan C* must additionally supply the project facts Plan G consumes: protected branch identity, exact approved Plan, actual Git worktree/diff context and project evidence-profile mappings. It must not duplicate Plurora risk/routing policy.
+
+The installed topology becomes:
 
 ```text
 OpenCode TUI in neuro-via
@@ -136,7 +167,7 @@ NeuroVia client/launcher
         |
         | loopback HTTP
         v
-exact post-Plan-F Trick Harness checkout
+exact post-control-plane Trick Harness checkout
         |
         +-- Plurora host
         |    +-- profile=plurora
@@ -144,6 +175,8 @@ exact post-Plan-F Trick Harness checkout
         |    +-- OpenCode + Codex
         |    +-- GitHubDelivery
         |    +-- project DB verification
+        |    +-- planned/actual change-impact resolver
+        |    +-- policy-driven QA/Security selection
         |    +-- conformance / DoD certification
         |
         v
@@ -159,7 +192,7 @@ configured project ref=uljaajwwnygopsyvwsre
 => neurovia-dev is the only automatic development DB mutation target
 ```
 
-A DB-changing workflow must verify target identity, serialize mutation, reconcile migration history, refuse unexplained drift, dry-run/apply/re-read migrations, run remote lint, pgTAP, RLS allow+deny, applicable integration/security checks and durable evidence. No canonical local Docker/Supabase/Postgres, arbitrary remote target, production fallback, automatic migration repair, remote reset or Dashboard-only schema authority is permitted.
+A DB-changing workflow must verify target identity, serialize mutation, reconcile migration history, refuse unexplained drift, dry-run/apply/re-read migrations, run remote lint, pgTAP, RLS allow+deny, applicable integration/security checks and durable evidence. After Plan G, trusted planned/actual change impact may require this DB gate even when caller metadata omitted an explicit DB-change declaration. No canonical local Docker/Supabase/Postgres, arbitrary remote target, production fallback, automatic migration repair, remote reset or Dashboard-only schema authority is permitted.
 
 Future `neurovia-prod` remains a separate authority boundary requiring a separately approved production design.
 
@@ -183,20 +216,21 @@ high/critical -> codex.frontier, effort=xhigh
 Codex unavailable -> opencode.reasoning-fast, degraded assurance
 ```
 
-The host validates that the resolved Codex models actually advertise the requested efforts through native `model/list`; it does not silently downgrade effort. High/critical cannot reach `PR_READY` when fallback collapses conformance onto the OpenCode implementation executor and therefore fails `cross-executor-required` independence.
+After Plan G, the `risk` fed to this routing is the effective monotonic risk from approved objective + planned impact + actual published impact, not caller risk in isolation. The host validates that the resolved Codex models actually advertise the requested efforts through native `model/list`; it does not silently downgrade effort. High/critical cannot reach `PR_READY` when fallback collapses conformance onto the OpenCode implementation executor and therefore fails `cross-executor-required` independence.
 
 ## Final PR Readiness Meaning
 
-After Plan F, `PR_READY` means all of the following are true for the same final published branch state:
+After Plans F/G, `PR_READY` means all of the following are true for the same final published branch state:
 
 ```text
 implementation completed
 AND required verification passed
 AND code review passed
-AND applicable QA passed
-AND applicable security passed
+AND applicable QA selected from effective change impact passed
+AND applicable security selected from effective change impact passed
 AND approved Spec identity matches
 AND approved Plan identity matches
+AND planned/actual impact facts are current for the published branch
 AND every Spec acceptance criterion is accounted for
 AND every planned Task is accounted for
 AND every baseline/project DoD obligation is accounted for
@@ -205,19 +239,16 @@ AND verify-final verdict = PASS
 AND no confirmed material finding remains
 ```
 
-A green CI run or worker completion claim cannot compensate for `MISSING`, `PARTIAL`, `FAIL`, `BLOCKED` or `INCONCLUSIVE` mandatory conformance evidence.
+A green CI run, low caller-provided risk or worker completion claim cannot compensate for a stronger classified surface or for `MISSING`, `PARTIAL`, `FAIL`, `BLOCKED` or `INCONCLUSIVE` mandatory conformance evidence.
 
 ## Final Activation
 
-After Plan E, Plan F and both Plan C* overlays are complete:
+After Plans E, F, G, the separately approved GitHub certification control, and both Plan C* overlays are complete:
 
-1. reconcile `neuro-via/plurora-harness.json` to the final independently reviewed **post-Plan-F** Trick Harness SHA;
+1. reconcile `neuro-via/plurora-harness.json` to the final independently reviewed post-control-plane Trick Harness SHA;
 2. run bridge health and a real OpenCode workflow with approved Spec/Plan artifact hashes;
-3. prove an intentionally missing fixture Plan task prevents `PR_READY`, then prove repaired/re-certified fixture reaches readiness only after conformance + final verification;
-4. collect cloud-development DB evidence when a real migration is present, otherwise record target/history/dry-run evidence without manufacturing a migration;
-5. verify no TUI push authority, no global model-config mutation, no local DB canonical path and no committed secrets;
-6. complete Plan D Tasks 11/12 and human-controlled merge/activation.
-
-## Completion Contract
-
-Harness V2 is activated for Plurora only when the final NeuroVia pin references the independently reviewed post-Plan-F Trick Harness SHA; the runnable host starts from that exact clean checkout; native model/effort mappings validate; OpenCode can run/status/cancel through the bounded bridge; `neurovia-dev` is the sole serialized drift-safe cloud development DB target; production remains outside automatic authority; approved Spec/Plan identities are pinned per implementation run; deterministic conformance accounts for every required Spec criterion, Plan task and DoD row; `PR_READY` requires conformance PASS plus final verification PASS; all retained acceptance criteria, reusable-core criteria, ND1-ND12 and CF1-CF14 have direct evidence; and no confirmed material finding remains unresolved.
+3. prove planned and actual change impact are recorded, and an intentionally under-classified auth/database fixture is escalated to the correct gates;
+4. prove an intentionally missing fixture Plan task prevents `PR_READY`, then prove repaired/re-certified fixture reaches readiness only after policy-driven certification, conformance and final verification;
+5. collect cloud-development DB evidence when a real migration is present, otherwise record target/history/dry-run evidence without manufacturing a migration;
+6. verify no TUI push authority, no global model-config mutation, no local DB canonical path and no committed secrets;
+7. complete Plan D Tasks 11/12 and human-controlled merge/activation.
