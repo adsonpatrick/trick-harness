@@ -37,6 +37,7 @@ const EXPECTED_ROLES = [
   'review',
   'security',
   'qa',
+  'conformance',
   'delivery',
 ]
 

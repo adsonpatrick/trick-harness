@@ -22,6 +22,7 @@ export const ROLES = [
   'review',
   'security',
   'qa',
+  'conformance',
   'delivery',
 ] as const
 
@@ -35,7 +36,9 @@ export type Role = typeof ROLES[number]
  * edit would blur diagnosis into repair, and a reviewer that could edit would
  * be reviewing its own work. Repair is a separate stage with its own run.
  */
-export const READ_ONLY_ROLES: readonly Role[] = ['refine', 'plan', 'debug', 'verify', 'review', 'security', 'qa']
+export const READ_ONLY_ROLES: readonly Role[] = [
+  'refine', 'plan', 'debug', 'verify', 'review', 'security', 'qa', 'conformance',
+]
 
 /** How much work a task represents, independent of how risky it is. */
 export const WORKLOADS = ['light', 'medium', 'heavy'] as const
@@ -313,6 +316,30 @@ export interface RouteDecision {
   readonly fallbackFrom?: string
 }
 
+/**
+ * One approved document, named by where it lives and what it said.
+ *
+ * The hash is the identity, not the path: a plan that was approved and then
+ * edited is a different plan, and a conformance judgement against the edited
+ * text would be answering a question nobody approved. The document itself is
+ * never carried here — it is read from the workspace at the path, and the hash
+ * is what says the text read back is the text that was approved.
+ */
+export interface ApprovedArtifactRef {
+  /** Repository-relative path; never absolute and never traversing upward. */
+  readonly path: string
+  /** Lowercase 64-hex SHA-256 of the approved document's bytes. */
+  readonly sha256: string
+}
+
+/** The documents a human approved before the work was allowed to start. */
+export interface ApprovedArtifactSet {
+  /** The approved specification. */
+  readonly spec: ApprovedArtifactRef
+  /** The approved implementation plan. */
+  readonly plan: ApprovedArtifactRef
+}
+
 /** What a workflow was asked to accomplish, as approved before it started. */
 export interface WorkflowObjective {
   /** Stable workflow id, durable across restarts. */
@@ -327,6 +354,8 @@ export interface WorkflowObjective {
   readonly workload: Workload
   /** Profile whose policy governs this workflow. */
   readonly profileId: string
+  /** The approved documents conformance later judges the implementation against. */
+  readonly approvedArtifacts: ApprovedArtifactSet
 }
 
 /**

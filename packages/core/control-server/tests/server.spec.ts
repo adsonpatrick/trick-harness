@@ -16,6 +16,10 @@ const OBJECTIVE = {
   risk: 'low',
   workload: 'light',
   profileId: 'test',
+  approvedArtifacts: {
+    spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+  },
 }
 
 /**
@@ -168,6 +172,26 @@ describe('an objective the server will not run', () => {
     expect(unknownRisk.code).toBe(400)
     expect(notJson.status).toBe(400)
     expect((missing.status as unknown as { error: string }).error).toBe('invalid-objective')
+  })
+
+  it('refuses an objective that named no approved Spec and Plan', async () => {
+    // Conformance judges the implementation against approved documents. An
+    // objective without them would reach that stage with nothing to judge it
+    // by, so the refusal belongs here, before a workflow id exists.
+    const { base, auth } = await serve({ start: starter(['wf-1']) })
+    const { approvedArtifacts: _dropped, ...bare } = OBJECTIVE
+
+    const missing = await post(base, auth, bare)
+    const malformed = await post(base, auth, {
+      ...OBJECTIVE,
+      approvedArtifacts: { spec: { path: '/etc/passwd', sha256: 'nope' }, plan: OBJECTIVE.approvedArtifacts.plan },
+    })
+
+    expect(missing.code).toBe(400)
+    expect(malformed.code).toBe(400)
+    expect((malformed.status as unknown as { error: string }).error).toBe('invalid-objective')
+    // The rejection is logged, and a path is a place a secret can hide.
+    expect(JSON.stringify(malformed.status)).not.toContain('/etc/passwd')
   })
 
   it('starts nothing when the objective is refused', async () => {

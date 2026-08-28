@@ -70,6 +70,10 @@ const OBJECTIVE: WorkflowObjective = Object.freeze({
   risk: 'low',
   workload: 'medium',
   profileId: 'test',
+  approvedArtifacts: {
+    spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+  },
 })
 
 function provider(name: string, start: (request: ExecutorStartRequest) => Promise<ExecutorResult>): ExecutorProvider {

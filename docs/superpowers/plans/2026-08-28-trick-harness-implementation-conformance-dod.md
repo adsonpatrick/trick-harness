@@ -55,22 +55,22 @@ export interface WorkflowObjective {
 }
 ```
 
-- [ ] **Step 1: Write RED contract tests** proving `ROLES` contains `conformance`, `READ_ONLY_ROLES` contains `conformance`, `parseWorkflowObjective` requires `approvedArtifacts`, hashes must match lowercase 64-hex SHA-256, and artifact paths must be non-empty repository-relative strings.
-- [ ] **Step 2: Run RED.**
+- [x] **Step 1: Write RED contract tests** proving `ROLES` contains `conformance`, `READ_ONLY_ROLES` contains `conformance`, `parseWorkflowObjective` requires `approvedArtifacts`, hashes must match lowercase 64-hex SHA-256, and artifact paths must be non-empty repository-relative strings.
+- [x] **Step 2: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts packages/core/contracts/tests/invariant.spec.ts
 ```
 
-- [ ] **Step 3: Implement vocabulary/types/parser** in `types.ts` and `index.ts`. Reject absolute paths, `..` traversal segments, missing hashes and malformed hashes without echoing offending values into errors.
-- [ ] **Step 4: Run GREEN.**
+- [x] **Step 3: Implement vocabulary/types/parser** in `types.ts` and `index.ts`. Reject absolute paths, `..` traversal segments, missing hashes and malformed hashes without echoing offending values into errors.
+- [x] **Step 4: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts packages/core/contracts/tests/invariant.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add packages/core/contracts

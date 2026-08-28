@@ -266,6 +266,10 @@ describe('startPluroraHost', () => {
       objective: {
         id: 'obj-1', cwd: root, requirement: 'add a column',
         risk: 'medium', workload: 'light', profileId: 'plurora',
+        approvedArtifacts: {
+          spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+          plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+        },
       },
     }, AbortSignal.timeout(1_000))
     expect(specs[0]?.cwd).toBe(root)

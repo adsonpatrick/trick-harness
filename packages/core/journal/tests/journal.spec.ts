@@ -25,6 +25,10 @@ const objective: WorkflowObjective = {
   risk: 'high',
   workload: 'medium',
   profileId: 'plurora',
+  approvedArtifacts: {
+    spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+  },
 }
 
 const decision: RouteDecision = {

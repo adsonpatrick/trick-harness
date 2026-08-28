@@ -28,6 +28,8 @@ import {
   WORKLOADS,
 } from './types.ts'
 import type {
+  ApprovedArtifactRef,
+  ApprovedArtifactSet,
   DiagnosisContract,
   EvidenceRef,
   Finding,
@@ -260,6 +262,55 @@ export function parseStageRouteOverride(value: unknown, path = 'routeOverride'):
   })
 }
 
+/** A lowercase 64-hex SHA-256 digest and nothing else. */
+const SHA256 = /^[0-9a-f]{64}$/
+
+/**
+ * Read one approved artifact reference back.
+ *
+ * The path is held to repository-relative because this value decides what the
+ * host opens and hashes: an absolute path names a document on the machine
+ * rather than in the tree under review, and a traversal segment names one
+ * outside it. Neither the path nor the hash is quoted in a rejection, because
+ * a rejection is logged and a path is a place a secret can hide.
+ *
+ * @param value - The serialized reference.
+ * @param path - Field path to report a rejection under.
+ * @returns The reference, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing, malformed, or escapes the repository.
+ */
+export function parseApprovedArtifactRef(value: unknown, path = 'artifact'): ApprovedArtifactRef {
+  const source = asRecord(value, path)
+  const location = text(source, 'path', path)
+  const segments = location.split(/[/\\]/)
+  const escapes = location.startsWith('/') || /^[a-zA-Z]:/.test(location)
+    || segments.includes('..') || segments.at(-1)?.trim() === ''
+  if (escapes) {
+    throw new ContractError(`${path}.path`, 'must be a repository-relative path naming a file')
+  }
+  const digest = text(source, 'sha256', path)
+  if (!SHA256.test(digest)) {
+    throw new ContractError(`${path}.sha256`, 'must be a lowercase 64-character hexadecimal SHA-256')
+  }
+  return Object.freeze({ path: location, sha256: digest })
+}
+
+/**
+ * Read the approved artifact set back.
+ *
+ * @param value - The serialized set.
+ * @param path - Field path to report a rejection under.
+ * @returns The set, rebuilt from declared fields only.
+ * @throws {ContractError} when either document is missing or malformed.
+ */
+export function parseApprovedArtifactSet(value: unknown, path = 'approvedArtifacts'): ApprovedArtifactSet {
+  const source = asRecord(value, path)
+  return Object.freeze({
+    spec: parseApprovedArtifactRef(source['spec'], `${path}.spec`),
+    plan: parseApprovedArtifactRef(source['plan'], `${path}.plan`),
+  })
+}
+
 /**
  * Read one workflow objective back.
  * @param value - The serialized objective.
@@ -276,5 +327,6 @@ export function parseWorkflowObjective(value: unknown, path = 'objective'): Work
     risk: member(source, 'risk', RISKS, path),
     workload: member(source, 'workload', WORKLOADS, path),
     profileId: text(source, 'profileId', path),
+    approvedArtifacts: parseApprovedArtifactSet(source['approvedArtifacts'], `${path}.approvedArtifacts`),
   })
 }

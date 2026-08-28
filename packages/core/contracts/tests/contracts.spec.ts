@@ -82,6 +82,10 @@ const objective: WorkflowObjective = {
   risk: 'high',
   workload: 'medium',
   profileId: 'plurora',
+  approvedArtifacts: {
+    spec: { path: 'docs/superpowers/specs/2026-08-28-thing.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/superpowers/plans/2026-08-28-thing.md', sha256: 'b'.repeat(64) },
+  },
 }
 
 /** Serialize and re-read, which is what the durable boundary actually does. */
@@ -118,13 +122,14 @@ describe('the shared vocabulary', () => {
       'review',
       'security',
       'qa',
+      'conformance',
       'delivery',
     ])
   })
 
   it('keeps every judging role read-only and every writing role out of that set', () => {
     expect(READ_ONLY_ROLES.every(role => ROLES.includes(role))).toBe(true)
-    for (const role of ['debug', 'review', 'security', 'qa', 'verify'] as const) {
+    for (const role of ['debug', 'review', 'security', 'qa', 'verify', 'conformance'] as const) {
       expect(READ_ONLY_ROLES).toContain(role)
     }
     for (const role of ['implement', 'repair', 'delivery'] as const) {
@@ -312,6 +317,61 @@ describe('reading a serialized objective back', () => {
       const { [field]: _dropped, ...rest } = objective
       expect(() => parseWorkflowObjective(rest)).toThrow(new RegExp(`objective\\.${field}`))
     }
+  })
+})
+
+describe('reading the approved artifacts an objective was opened against', () => {
+  it('requires the artifacts the work is later judged against', () => {
+    // Conformance asks whether the implementation satisfies the Spec and Plan a
+    // human approved. An objective that never named them makes that question
+    // unanswerable, and a run reaching conformance without them would have to
+    // invent its own expectation — which is the whole thing being prevented.
+    const { approvedArtifacts: _dropped, ...rest } = objective
+    expect(() => parseWorkflowObjective(rest)).toThrow(/objective\.approvedArtifacts/)
+    for (const artifact of ['spec', 'plan'] as const) {
+      const { [artifact]: _gone, ...partial } = objective.approvedArtifacts
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts: partial }))
+        .toThrow(new RegExp(`objective\.approvedArtifacts\.${artifact}`))
+    }
+  })
+
+  it('requires each hash to be a lowercase 64-hex digest, which is the whole identity', () => {
+    for (const sha256 of ['A'.repeat(64), 'a'.repeat(63), `${'a'.repeat(63)}z`, '', `sha256:${'a'.repeat(64)}`]) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, spec: { path: 'docs/s.md', sha256 } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.spec\.sha256/)
+    }
+  })
+
+  it('requires a repository-relative path, since an absolute one names another machine', () => {
+    for (const path of ['/etc/passwd', 'C:\docs\spec.md', '../outside/spec.md', 'docs/../../spec.md', './']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.plan\.path/)
+    }
+  })
+
+  it('quotes neither the path nor the hash it rejected, since the rejection is logged', () => {
+    const approvedArtifacts = { ...objective.approvedArtifacts, spec: { path: '/secret/place.md', sha256: 'nope' } }
+    let failure = ''
+    try {
+      parseWorkflowObjective({ ...objective, approvedArtifacts })
+    }
+    catch (error: unknown) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
+    expect(failure).not.toBe('')
+    expect(failure).not.toContain('/secret/place.md')
+    expect(failure).not.toContain('nope')
+  })
+
+  it('keeps no field the artifacts did not declare', () => {
+    const approvedArtifacts = {
+      spec: { ...objective.approvedArtifacts.spec, transcript: 'what the model was thinking' },
+      plan: objective.approvedArtifacts.plan,
+    }
+    const parsed = parseWorkflowObjective({ ...objective, approvedArtifacts })
+    expect(Object.hasOwn(parsed.approvedArtifacts.spec, 'transcript')).toBe(false)
   })
 })
 
