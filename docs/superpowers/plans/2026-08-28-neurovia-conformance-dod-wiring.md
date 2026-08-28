@@ -4,13 +4,13 @@
 
 **Goal:** Wire the post-Plan-F Trick Harness conformance gate into `adsonpatrick/neuro-via` so every approved implementation run supplies the exact Spec/Plan artifacts, PR readiness consumes the resulting conformance matrix, and no worker/CI self-report can substitute for Plan/DoD completeness.
 
-**Architecture:** This is a normative overlay on `2026-08-27-neurovia-harness-installation-amendment.md`; execute it in the same NeuroVia integration branch. The project bridge owns repository-relative approved-artifact selection and SHA-256 computation, while the pinned Trick host owns deterministic manifest creation and certification. Existing human approval gates remain: `/implement` may start only after the user has approved the Spec and Plan. `pr-readiness` supplies project evidence/DoD context and consumes Harness conformance, but it does not independently invent a PASS for plan completeness.
+**Architecture:** This is a normative overlay on `2026-08-27-neurovia-harness-installation-amendment.md`; execute it in the same NeuroVia integration branch. The project bridge owns repository-relative approved-artifact selection and SHA-256 computation, while the pinned Trick host owns deterministic manifest creation and certification. Existing human approval gates remain: `/implement` may start only after the user has approved the Spec and Plan. `pr-readiness` supplies project evidence and consumes Harness conformance, but it does not independently invent a PASS for plan completeness.
 
 **Tech Stack:** NeuroVia Node/Next.js repository, Node built-ins (`crypto`, `fs`, `path`), OpenCode custom tools via `@opencode-ai/plugin`, post-Plan-F Trick Harness control server, existing Plurora Superpowers specs/plans and skill validator.
 
 **Spec:** `docs/superpowers/specs/2026-08-28-harness-v2-implementation-conformance-dod-amendment.md`
 
-**Requires:** Plan E and Plan F complete and independently reviewed. `plurora-harness.json.revision` must pin the final post-Plan-F reviewed SHA, not the intermediate Plan E SHA.
+**Requires:** Plan E and Plan F complete and independently reviewed. `plurora-harness.json.revision` must pin the final post-Plan-F reviewed SHA, not an intermediate Plan E SHA.
 
 ## Global Constraints
 
@@ -21,6 +21,7 @@
 - Whole Spec/Plan content, prompts, transcripts and reasoning are not persisted by the project bridge.
 - `pr-readiness` cannot claim Plan/DoD completeness unless Harness conformance is PASS for the same artifact hashes and final published branch state.
 - `opencode.jsonc` retains `git push*` denial and no global model/provider override.
+- Baseline DoD obligation IDs come from `profiles/plurora/conformance-policy.ts`; NeuroVia maps project evidence to those rows and does not duplicate the routing/model policy.
 
 ---
 
@@ -29,7 +30,6 @@
 **Files:**
 - Create: `scripts/harness/approved-artifacts.mjs`
 - Create: `scripts/harness/approved-artifacts.test.mjs`
-- Modify after Plan C* Task 1: `scripts/harness/config.mjs` only if shared path helpers belong there
 
 **Interfaces:**
 
@@ -67,7 +67,7 @@ git commit -m "feat(harness): resolve approved implementation artifacts"
 ### Task 2: Extend the Control Client and OpenCode `harness_run` Tool
 
 **Files:**
-- Modify after Plan C* creates them: `scripts/harness/control-client.mjs`
+- Modify: `scripts/harness/control-client.mjs`
 - Modify: `scripts/harness/control-client.test.mjs`
 - Modify: `.opencode/tools/harness.ts`
 - Modify: `scripts/opencode/validate-control-plane.mjs`
@@ -85,11 +85,11 @@ harness_run {
 }
 ```
 
-For `entryRole='implement'`, `specPath` and `planPath` are required. Other entry roles may address an already-running workflow by its bounded operation contract rather than minting a new implementation objective without artifacts.
+For `entryRole='implement'`, `specPath` and `planPath` are required. A new implementation objective cannot be minted without approved artifacts.
 
 - [ ] **Step 1: Write RED HTTP/client tests** proving the outgoing workflow objective contains `approvedArtifacts.spec.path/sha256` and `approvedArtifacts.plan.path/sha256` and contains no document content.
 - [ ] **Step 2: Write RED OpenCode tests** proving implement without either path is rejected before HTTP, external path cannot escape the worktree, and cwd remains derived from `context.worktree`/`context.directory`.
-- [ ] **Step 3: Implement tool-side call to `resolveApprovedArtifacts`** before `startWorkflow`; do not let the LLM provide hashes.
+- [ ] **Step 3: Implement tool-side call to `resolveApprovedArtifacts`** before `startWorkflow`; the LLM never supplies hashes.
 - [ ] **Step 4: Keep bounded error output.** A hash/path failure may name the repository-relative requested path but must not dump file content or arbitrary filesystem data.
 - [ ] **Step 5: Run GREEN.**
 
@@ -110,7 +110,7 @@ git commit -m "feat(harness): send approved artifacts to conformance workflow"
 ### Task 3: Make `/implement` Explicitly Carry the Approved Spec and Plan
 
 **Files:**
-- Modify after Plan C* rewires it: `.opencode/commands/implement.md`
+- Modify: `.opencode/commands/implement.md`
 - Modify: `scripts/opencode/validate-control-plane.mjs`
 - Modify: `scripts/opencode/validate-control-plane.test.mjs`
 - Modify: `docs/agents/harness.md`
@@ -157,7 +157,7 @@ read final branch/diff
 -> report READY / NOT READY with evidence
 ```
 
-- [ ] **Step 1: Add RED/baseline eval** where CI/tests/review are green but `PLAN-TASK-4=MISSING`; expected readiness is NOT READY.
+- [ ] **Step 1: Add baseline eval** where CI/tests/review are green but `PLAN-TASK-4=MISSING`; expected readiness is NOT READY.
 - [ ] **Step 2: Add eval** where a worker says all tasks are done but Harness conformance is absent/INCONCLUSIVE; expected NOT READY.
 - [ ] **Step 3: Add eval** where Spec/Plan paths match but hashes changed after approval; expected BLOCKED/NOT READY.
 - [ ] **Step 4: Add positive eval** with conformance PASS, final verification PASS, applicable surface gates PASS and no material finding; readiness may return READY.
@@ -171,17 +171,15 @@ git commit -m "feat(skills): require Harness conformance for PR readiness"
 
 ---
 
-### Task 5: Add Project DoD Evidence Mapping Without Duplicating Harness Policy
+### Task 5: Map NeuroVia Evidence to the Baseline DoD
 
 **Files:**
 - Modify: `docs/agents/harness.md`
 - Modify: `AGENTS.md`
 - Modify: `SECURITY.md`
 - Modify: `docs/git-flow.md`
-- Modify only if the Plan C* profile/deployment config schema supports project DoD labels: `plurora-harness.json`
-- Modify: `scripts/harness/config.test.mjs` when config changes
 
-**Boundary:** baseline DoD obligation IDs live in `profiles/plurora/conformance-policy.ts` after Plan F. NeuroVia documentation maps which project evidence satisfies them; it does not copy the model routing table or redefine the obligation IDs differently.
+**Boundary:** baseline DoD obligation IDs live in `profiles/plurora/conformance-policy.ts` after Plan F. NeuroVia documentation maps which project evidence satisfies them; it does not copy model routing rules or redefine the obligation IDs.
 
 **Project evidence mapping:**
 
@@ -193,28 +191,29 @@ DOD-NO-MATERIAL-DEFECT  => latest Harness finding projection
 DOD-APPLICABLE-QA       => latest QA verdict/evidence when required
 DOD-APPLICABLE-SECURITY => latest security verdict/evidence when required
 DOD-DELIVERY-WORLD      => PR/commit/branch evidence from GitHub delivery/world read
-DOD-FINAL-VERIFICATION  => prerequisite-ready at conformance; satisfied only by following verify-final stage
+DOD-FINAL-VERIFY-READY  => all prerequisites ready for the following verify-final stage
 ```
 
 - [ ] **Step 1: Document this mapping** and the distinction between conformance and final verification.
-- [ ] **Step 2: Add governance rule** that new project-specific DoD rows must get stable IDs and a Spec/Plan amendment before being merge-blocking; ad-hoc model-generated rows are findings, not hidden gates.
+- [ ] **Step 2: Add governance rule** that new project-specific DoD rows require stable IDs and an approved Spec/Plan amendment before becoming merge-blocking; ad-hoc model-generated rows are findings, not hidden gates.
 - [ ] **Step 3: Ensure security docs say conformance is read-only** and cannot repair findings directly.
-- [ ] **Step 4: Run `npm run test:skills`, `npm run test:opencode`, `git diff --check`; commit.**
+- [ ] **Step 4: Run project policy gates and commit.**
 
 ```bash
-git add docs/agents/harness.md AGENTS.md SECURITY.md docs/git-flow.md plurora-harness.json scripts/harness/config.test.mjs
+npm run test:skills
+npm run test:opencode
+git diff --check
+git add docs/agents/harness.md AGENTS.md SECURITY.md docs/git-flow.md
 git commit -m "docs(harness): map NeuroVia DoD evidence to conformance"
 ```
-
-If `plurora-harness.json` does not need a DoD-specific field because the host reads the Plurora baseline policy directly, do not add one; in that implementation the `git add` command omits that file and its config test. This is not an implementation choice left to the model: the determining condition is whether Plan F's host interface already obtains all baseline DoD rows from `profiles/plurora` without project config.
 
 ---
 
 ### Task 6: Verify the Real NeuroVia Conformance Path
 
 **Files:**
-- Create: `docs/verification/<current-date>-neurovia-conformance-evidence.md`
-- Modify: `docs/agents/harness.md` only for behavior actually proven
+- Create: `docs/verification/2026-08-28-neurovia-conformance-evidence.md`
+- Modify: `docs/agents/harness.md`
 
 - [ ] **Step 1: Run keyless project gates.**
 
@@ -230,13 +229,18 @@ npm run build
 ```
 
 - [ ] **Step 2: Start the exact post-Plan-F Trick host** pinned by `plurora-harness.json` and prove `/health` plus native model/effort readiness.
-- [ ] **Step 3: From OpenCode, start a harmless implementation fixture with an approved fixture Spec containing two explicit acceptance IDs and an approved fixture Plan containing two `### Task N:` headings.** The fixture may change only a disposable test file; it must not be a production feature.
-- [ ] **Step 4: Prove status records the exact artifact hashes and the expected Spec/Plan/DoD obligation counts without document content.**
-- [ ] **Step 5: Run an adversarial fixture with one planned task intentionally unimplemented.** Conformance must report `MISSING` and the workflow must not reach `PR_READY` despite otherwise green tests.
-- [ ] **Step 6: Restore/execute the missing fixture task, rerun through delivery/certification, and prove latest conformance PASS precedes verify-final PASS and `PR_READY`.
+- [ ] **Step 3: From OpenCode, start a harmless implementation fixture** with an approved fixture Spec containing two explicit acceptance IDs and an approved fixture Plan containing two `### Task N:` headings. The fixture changes only a disposable test fixture under the integration branch and never production behavior.
+- [ ] **Step 4: Prove status records** the exact artifact hashes and expected Spec/Plan/eight-DoD obligation counts without document content.
+- [ ] **Step 5: Run an adversarial fixture** with one planned task intentionally unimplemented. Conformance must report `MISSING` and the workflow must not reach `PR_READY` despite otherwise green tests.
+- [ ] **Step 6: Implement the missing fixture task and rerun the fixture lifecycle.** Prove latest conformance PASS precedes verify-final PASS and only then produces `PR_READY`.
 - [ ] **Step 7: Verify high-risk fallback behavior deterministically:** with Codex marked unavailable and implementation executor OpenCode, high-risk conformance cannot satisfy cross-executor-required independence and cannot reach `PR_READY`.
-- [ ] **Step 8: Record evidence and perform an independent read-only review** of path containment, hash integrity, command approval semantics, readiness consumption and secret handling. Fix confirmed defects and rerun affected gates.
-- [ ] **Step 9: Commit only the evidence/docs belonging to the integration branch.**
+- [ ] **Step 8: Record evidence and perform independent read-only review** of path containment, hash integrity, command approval semantics, readiness consumption and secret handling. Fix confirmed defects and rerun affected gates.
+- [ ] **Step 9: Commit evidence/docs.**
+
+```bash
+git add docs/verification/2026-08-28-neurovia-conformance-evidence.md docs/agents/harness.md
+git commit -m "docs(harness): record NeuroVia conformance evidence"
+```
 
 ## Completion Contract
 
