@@ -195,11 +195,11 @@ git commit -m "feat(git): require Harness certification in branch protection"
 
 **Precondition:** Installation PR is open, current branch is delivered, all Plan C*/F/G/H applicable gates are capable of running, and `plurora-harness.json` pins the reviewed post-Plan-H Trick SHA.
 
-- [ ] **Step 1: Record the exact installation PR head SHA.**
+- [ ] **Step 1: Record the exact installation PR number and head SHA from GitHub REST.**
 
 ```bash
 PR_NUMBER="$(gh pr view --json number -q .number)"
-HEAD_SHA="$(gh pr view --json headRefOid -q .headRefOid)"
+HEAD_SHA="$(gh api "repos/adsonpatrick/neuro-via/pulls/${PR_NUMBER}" --jq .head.sha)"
 printf '%s\n' "$PR_NUMBER" "$HEAD_SHA"
 ```
 
@@ -208,7 +208,7 @@ printf '%s\n' "$PR_NUMBER" "$HEAD_SHA"
 
 ```bash
 gh api "repos/adsonpatrick/neuro-via/commits/${HEAD_SHA}/statuses" \
-  --jq '[.[] | select(.context == "plurora/harness-certification")][0] | {state,context,description,target_url}'
+  --jq '[.[] | select(.context == "plurora/harness-certification")] | sort_by(.created_at) | last | {state,context,description,target_url}'
 ```
 
 Expected:
@@ -253,7 +253,7 @@ Expected: exit 0 and confirmation of all five contexts plus existing protection 
 - [ ] **Step 3: Read the current PR head SHA after the Task 4 evidence commit.** It must differ from the previously certified SHA.
 
 ```bash
-NEW_HEAD_SHA="$(gh pr view --json headRefOid -q .headRefOid)"
+NEW_HEAD_SHA="$(gh api "repos/adsonpatrick/neuro-via/pulls/${PR_NUMBER}" --jq .head.sha)"
 test "$NEW_HEAD_SHA" != "$HEAD_SHA"
 ```
 
@@ -261,10 +261,10 @@ test "$NEW_HEAD_SHA" != "$HEAD_SHA"
 
 ```bash
 gh api "repos/adsonpatrick/neuro-via/commits/${NEW_HEAD_SHA}/statuses" \
-  --jq '[.[] | select(.context == "plurora/harness-certification")][0] // null'
+  --jq '[.[] | select(.context == "plurora/harness-certification")] | sort_by(.created_at) | last // null'
 ```
 
-Expected before rerun: `null` or non-success.
+Expected before rerun: `null` or a non-success state.
 
 - [ ] **Step 5: Confirm GitHub does not consider the PR fully merge-ready while the required certification for the new SHA is absent/non-success.** Use:
 
@@ -272,11 +272,11 @@ Expected before rerun: `null` or non-success.
 gh pr view --json mergeStateStatus,statusCheckRollup
 ```
 
-Record the bounded result.
+Record only the bounded merge/check summary.
 
 - [ ] **Step 6: Re-run the real Harness workflow against `NEW_HEAD_SHA`.** Observe `pending` during the run, then `success` only after final certification.
 - [ ] **Step 7: Re-read exact SHA status and PR check rollup.** Certification must now be success for `NEW_HEAD_SHA`; existing CI checks must independently remain required.
-- [ ] **Step 8: Append the fresh-SHA invalidation/recertification evidence to the evidence doc and commit.** This final evidence commit creates another SHA, so immediately run certification one final time after pushing it; the final PR head must itself hold success before handoff.
+- [ ] **Step 8: Append the fresh-SHA invalidation/recertification evidence to the evidence doc and commit.** This commit creates one more SHA; no claim is made that the newly created SHA is already certified.
 
 ```bash
 git add docs/agents/harness-certification-evidence.md
@@ -284,14 +284,11 @@ git commit -m "docs(harness): prove required certification freshness"
 git push
 ```
 
-- [ ] **Step 9: Run one final Harness certification on the final evidence commit SHA and re-read GitHub status.** Do not merge.
-
 ---
 
-### Task 6: Final Security/Authority Verification
+### Task 6: Final Security/Authority Verification and Final-Head Certification
 
 **Files:**
-- Modify: `docs/agents/harness-certification-evidence.md`
 - Modify: `SECURITY.md`
 
 - [ ] **Step 1: Verify native auth and no credential expansion.** Confirm no project file adds `GITHUB_TOKEN`, PAT, private key or certification credential.
@@ -312,11 +309,27 @@ bash -n scripts/git/setup-branch-protection.sh
 git diff --check
 ```
 
-- [ ] **Step 5: Re-read current `main` branch protection and final PR head certification status.** Both must match the documented state.
-- [ ] **Step 6: Perform independent review** of branch-protection mutation, exact-SHA binding, stale-SHA behavior, status-source threat model, secrets and human-only merge authority.
-- [ ] **Step 7: Fix confirmed defects, rerun affected gates, update bounded evidence and perform one final certification if the head SHA changes.**
-- [ ] **Step 8: Commit and hand off to Plan D Tasks 11/12; do not merge.**
+- [ ] **Step 5: Perform independent review** of branch-protection mutation, exact-SHA binding, stale-SHA behavior, status-source threat model, secrets and human-only merge authority.
+- [ ] **Step 6: Fix confirmed defects and rerun affected gates. Then commit/push every remaining project/documentation change before final certification.**
+
+```bash
+git add SECURITY.md
+# add only other files actually changed by confirmed fixes
+git commit -m "docs(security): document Harness certification trust boundary"
+git push
+```
+
+- [ ] **Step 7: Resolve the final PR head SHA through REST and run one final real Harness certification on that exact immutable head.**
+
+```bash
+FINAL_HEAD_SHA="$(gh api "repos/adsonpatrick/neuro-via/pulls/${PR_NUMBER}" --jq .head.sha)"
+```
+
+Do not commit or push anything after this final certification unless a new defect forces another fix-and-recertify cycle.
+
+- [ ] **Step 8: Re-read current `main` protection and the final head certification status.** Both must match the required state; certification must be `success` for `FINAL_HEAD_SHA`.
+- [ ] **Step 9: Hand off the live final-SHA/status evidence to Plan D Tasks 11/12. Do not merge.**
 
 ## Completion Contract
 
-This NeuroVia overlay is complete only when the project config binds the Harness to `adsonpatrick/neuro-via`, readiness surfaces require the latest certification revision, `main` protection requires `validate + design-system + e2e + build + plurora/harness-certification`, the required context was enabled only after a real Harness status existed, a fresh push proved an old SHA's success does not satisfy the new head, the final head was re-certified successfully, native `gh` auth remained unchanged, the source-authentication limitation is documented, and Harness still cannot merge/release/deploy.
+This NeuroVia overlay is complete only when the project config binds the Harness to `adsonpatrick/neuro-via`, readiness surfaces require the latest certification revision, `main` protection requires `validate + design-system + e2e + build + plurora/harness-certification`, the required context was enabled only after a real Harness status existed, a fresh push proved an old SHA's success does not satisfy the new head, all repository changes were committed before the final certification, the final immutable head was re-certified successfully, native `gh` auth remained unchanged, the source-authentication limitation is documented, and Harness still cannot merge/release/deploy.
