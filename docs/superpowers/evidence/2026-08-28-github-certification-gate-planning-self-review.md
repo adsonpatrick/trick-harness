@@ -16,7 +16,7 @@ No runtime implementation, live status mutation or branch-protection change is c
 - Codex Engineering Guardrails `code-work`: authority-boundary analysis, side-effect/restart safety, fresh-world verification and narrow integration design.
 - Current Trick Harness source: workflow, GitHubDelivery, journal, composition/profile boundaries.
 - Current NeuroVia source: `scripts/git/setup-branch-protection.sh` and existing required contexts.
-- Current GitHub documentation (2026-08): commit-status states/API, protected-branch required status behavior, latest-head requirement, and source-binding options.
+- Current GitHub documentation (2026-08): commit-status states/API, protected-branch required status behavior, latest-head requirement and source-binding options.
 
 ## GitHub API decisions verified
 
@@ -27,7 +27,7 @@ Current GitHub documentation confirms:
 3. users/integrations with sufficient repository status/write authority can create commit statuses;
 4. protected branches can require commit statuses or checks;
 5. required status must pass on the latest commit SHA; prior-SHA success does not satisfy a new head;
-6. source-specific required-check binding is available when using a GitHub App/app id, which is intentionally deferred for the current single-owner repository.
+6. source-specific required-check binding is available when using a GitHub App/app id, intentionally deferred for the current single-owner repository.
 
 Plan H therefore selects Commit Status for initial V2 activation and documents the future GitHub-App trigger instead of introducing a new credential/app lifecycle prematurely.
 
@@ -99,14 +99,16 @@ certify SHA A
 ...
 ```
 
-The wiring plan explicitly avoids this:
+The final wiring plan avoids this:
 
 1. a pre-protection status proves the context exists;
 2. a committed evidence update intentionally creates a fresh uncertified SHA used to prove blocking;
 3. security/docs/fixes are all committed and pushed before final certification;
 4. final certification occurs on the final immutable head;
 5. no repository commit is made after that certification unless a defect forces a new fix-and-recertify cycle;
-6. Plan D receives the final status as live GitHub evidence rather than attempting to commit a self-invalidating final-status snapshot.
+6. Plan D receives the final status as live GitHub evidence rather than committing a self-invalidating final-status snapshot.
+
+The wiring plan resolves PR HEAD via REST (`GET pulls/<number> -> head.sha`) rather than relying on an optional `gh pr view` GraphQL field.
 
 ## State-mapping review
 
