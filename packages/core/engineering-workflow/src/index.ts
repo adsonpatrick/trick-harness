@@ -45,6 +45,7 @@ export type * from './types.ts'
 export * from './repair.ts'
 export * from './triage.ts'
 export * from './lifecycle.ts'
+export * from './conformance.ts'
 
 import {
   assessRepairCompletion,

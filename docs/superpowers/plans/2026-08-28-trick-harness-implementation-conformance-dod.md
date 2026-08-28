@@ -187,23 +187,23 @@ DoD obligations:
   supplied by deterministic profile policy; duplicate ids rejected
 ```
 
-- [ ] **Step 1: Write RED tests** for ND/CF/R-style Spec criteria, Superpowers task headings, duplicate IDs, zero Spec criteria, zero Plan tasks, deterministic ordering and immutable output.
-- [ ] **Step 2: Write RED coverage tests** proving omitted expected IDs, duplicate returned IDs, source/requirement mismatch, unknown substitution and hash mismatch cannot validate as PASS.
-- [ ] **Step 3: Run RED.**
+- [x] **Step 1: Write RED tests** for ND/CF/R-style Spec criteria, Superpowers task headings, duplicate IDs, zero Spec criteria, zero Plan tasks, deterministic ordering and immutable output.
+- [x] **Step 2: Write RED coverage tests** proving omitted expected IDs, duplicate returned IDs, source/requirement mismatch, unknown substitution and hash mismatch cannot validate as PASS.
+- [x] **Step 3: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts
 ```
 
-- [ ] **Step 4: Implement extraction and validation** with no model/LLM dependency and no filesystem access in this module.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 4: Implement extraction and validation** with no model/LLM dependency and no filesystem access in this module.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
