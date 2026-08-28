@@ -2,159 +2,187 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement these plans task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-- **Goal:** Deliver the approved Plurora Engineering Harness V2 on top of a reusable **Trick Harness** runtime without mixing generic runtime mechanism, Plurora policy, product-repository integration, and rollout verification into one unreviewable change.
+**Goal:** Operate Plurora through the reusable Trick Harness runtime while preserving explicit project policy, deterministic mutation authority, native OpenCode/Codex authentication, and evidence-first activation.
 
-- **Architecture:** `adsonpatrick/trick-harness` is the canonical runtime repository and must remain a real fork of `deepseek-ai/deepseek-harness`. Plan R establishes reusable Core/providers/integrations plus the project-profile seam; A and B implement the executor/runtime and engineering workflows using those boundaries; C integrates `neuro-via` by selecting `profile=plurora`; D proves the assembled system with direct deterministic and real-product evidence.
+## Current Status — Runtime Built, NeuroVia Installation Pending
 
-- **Tech Stack:** TypeScript/Node.js, pnpm workspaces, Cordis/DeepSeek Harness, OpenCode server/SDK/ACP, Codex CLI/app-server, Claude Agent SDK/Claude Code CLI, Git/GitHub CLI, Supabase CLI/Branching/Postgres/pgTAP, existing Plurora Node/Playwright/CI gates.
+Plans R, A, B and the Harness-side Plan D verification/remediation work have been implemented and merged in `adsonpatrick/trick-harness`. The remaining work is the deployment enablement introduced by the 2026-08-27 NeuroVia amendment, followed by the actual `adsonpatrick/neuro-via` installation and final activation reconciliation.
 
-- **Base Spec:** `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-design.md`
-- **Approved Amendment:** `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-reusable-core-amendment.md`
+The active database decision changed on 2026-08-27: `neurovia-dev` (`uljaajwwnygopsyvwsre`) is now the explicitly authorized Supabase Cloud **development** database. Supabase Preview Branches remain an optional future isolation strategy, not a development prerequisite. This is a deliberate owner decision, not a fallback after Preview failure.
 
-## Planning Status — Approved for Execution
+## Normative Documents
 
-The reusable-core amendment and amended plan set R→A→B→C→D are approved by the owner on 2026-08-25. A/B/C/D remain detailed implementation inputs, but stale repository names, `packages/plurora/*` paths, `@plurora/harness-*` package names, and Plurora-policy ownership are superseded by the approved amendment + Plan R.
+Apply these in precedence order:
 
-The amended self-review establishes:
+1. explicit owner decisions;
+2. `docs/superpowers/specs/2026-08-27-neurovia-harness-deployment-cloud-dev-amendment.md` for NeuroVia deployment, model registry and DB development authority;
+3. `docs/superpowers/specs/2026-08-27-harness-v2-scope-amendment.md` for Claude removal and the historical Preview-entitlement scope decision where not superseded by item 2;
+4. `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-reusable-core-amendment.md` for reusable-core/profile boundaries;
+5. `docs/superpowers/specs/2026-08-25-plurora-engineering-harness-v2-design.md` for the base V2 architecture;
+6. the plan overlays below before historical Plans C/D where they conflict.
 
-- canonical runtime repository: `adsonpatrick/trick-harness`;
-- runtime is a real GitHub fork of `deepseek-ai/deepseek-harness`;
-- generic mechanism lives under `packages/core`, `packages/providers`, and `packages/integrations`;
-- project policy lives under `profiles/`, with `profiles/plurora` as the first production profile;
-- fork-local private packages use `@trick-harness/*`;
-- Core/provider/integration packages may not depend on `profiles/plurora` or `neuro-via`;
-- the same runtime must boot a minimal fixture profile and the Plurora profile without Core modification;
-- OpenCode TUI retains `git push*` denial; scoped commit/push/PR authority belongs only to Harness delivery capability;
-- DB execution/verification remains cloud-only on isolated Supabase Preview Branches with no Docker/local/shared-dev fallback;
-- model/effort routing remains per-worker and never mutates global OpenCode/Codex defaults;
-- confirmed bugs may auto-repair; product/design decisions and non-bug improvements may not be auto-fixed to obtain green status;
-- merge/release/deploy remain human/out-of-scope authority;
-- final activation requires **30/30 original acceptance criteria + R1-R5 PASS**.
+The 2026-08-27 NeuroVia amendment specifically supersedes older statements that require Preview Branches for every DB-changing development workflow, prohibit `neurovia-dev` as an authorized development target, or imply that the NeuroVia bridge needs no runnable `composeHarness()` host.
 
-## Implementation Status
-
-Plan R Tasks 1-5 are implemented in `adsonpatrick/trick-harness` on `docs/harness-v2-bootstrap`: fork provenance and the divergence ledger (`docs/trick-harness/upstream.md`), the `@trick-harness/*` namespace constraint and one-way boundary gate (`scripts/check-trick-boundaries.ts`, wired into `pnpm run constraints`), the validated `HarnessProfile` seam (`packages/core/profile`), `profiles/plurora`, and the test-only `profiles/fixtures/minimal` with R1/R3/R4 evidence in `tests/trick-harness/dual-profile.spec.ts`.
-
-Task 6 is an execution ruling carried into Plans A and B rather than a change in this repository. Tasks 7-8 target the `neuro-via` product repository and are out of scope here. Task 9 is this section plus the naming and ordering already reflected below.
-
-## Precedence
-
-Where documents conflict:
-
-1. Explicit owner decisions remain authoritative.
-2. The approved reusable-core amendment supersedes the base Spec only for repository naming, package boundaries, dependency direction, reusable/profile ownership, and R1-R5 evidence.
-3. Plan R is normative wherever historical A/B/C/D text conflicts with that amendment.
-4. A/B/C/D remain authoritative for their detailed implementation requirements when not superseded by Plan R.
-
-## Plan Graph
+## Active Plan Graph
 
 ```text
-R. Reusable Trick Core + project profiles
+COMPLETED
+R. Reusable Trick Core + profiles
               |
               v
-A. Runtime foundation + executor providers
+A. Runtime foundation + OpenCode/Codex providers
               |
               v
 B. Routing + durable engineering workflows
               |
               v
-C. neuro-via bridge + policy/DB migration
+Remediation + Harness-side Plan D evidence
+
+PENDING
+E. Trick cloud-dev / Plurora host enablement
               |
               v
-D. Verification + rollout
+C*. NeuroVia installation amendment
+              |
+              v
+D11/D12. Final pin reconciliation + V2 activation
 ```
+
+## Completed Runtime Plans
 
 ### Plan R — Reusable Trick Core + Profiles
 
 `2026-08-25-trick-harness-v2-reusable-core.md`
 
-Establishes the real `adsonpatrick/trick-harness` fork gate, `@trick-harness/*` namespace, dependency-boundary enforcement, generic `HarnessProfile` seam, `profiles/plurora`, test-only minimal profile, A/B path/type mapping, C consumption contract, and D evidence extension.
+Established the real `adsonpatrick/trick-harness` fork, private `@trick-harness/*` workspaces, generic Core/providers/integrations, `HarnessProfile`, `profiles/plurora`, fixture-profile reuse evidence and project-policy boundaries.
 
 ### Plan A — Runtime Foundation
 
 `2026-08-25-plurora-harness-v2-runtime-foundation.md`
 
-Detailed executor/provider work remains applicable, with Plan R substitutions:
-
-```text
-adsonpatrick/plurora-harness -> adsonpatrick/trick-harness
-PluroraExecutorRuntime -> HarnessExecutorRuntime
-packages/plurora/executor -> packages/core/executor
-packages/plurora/executor-opencode -> packages/providers/opencode
-packages/plurora/executor-codex -> packages/providers/codex
-packages/plurora/executor-claude-code -> packages/providers/claude-code
-@plurora/harness-* -> @trick-harness/*
-```
-
-OpenCode/Codex are required providers; Claude remains optional to core topology but still has a current base acceptance criterion while maintained.
+Implemented the executor runtime and OpenCode/Codex product adapters using native product paths and without making Claude Code part of the active executor set.
 
 ### Plan B — Routing and Engineering Workflows
 
 `2026-08-25-plurora-harness-v2-routing-workflows.md`
 
-Mechanisms remain generic; concrete Plurora policy moves to `profiles/plurora`. Apply Plan R mappings for contracts, routing, journal, workflow, control server, GitHub delivery and Supabase Preview integration. The router consumes profile policy rather than embedding Plurora model tables in Core.
+Implemented deterministic routing, fallback/circuit state, durable journal/replay, PR lifecycle, debugging/repair, QA/security stages, bounded GitHub delivery, Supabase Preview capability and loopback control server. Concrete Plurora policy remains in `profiles/plurora`.
 
-### Plan C — `neuro-via` Integration
+### PR Review Remediation
 
-`2026-08-25-plurora-harness-v2-neuro-via-integration.md`
+`2026-08-26-harness-v2-pr-review-remediation.md` plus its four technical subplans.
 
-The bridge remains thin and must commit non-secret metadata selecting:
+Closed the six PR #1 findings and twelve PR #2 findings, including routing, quiescence, capability authority, durable-before-mutate, workflow identity, security repair gating and lifecycle composition.
 
-```text
-repository = adsonpatrick/trick-harness
-profile = plurora
-controlServerUrl = http://127.0.0.1:47831
-revision = exact independently verified 40-hex Trick Harness SHA
-```
-
-No MiMo/Codex fallback/risk-policy tables are duplicated in `neuro-via`. Existing Plan C rules remain: planning approval gates, TUI push denial, cloud-only DB scripts, Preview Branch isolation, project-local worker skills and governance.
-
-### Plan D — Verification and Rollout
+### Harness-side Plan D Evidence
 
 `2026-08-25-plurora-harness-v2-verification-rollout.md`
 
-The original 30 acceptance rows remain mandatory. Extend the evidence ledger with:
+`docs/verification/2026-08-27-harness-v2-plan-d-evidence.md`
 
-- **R1:** generic packages have no dependency on `profiles/plurora`/`neuro-via`;
-- **R2:** Plurora profile reproduces all approved Plurora policy;
-- **R3:** minimal fixture profile boots without Plurora policy;
-- **R4:** one Trick Harness build executes deterministic workflows under both profiles without Core edits;
-- **R5:** `neuro-via` selects `profile=plurora` through config/bridge and does not duplicate profile policy in generic Core.
+Real OpenCode, Codex, GitHub delivery, replay/quiescence and Supabase fail-closed evidence were collected. Plan D Tasks 11/12 remain intentionally dependent on the NeuroVia installation.
 
-Final activation requires **35/35 PASS**, no unresolved material finding, final `neuro-via` pin matching the independently verified Trick Harness SHA, and trusted composition excluding self-modification/model-authored runtime plugins.
+## Pending Plan E — Trick Cloud-Dev & Plurora Host Enablement
 
-## Cross-Plan Global Constraints
+`2026-08-27-trick-harness-cloud-dev-deployment-enablement.md`
 
-- Implement from the approved base Spec + approved reusable-core amendment; do not resolve missing product decisions in code.
-- Use isolated worktrees/branches for independently mergeable changes.
-- Preserve DeepSeek Harness MIT license/provenance and a reachable upstream remote.
-- Generic DSH core changes require evidence no documented extension point can express the requirement.
-- Keep Plurora policy in `profiles/plurora`; do not leak it into Core/providers/integrations.
-- Heavy/high-volume Plurora execution routes to MiMo V2.5 unless explicitly overridden for that run.
-- Codex remains premium reasoning/review/diagnosis capacity; Codex availability fallback remains DeepSeek V4 Flash for reasoning/review/diagnosis and MiMo V2.5 for implementation/repair/heavy work.
-- Availability fallback is explicit/durable; quality failure is not disguised as quota failure.
-- Fresh-context certification is mandatory; high/critical risk requires configured independence.
-- Per-run model/effort overrides may not mutate global OpenCode/Codex settings.
-- Automatic repair applies only to confirmed eligible defect classes. Product/design ambiguity blocks instead of being invented away.
-- Automated delivery may commit/push the current feature branch and open/update its PR; no force push/main implementation push/merge/release/deploy.
-- Keep `git push*` denied in `neuro-via/opencode.jsonc`; scoped delivery belongs to Trick Harness, not general TUI agents.
-- Database execution/validation is cloud-only on isolated Supabase Preview Branches; no local Docker/shadow DB/shared-dev fallback for unmerged DB changes.
-- Migration files remain schema history; no ad-hoc hosted edits replace migrations.
-- Durable runtime/model-visible state must be reconstructable without private chain-of-thought.
-- Trusted Plurora composition excludes self-modification/model-authored runtime plugins.
-- Verification checks authoritative world state, not worker completion claims.
+This plan is required **before** installing NeuroVia because two facts are now binding:
 
-## Merge/Execution Order
+1. the workflow needs a generic deterministic database-verification seam so the Plurora deployment can use its reviewed `neuro-via` cloud-development verifier rather than requiring the built-in Preview strategy;
+2. `@trick-harness/*` packages are private workspaces, so the runnable Plurora host must execute inside the exact-SHA Trick Harness checkout rather than being imported into `neuro-via` with fragile `file:../...` dependencies.
 
-1. Verify/recreate `adsonpatrick/trick-harness` as the required real fork.
-2. Execute and independently review Plan R Tasks 1-5 to establish reusable boundaries/profile seams.
-3. Execute A with Plan R naming/path/type substitutions.
-4. Execute B with profile-driven policy separation.
-5. Complete the remaining Plan R cross-plan integration checks and independently review the assembled Trick Harness boundary.
-6. Execute C against the exact known-good Trick Harness revision and `profile=plurora`.
-7. Execute D and collect 35-row direct evidence.
-8. Human remains merge authority for all PRs.
+Plan E adds the generic database-verification capability, preserves the optional built-in Preview integration, creates the private Plurora runtime host, validates the deployment `ModelRegistry` against native OpenCode/Codex catalogues, and records a new known-good exact SHA for Plan C*.
+
+## Pending Plan C* — NeuroVia Installation Amendment
+
+`2026-08-27-neurovia-harness-installation-amendment.md`
+
+This is the normative overlay on historical Plan C (`2026-08-25-plurora-harness-v2-neuro-via-integration.md`). Historical Plan C remains useful for command/skill/governance details where this overlay does not change them.
+
+The installed topology is:
+
+```text
+OpenCode TUI in neuro-via
+        |
+        | bounded custom tools
+        v
+neuro-via control client / launcher
+        |
+        | loopback HTTP
+        v
+exact-SHA Trick Harness checkout
+        |
+        +-- Plurora host
+        |    +-- profile=plurora
+        |    +-- deployment ModelRegistry
+        |    +-- OpenCode + Codex
+        |    +-- GitHubDelivery
+        |    +-- project DB verification capability
+        |
+        v
+neurovia-dev (development only)
+```
+
+`neuro-via/plurora-harness.json` owns only non-secret deployment metadata: runtime repository/revision, profile/policy version, loopback URL, environment, authorized development DB ref and semantic-tier -> product-native model ids. It does not duplicate routing rules.
+
+## Database Development Authority
+
+Current Plurora development policy is:
+
+```text
+environment=development
+configured DB strategy=shared-cloud-development
+configured project ref=uljaajwwnygopsyvwsre
+=> neurovia-dev is the only automatic development DB mutation target
+```
+
+A DB-changing workflow must:
+
+```text
+verify target/link identity
+-> acquire cross-process mutation lock
+-> reconcile migration history
+-> refuse unexplained drift
+-> db push dry-run
+-> db push
+-> re-read migration history
+-> remote lint
+-> pgTAP
+-> RLS allow + deny
+-> applicable integration/security checks
+-> durable evidence
+-> release lock
+```
+
+No canonical path may use local Docker/Supabase/Postgres, arbitrary remote project selection, production fallback, `migration repair`, remote reset or Dashboard-only schema authority.
+
+When a future `neurovia-prod` project is created, it is a separate authority boundary. Existing Harness development permission does not transfer to production; production rollout requires a separate approved design.
+
+## Model Registry Rule
+
+`profiles/plurora` owns semantic-tier selection. Deployment owns only the native id resolution for these tiers:
+
+```text
+codex.fast
+codex.balanced
+codex.frontier
+opencode.reasoning-fast
+opencode.workhorse
+```
+
+OpenCode ids must be authenticated `provider/model` pairs advertised by the running product. Codex ids must appear in the pinned app-server `model/list` catalogue. Missing or unsupported mappings block host readiness. `DEFAULT_MODEL_REGISTRY` is never a production deployment fallback because it contains human/product names, not guaranteed provider-native ids.
+
+## Final Activation
+
+After Plan E and Plan C* are complete, execute the remaining Plan D NeuroVia tasks:
+
+1. reconcile `neuro-via/plurora-harness.json` to the final independently reviewed Trick Harness SHA;
+2. run the bridge health check and one real read-only workflow from the OpenCode TUI;
+3. collect cloud-development DB evidence when a real migration is present, otherwise record target/history/dry-run evidence without inventing a migration;
+4. verify no TUI push authority, no global model-config mutation, no local DB canonical path and no committed secrets;
+5. update operator documentation and activation evidence;
+6. keep merge/release/deploy human-controlled.
 
 ## Completion Contract
 
-V2 is complete only when **all 30 base acceptance criteria plus R1-R5** have fresh direct PASS evidence, the final `neuro-via` integration pin references the independently verified `adsonpatrick/trick-harness` revision, the same Trick Harness build demonstrably supports both Plurora and minimal fixture profiles without Core changes, no material finding remains unresolved, and trusted runtime composition satisfies the Spec/amendment non-goals. A green package/provider/workflow or partial integration is not sufficient.
+Harness V2 is activated for Plurora only when the final NeuroVia pin references the post-amendment reviewed Trick Harness SHA; the runnable host starts from that exact clean checkout; the complete deployment ModelRegistry is accepted by the native products; OpenCode can run/status/cancel through the bounded bridge; `neurovia-dev` is the sole authorized development DB mutation target with serialized, drift-safe, cloud-only migration verification; production remains unreachable by automatic development authority; all required retained acceptance criteria plus reusable-core and ND1-ND12 amendment criteria have direct evidence; and no confirmed material finding remains unresolved.
