@@ -27,10 +27,10 @@ implement
 
 ```text
 review      => is the code/diff correct and maintainable?
-qa          => does product behavior work across the required journeys and negative paths?
+qa          => does product behavior work across required journeys and negative paths?
 security    => are security invariants preserved?
 conformance => did we implement exactly the approved scope and produce evidence for every required obligation?
-verify-final=> are the final branch/world facts still valid after all repairs and certification?
+verify-final=> are final branch/world facts still valid after all repairs and certification?
 ```
 
 ## 2. Approved artifact identity
@@ -55,7 +55,7 @@ export interface ApprovedArtifactSet {
 readonly approvedArtifacts: ApprovedArtifactSet
 ```
 
-The paths are repository-relative canonical paths resolved under `objective.cwd`. The SHA-256 hashes are computed when the approved implementation run is started and recorded durably. Before implementation starts and again before conformance starts, the runtime re-reads both files and verifies the hashes. A changed/missing artifact is `BLOCKED`; the Harness never silently certifies a different Spec or Plan.
+Paths are repository-relative canonical paths resolved under `objective.cwd`. SHA-256 hashes are computed when the approved implementation run starts and recorded durably. Before implementation starts and again before conformance starts, the runtime re-reads both files and verifies the hashes. A changed or missing artifact is `BLOCKED`; the Harness never silently certifies a different Spec or Plan.
 
 The journal records path + SHA-256 only. It does not persist whole documents, prompts, model transcripts, chain-of-thought or credentials.
 
@@ -82,9 +82,9 @@ export interface ConformanceManifest {
 
 ### 3.1 Spec obligations
 
-The deterministic parser reads explicit acceptance-criterion identifiers from the approved Spec. New/active Plurora Specs must expose stable IDs for every merge-blocking acceptance criterion. The parser does not ask a model to invent or omit the list.
+The deterministic parser reads explicit acceptance-criterion identifiers from the approved Spec. New and active Plurora Specs must expose stable IDs for every merge-blocking acceptance criterion. The parser does not ask a model to invent or omit the list.
 
-For this generation, accepted normative rows use the repository convention:
+Accepted normative rows use the repository convention:
 
 ```markdown
 - **AC1:** ...
@@ -102,20 +102,22 @@ Every heading matching the approved Superpowers task form is a required plan obl
 ### Task N: <name>
 ```
 
-The obligation id is `PLAN-TASK-N`. A conformance result cannot omit a plan task because the expected task set is known before the model runs. Individual checkbox steps remain execution guidance/evidence seams; the merge-blocking completeness unit is the task.
+The obligation id is `PLAN-TASK-N`. A conformance result cannot omit a plan task because the expected task set is known before the model runs. Individual checkbox steps remain execution guidance and evidence seams; the merge-blocking completeness unit is the task.
 
 ### 3.3 DoD obligations
 
 The Plurora profile/project deployment supplies a stable baseline DoD manifest. At minimum it includes:
 
-- `DOD-APPROVED-ARTIFACTS` — approved Spec/Plan hashes still match;
-- `DOD-DIFF-COHERENCE` — final diff contains no unrelated/stray artifact relevant to readiness;
-- `DOD-FRESH-EVIDENCE` — applicable gates were produced for the final implementation state;
+- `DOD-APPROVED-ARTIFACTS` — approved Spec/Plan paths and hashes still match;
+- `DOD-DIFF-COHERENCE` — final published diff contains no unrelated or stray readiness-affecting artifact;
+- `DOD-FRESH-EVIDENCE` — applicable gates have fresh evidence for the final implementation state;
 - `DOD-NO-MATERIAL-DEFECT` — no confirmed material defect remains open;
-- `DOD-APPLICABLE-QA` — required QA evidence exists and passed;
-- `DOD-APPLICABLE-SECURITY` — required security evidence exists and passed;
-- `DOD-DELIVERY-WORLD` — the reviewed branch/PR/commit corresponds to the state being certified;
-- `DOD-FINAL-VERIFICATION` — reserved for the final verifier and therefore cannot be marked complete by conformance itself; conformance marks its prerequisite state as ready for final verification.
+- `DOD-APPLICABLE-QA` — required QA evidence exists and passed, or QA is deterministically not required;
+- `DOD-APPLICABLE-SECURITY` — required security evidence exists and passed, or security review is deterministically not required;
+- `DOD-DELIVERY-WORLD` — reviewed branch/PR/commit corresponds to the state being certified;
+- `DOD-FINAL-VERIFY-READY` — all prerequisites are satisfied for the following fresh final verification stage.
+
+`DOD-FINAL-VERIFY-READY` does **not** claim `verify-final` has already run. Conformance certifies only that the branch is ready for that final verifier. Actual `PR_READY` still requires a subsequent `verify-final=PASS`.
 
 Project-specific DoD criteria may extend this list, but may not remove the baseline rows.
 
@@ -154,9 +156,9 @@ export interface ConformanceContract {
 }
 ```
 
-The parser rebuilds the contract from declared fields and drops/rejects undeclared data using the same bounded-contract discipline as the existing diagnosis/stage parsers.
+The parser rebuilds the contract from declared fields and drops or rejects undeclared data using the same bounded-contract discipline as existing diagnosis/stage parsers.
 
-A deterministic coverage validator compares the returned item IDs to the `ConformanceManifest`:
+A deterministic coverage validator compares returned item IDs to the `ConformanceManifest`:
 
 - every expected obligation appears exactly once;
 - no expected obligation may be silently omitted;
@@ -190,11 +192,11 @@ coverage/result cannot be established
 
 `PR_READY` requires conformance `PASS`. A green CI run, code review or QA result cannot override a missing Spec criterion or Plan task.
 
-A `MISSING` plan task or Spec requirement is a scope-completeness finding. It may enter the existing diagnosis/repair cycle only when the missing work is already unambiguously specified by the approved artifacts. If satisfying it would require a product/design decision, the workflow returns `BLOCKED`; the Harness may not invent scope to make the matrix green.
+A `MISSING` Plan task or Spec requirement is a scope-completeness finding. It may enter the existing diagnosis/repair cycle only when the missing work is already unambiguously specified by the approved artifacts. If satisfying it would require a product/design decision, the workflow returns `BLOCKED`; the Harness may not invent scope to make the matrix green.
 
 ## 6. Role authority and independence
 
-`conformance` is added to `ROLES` and `READ_ONLY_ROLES`. It receives no workspace mutation authority. Any fix follows the normal separate diagnose/repair path and is followed by fresh delivery/review/applicable QA/security/conformance before final verification.
+`conformance` is added to `ROLES` and `READ_ONLY_ROLES`. It receives no workspace mutation authority. Any fix follows the normal separate diagnose/repair path and is followed by fresh delivery, review, applicable QA/security and conformance before final verification.
 
 The existing Plurora independence policy remains authoritative:
 
@@ -205,7 +207,7 @@ high     => cross-executor-required
 critical => cross-executor-required
 ```
 
-For high/critical work, inability to obtain the required independent executor prevents conformance certification and therefore prevents `PR_READY`. Medium may record degraded preferred independence according to the existing policy; it must never misreport cross-executor evidence that did not occur.
+For high/critical work, inability to obtain the required independent executor prevents conformance certification and therefore prevents `PR_READY`. Medium may record degraded preferred independence according to existing policy; it must never misreport cross-executor evidence that did not occur.
 
 ## 7. Routing and model choice
 
@@ -225,9 +227,9 @@ role=conformance, risk=high|critical
 => effort=xhigh
 ```
 
-In the current deployment policy these tiers correspond conceptually to GPT-5.6 Terra (`codex.balanced`) and GPT-5.6 Sol (`codex.frontier`), but concrete product-native model ids remain deployment registry data and must be validated through the authenticated Codex `model/list` catalogue.
+In the current deployment policy these tiers correspond conceptually to GPT-5.6 Terra (`codex.balanced`) and GPT-5.6 Sol (`codex.frontier`), but concrete product-native model ids remain deployment registry data and must be validated through authenticated Codex `model/list`.
 
-Codex currently exposes model-specific supported reasoning efforts through `model/list`; the Plurora host must validate that the resolved model advertises the requested effort before declaring the route usable. If a configured model does not support the requested effort, startup/routing fails closed rather than silently weakening the requested assurance.
+Codex exposes model-specific supported reasoning efforts through `model/list`; the Plurora host must validate that the resolved model advertises the requested effort before declaring the route usable. If a configured model does not support the requested effort, startup or routing fails closed rather than silently weakening assurance.
 
 Availability fallback is:
 
@@ -237,7 +239,7 @@ Codex unavailable for conformance
 => tier=opencode.reasoning-fast
 ```
 
-Fallback evidence is labelled as degraded. It may satisfy low/medium policy only to the extent allowed by the existing independence requirement. It cannot satisfy `cross-executor-required` when implementation was performed by OpenCode, so high/critical PR readiness remains blocked until an acceptable independent route exists or a human explicitly changes the run policy/override.
+Fallback evidence is labelled degraded. It may satisfy low/medium policy only to the extent allowed by the existing independence requirement. It cannot satisfy `cross-executor-required` when implementation was performed by OpenCode, so high/critical PR readiness remains blocked until an acceptable independent route exists or a human explicitly changes the run policy/override.
 
 MiMo V2.5 / `opencode.workhorse` is not the primary conformance route because conformance is semantic comparison and omission detection rather than high-volume code production.
 
@@ -262,13 +264,13 @@ If repair occurs after a conformance finding, the workflow must re-establish pub
 
 ## 9. NeuroVia bridge responsibilities
 
-The `neuro-via` implementation command remains human-gated. When `/implement` starts an approved Harness workflow it must supply the repository-relative Spec/Plan paths. The project bridge computes SHA-256 hashes from those exact files and sends the approved artifact set in the start request.
+The `neuro-via` implementation command remains human-gated. When `/implement` starts an approved Harness workflow it must supply repository-relative Spec/Plan paths. The project bridge computes SHA-256 hashes from those exact files and sends the approved artifact set in the start request.
 
-The bridge must not allow the model to provide arbitrary external artifact paths. Paths must resolve under the current worktree. The control server validates the structured artifact set and the Plurora host re-validates the files before run/conformance.
+The bridge must not allow the model to provide arbitrary external artifact paths. Paths must resolve under the current worktree. The control server validates the structured artifact set and the Plurora host re-validates files before run/conformance.
 
-`pr-readiness` is updated to consume the Harness conformance projection rather than independently claiming Plan completeness. It still owns project evidence/gate selection and contributes the baseline/project-specific DoD rows consumed by conformance.
+`pr-readiness` is updated to consume the Harness conformance projection rather than independently claiming Plan completeness. It still owns project evidence/gate selection and contributes project evidence mapped to the baseline/project-specific DoD rows consumed by conformance.
 
-## 10. Evidence and UI/status
+## 10. Evidence and status
 
 Workflow status exposes bounded conformance facts:
 
@@ -286,21 +288,21 @@ It does not expose full model transcripts or private reasoning.
 - **CF1:** `conformance` is a first-class read-only role accepted by contracts, parsers, routing and lifecycle.
 - **CF2:** every implementation workflow pins repository-relative approved Spec/Plan paths plus SHA-256 hashes and blocks if either artifact changes before certification.
 - **CF3:** deterministic manifest extraction enumerates every explicit Spec acceptance criterion and every Superpowers `### Task N:` Plan task before model dispatch.
-- **CF4:** baseline Plurora DoD obligations are injected independently of model output and cannot be removed by a project run.
-- **CF5:** a conformance result omitting/duplicating/mismatching any expected obligation is not PASS.
+- **CF4:** eight baseline Plurora DoD obligations are injected independently of model output and cannot be removed by a project run.
+- **CF5:** a conformance result omitting, duplicating or mismatching any expected obligation is not PASS.
 - **CF6:** any required Spec/Plan/DoD item with MISSING/FAIL/PARTIAL/BLOCKED/INCONCLUSIVE prevents conformance PASS according to the verdict rules above.
 - **CF7:** `PR_READY` requires latest conformance PASS plus final verification PASS and all pre-existing readiness invariants.
 - **CF8:** low/medium conformance routes to `codex.balanced` with `high`; high/critical routes to `codex.frontier` with `xhigh`.
 - **CF9:** Codex model/effort compatibility is verified through the authenticated native model catalogue; unsupported requested effort is not silently downgraded.
 - **CF10:** Codex availability fallback routes conformance to `opencode.reasoning-fast` and records degraded assurance; it cannot satisfy high/critical cross-executor-required independence when implementation used OpenCode.
-- **CF11:** conformance is unable to mutate the workspace; fixes happen through existing diagnose/repair authority and invalidate prior conformance evidence.
+- **CF11:** conformance cannot mutate the workspace; fixes happen through existing diagnose/repair authority and invalidate prior conformance evidence.
 - **CF12:** NeuroVia `/implement` supplies approved artifact paths from the current worktree, the bridge hashes them, and arbitrary external paths are rejected.
-- **CF13:** NeuroVia PR readiness consumes the Harness conformance result and cannot declare Plan/DoD completeness from CI/worker self-report alone.
+- **CF13:** NeuroVia PR readiness consumes Harness conformance and cannot declare Plan/DoD completeness from CI or worker self-report alone.
 - **CF14:** durable/status data contains bounded matrix/evidence facts and approved artifact hashes, never whole Spec/Plan content, transcripts or private reasoning.
 
 ## 12. Plan precedence and rollout
 
-This amendment introduces a new Harness-side Plan F and a NeuroVia conformance wiring overlay. The active sequence becomes:
+This amendment introduces a Harness-side Plan F and a NeuroVia conformance wiring overlay. The active sequence becomes:
 
 ```text
 Plan E  — cloud-dev / Plurora host enablement
