@@ -59,6 +59,9 @@ export const GITHUB_DELIVERY_CAPABILITY = 'github-delivery'
 /** Integration capability id for cloud-only Supabase preview validation. */
 export const SUPABASE_PREVIEW_CAPABILITY = 'supabase-preview'
 
+/** Integration capability id for a project-supplied database verifier. */
+export const DATABASE_VERIFICATION_CAPABILITY = 'database-verification'
+
 /** Integration capability id for the loopback control server. */
 export const CONTROL_SERVER_CAPABILITY = 'control-server'
 
@@ -252,6 +255,14 @@ function assertAuthorised(profile: HarnessProfile, options: HarnessCompositionOp
     throw new BundleCompositionError(
       'this composition supplies a project database verification capability and configures the built-in '
       + `${SUPABASE_PREVIEW_CAPABILITY} strategy; exactly one may own a database`,
+    )
+  }
+  if (
+    options.capabilities?.databaseVerification !== undefined
+    && !enabled(profile, DATABASE_VERIFICATION_CAPABILITY)
+  ) {
+    throw new BundleCompositionError(
+      `profile ${JSON.stringify(profile.id)} does not enable ${DATABASE_VERIFICATION_CAPABILITY}`,
     )
   }
   if (options.control !== undefined && !enabled(profile, CONTROL_SERVER_CAPABILITY)) {

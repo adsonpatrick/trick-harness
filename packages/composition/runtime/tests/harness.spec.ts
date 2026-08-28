@@ -12,6 +12,7 @@ import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-sub
 import {
   BundleCompositionError,
   CONTROL_SERVER_CAPABILITY,
+  DATABASE_VERIFICATION_CAPABILITY,
   GITHUB_DELIVERY_CAPABILITY,
   SUPABASE_PREVIEW_CAPABILITY,
   composeHarness,
@@ -805,7 +806,9 @@ describe('a composed run that changes a database', () => {
     withSupabase: boolean,
   ): HarnessCompositionOptions {
     const base = baseOptions(
-      profileEnabling([GITHUB_DELIVERY_CAPABILITY, SUPABASE_PREVIEW_CAPABILITY]),
+      profileEnabling([
+        GITHUB_DELIVERY_CAPABILITY, SUPABASE_PREVIEW_CAPABILITY, DATABASE_VERIFICATION_CAPABILITY,
+      ]),
       started,
     )
     return {
@@ -864,6 +867,29 @@ describe('a composed run that changes a database', () => {
 
     expect(outcome.state).toBe('blocked')
     expect(outcome.summary).toContain('could not be reached')
+  })
+
+  // An integration configured but not enabled is two files disagreeing, and a
+  // database is the wrong place to guess which one meant it.
+  it('refuses an injected verifier the profile does not enable', () => {
+    const started: ExecutorStartRequest[] = []
+    const base = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
+    const options: HarnessCompositionOptions = {
+      ...base,
+      workflow: {
+        ...base.workflow,
+        databaseChange: () => ({ required: true, migrationPaths: ['supabase/migrations/0001_thing.sql'] }),
+      },
+      capabilities: {
+        databaseVerification: {
+          verify: async () => ({ status: 'PASSED', summary: 'unreached', evidence: [], findings: [] }),
+        },
+      },
+      integrations: { github: { cwd: '/repo', spawn: deliveringSpawn } },
+    }
+
+    expect(() => compose(options)).toThrow(BundleCompositionError)
+    expect(() => compose(options)).toThrow(new RegExp(DATABASE_VERIFICATION_CAPABILITY))
   })
 
   // Two verifiers is not a redundancy, it is two answers about one database with
