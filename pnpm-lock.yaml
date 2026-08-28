@@ -361,9 +361,15 @@ importers:
 
   apps/plurora-harness-host:
     dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/cordis
       '@deepseek-ai/dsh-session':
         specifier: workspace:^
         version: link:../../packages/core/session
+      '@deepseek-ai/dsh-session-persistence-jsonl':
+        specifier: workspace:^
+        version: link:../../packages/session/session-persistence-jsonl
       '@deepseek-ai/dsh-subagent-codex':
         specifier: workspace:^
         version: link:../../packages/subagent/subagent-codex

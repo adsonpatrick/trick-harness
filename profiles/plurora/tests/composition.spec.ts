@@ -712,4 +712,59 @@ describe('the capabilities this project actually turns on', () => {
       expect(argv).toContain('branches')
     }
   })
+
+  /** Compose the real profile with inert seams and a listening control server. */
+  function listening(): ComposedHarness {
+    const seams = productSeams()
+    const harness = composeHarness({
+      profile: pluroraProfile,
+      registry: DEFAULT_MODEL_REGISTRY,
+      session: Session.create(SessionId('plurora-control')),
+      flush: async () => true,
+      workflow: {
+        interpret: (stage, executor) => ({
+          role: stage.role,
+          executor,
+          verdict: 'PASS',
+          summary: `${stage.role} passed`,
+          findings: [],
+          evidence: [],
+        }),
+        task: stage => `${stage.role}: do the work`,
+      },
+      providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
+      integrations: {
+        github: { cwd: '/repo', spawn: seams.spawn },
+        supabase: { cwd: '/repo', spawn: seams.spawn, projectRef: 'uljaajwwnygopsyvwsre' },
+      },
+      control: { host: '127.0.0.1', port: 0, token: 'a-token-long-enough' },
+    })
+    opened.push(harness)
+    return harness
+  }
+
+  it('answers a caller who does not hold the token with nothing about the run', async () => {
+    const harness = listening()
+    const endpoint = await harness.server?.listen()
+
+    // Bound to loopback rather than to every interface: the control surface can
+    // cancel a run, and reaching it should require already being on the machine.
+    expect(endpoint?.host).toBe('127.0.0.1')
+    const response = await fetch(`http://127.0.0.1:${endpoint?.port}/status`)
+    expect(response.status).toBe(401)
+    expect(await response.text()).not.toContain('a-token-long-enough')
+  })
+
+  it('leaves no listener behind, so a disposed deployment holds no port open', async () => {
+    const harness = listening()
+    const endpoint = await harness.server?.listen()
+    const port = endpoint?.port
+
+    await harness.dispose()
+
+    // The port is the observable part of quiescence: a deployment that reported
+    // itself shut down while still accepting control requests would still be
+    // able to start work nobody is watching.
+    await expect(fetch(`http://127.0.0.1:${port}/status`)).rejects.toThrow()
+  })
 })

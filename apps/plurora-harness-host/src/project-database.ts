@@ -29,6 +29,7 @@ import type {
   WorkflowDatabaseVerificationResult,
 } from '@trick-harness/engineering-workflow'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import { looksLikeSecret } from './redaction.ts'
 
 /**
  * The only command this host will run to verify a database.
@@ -94,24 +95,6 @@ const STATUSES = new Set(['PASSED', 'FAILED', 'BLOCKED'])
 const EVIDENCE_KINDS = new Set(['gate', 'test'])
 
 /**
- * Text this host refuses to journal.
- *
- * Deliberately shaped rather than exhaustive. It cannot catch every secret a
- * project could print, and it is not the last line of defence — the envelope
- * already drops every field it did not validate. What it catches is the
- * realistic accident: a verification tool that helpfully includes the
- * connection string or bearer token it used in its own summary line.
- */
-const SECRET_SHAPED = [
-  // A URL carrying userinfo: the shape a connection string takes.
-  /\b[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s/@]*:[^\s/@]*@/,
-  // The prefixes the common token formats announce themselves with.
-  /\b(?:sk|pk|ghp|gho|xox[abps])[-_][A-Za-z0-9_-]{10,}/,
-  // An authorization header pasted into a message.
-  /\b[Bb]earer\s+[A-Za-z0-9._-]{10,}/,
-]
-
-/**
  * Read one required string field, refusing a credential-shaped value.
  *
  * @param value - the field as the child sent it.
@@ -123,7 +106,7 @@ function safeString(value: unknown, label: string): string {
   if (typeof value !== 'string' || value === '') {
     throw new ProjectDatabaseEnvelopeError(`the database verification envelope has no ${label}`)
   }
-  if (SECRET_SHAPED.some(pattern => pattern.test(value))) {
+  if (looksLikeSecret(value)) {
     throw new ProjectDatabaseEnvelopeError(
       `the database verification envelope put something credential-shaped in ${label}, so none of it is journalled`,
     )

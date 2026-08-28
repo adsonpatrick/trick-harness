@@ -330,18 +330,18 @@ load config
 -> ready
 ```
 
-- [ ] Write RED tests proving no readiness before config/model validation, profile mismatch fails before side effects, and disposal waits for control/server/provider/DB subprocess quiescence.
-- [ ] Implement durable session persistence using the DSH session persistence package already used by the fork; no in-memory-only runnable host.
-- [ ] Implement workflow handlers using the approved Plurora PR lifecycle; handlers may interpret provider results but cannot perform GitHub/DB mutation directly.
-- [ ] Bind the existing control server to configured loopback address and caller-supplied process token.
-- [ ] Run:
+- [x] Write RED tests proving no readiness before config/model validation, profile mismatch fails before side effects, and disposal waits for control/server/provider/DB subprocess quiescence.
+- [x] Implement durable session persistence using the DSH session persistence package already used by the fork; no in-memory-only runnable host.
+- [x] Implement workflow handlers using the approved Plurora PR lifecycle; handlers may interpret provider results but cannot perform GitHub/DB mutation directly.
+- [x] Bind the existing control server to configured loopback address and caller-supplied process token.
+- [x] Run:
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
 corepack pnpm run test:trick
 ```
 
-- [ ] Commit.
+- [x] Commit.
 
 ---
 

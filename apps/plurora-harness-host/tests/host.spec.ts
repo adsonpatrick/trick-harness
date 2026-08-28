@@ -14,7 +14,9 @@ import { BundleCompositionError, composeHarness } from '@trick-harness/compositi
 import { DEFAULT_MODEL_REGISTRY } from '@trick-harness/routing'
 import type { DatabaseVerificationCapabilityPort } from '@trick-harness/engineering-workflow'
 import type { ExecutorProvider } from '@trick-harness/executor'
+import type { OpencodeAdapter } from '@trick-harness/provider-opencode'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import { readdir } from 'node:fs/promises'
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import { DeploymentConfigError, PLURORA_SEMANTIC_TIERS } from '../src/config.ts'
 import { ModelRegistryError, type ModelCatalogReader } from '../src/model-registry.ts'
@@ -27,7 +29,8 @@ function deployment(overrides: Record<string, unknown> = {}): Record<string, unk
     revision: 'b'.repeat(40),
     profile: 'plurora',
     policyVersion: pluroraProfile.policyVersion,
-    controlServerUrl: 'http://127.0.0.1:4319',
+    // Port 0 so every test gets its own endpoint and none can inherit another's.
+    controlServerUrl: 'http://127.0.0.1:0',
     environment: 'development',
     database: { strategy: 'shared-cloud-development', projectRef: 'uljaajwwnygopsyvwsre' },
     modelRegistry: Object.fromEntries(PLURORA_SEMANTIC_TIERS.map(tier => [tier, `model-for-${tier}`])),
@@ -54,6 +57,25 @@ const EMPTY_CATALOGUE: ModelCatalogReader = {
 /** A child that never runs; the database command is not exercised here. */
 function unusedSpawn(_spec: SubprocessSpawnSpec): SubprocessHandle {
   throw new Error('the database command was not expected to run')
+}
+
+/**
+ * An OpenCode seam that fails if it is ever reached.
+ *
+ * Registering a provider must not talk to the product, so a boot that touched
+ * this one would be a boot doing work before it had decided it could run.
+ *
+ * @returns the adapter, and a reader for how often it was reached.
+ */
+function untouchedOpencode(): { adapter: OpencodeAdapter; reached: () => number } {
+  let reached = 0
+  return {
+    adapter: {
+      startServer: () => { reached += 1; throw new Error('starting the host must not start an OpenCode server') },
+      connect: () => { reached += 1; throw new Error('starting the host must not connect an OpenCode client') },
+    },
+    reached: () => reached,
+  }
 }
 
 /**
@@ -133,6 +155,7 @@ describe('startPluroraHost', () => {
     document: Record<string, unknown>,
     controlToken = 'control-token',
     catalogue: ModelCatalogReader = servingCatalogue(),
+    opencode: OpencodeAdapter = untouchedOpencode().adapter,
   ): ReturnType<typeof startPluroraHost> {
     await writeFile(join(root, 'plurora-harness.json'), JSON.stringify(document), 'utf8')
     return await startPluroraHost({
@@ -141,7 +164,13 @@ describe('startPluroraHost', () => {
       signal: controller.signal,
       catalogue,
       spawn: unusedSpawn,
+      opencode,
     })
+  }
+
+  /** What the host left behind under the project root, by name. */
+  async function entries(): Promise<readonly string[]> {
+    return (await readdir(root)).toSorted()
   }
 
   it('starts on a deployment that satisfies every rule', async () => {
@@ -212,6 +241,7 @@ describe('startPluroraHost', () => {
       signal: controller.signal,
       catalogue: servingCatalogue(),
       spawn: (spec) => { specs.push(spec); throw new Error('not run') },
+      opencode: untouchedOpencode().adapter,
     })
     const result = await host.databaseVerification.verify({
       stageId: 'delivery',
@@ -234,6 +264,61 @@ describe('startPluroraHost', () => {
   it('names no credential in what it hands back', async () => {
     const host = await start(deployment(), 'super-secret-control-token')
     expect(JSON.stringify(host.config)).not.toContain('super-secret-control-token')
+    await host.dispose()
+  })
+
+  it('holds the control endpoint the deployment names, and answers on it', async () => {
+    const host = await start(deployment())
+    expect(host.control.host).toBe('127.0.0.1')
+    expect(host.control.port).toBeGreaterThan(0)
+    const response = await fetch(`http://127.0.0.1:${String(host.control.port)}/workflows`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    // Unauthenticated, so refused — which is the proof that something is there.
+    expect(response.status).toBe(401)
+    await host.dispose()
+  })
+
+  it('journals into a session that survives the process', async () => {
+    const host = await start(deployment())
+    expect(await entries()).toContain('.plurora-harness')
+    expect(await host.flush()).toBe(true)
+    await host.dispose()
+  })
+
+  it('is not ready until the native catalogues have answered', async () => {
+    const seam = untouchedOpencode()
+    await expect(start(deployment(), 'control-token', EMPTY_CATALOGUE, seam.adapter))
+      .rejects.toThrow(ModelRegistryError)
+    // Nothing durable, nothing bound, nothing asked of a product: a boot that
+    // failed the model gate has to be a boot that did not happen.
+    expect(await entries()).toEqual(['plurora-harness.json'])
+    expect(seam.reached()).toBe(0)
+  })
+
+  it('fails a policy-version mismatch before it has done anything', async () => {
+    const seam = untouchedOpencode()
+    await expect(start(deployment({ policyVersion: 'plurora-v0.0.1' }), 'control-token', servingCatalogue(), seam.adapter))
+      .rejects.toThrow(PluroraHostError)
+    expect(await entries()).toEqual(['plurora-harness.json'])
+    expect(seam.reached()).toBe(0)
+  })
+
+  it('is quiet once disposed: the endpoint is gone and the runtime is down', async () => {
+    const host = await start(deployment())
+    const endpoint = `http://127.0.0.1:${String(host.control.port)}/workflows`
+    await host.dispose()
+    await expect(fetch(endpoint, { method: 'POST', body: '{}' })).rejects.toThrow()
+    // Disposal is awaited to quiescence, so a second one has nothing to wait for.
+    await expect(host.dispose()).resolves.toBeUndefined()
+  })
+
+  it('composes the profile itself rather than handing its parts to a caller', async () => {
+    const host = await start(deployment())
+    expect([...host.harness.executors].toSorted()).toEqual(['codex', 'opencode'])
+    expect(host.harness.server).toBeDefined()
     await host.dispose()
   })
 })
