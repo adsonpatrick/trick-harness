@@ -129,16 +129,16 @@ export interface ConformanceContract {
 }
 ```
 
-- [ ] **Step 1: Write RED parser tests** for valid contract, unknown source/status, duplicate/missing fields, undeclared transcript/reasoning fields, malformed hashes and secret-safe errors.
-- [ ] **Step 2: Implement `parseConformanceContract(value, path='conformance')`** using existing bounded parser helpers and immutable outputs.
-- [ ] **Step 3: Run GREEN + typecheck.**
+- [x] **Step 1: Write RED parser tests** for valid contract, unknown source/status, duplicate/missing fields, undeclared transcript/reasoning fields, malformed hashes and secret-safe errors.
+- [x] **Step 2: Implement `parseConformanceContract(value, path='conformance')`** using existing bounded parser helpers and immutable outputs.
+- [x] **Step 3: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add packages/core/contracts

@@ -18,6 +18,8 @@
 
 import {
   CONFIDENCE_LEVELS,
+  CONFORMANCE_ITEM_STATUSES,
+  CONFORMANCE_SOURCES,
   EVIDENCE_KINDS,
   FINDING_CLASSES,
   RISKS,
@@ -30,6 +32,8 @@ import {
 import type {
   ApprovedArtifactRef,
   ApprovedArtifactSet,
+  ConformanceContract,
+  ConformanceItem,
   DiagnosisContract,
   EvidenceRef,
   Finding,
@@ -265,6 +269,15 @@ export function parseStageRouteOverride(value: unknown, path = 'routeOverride'):
 /** A lowercase 64-hex SHA-256 digest and nothing else. */
 const SHA256 = /^[0-9a-f]{64}$/
 
+/** Read a required field that must be a SHA-256 digest. */
+function digest(source: Record<string, unknown>, key: string, path: string): string {
+  const value = text(source, key, path)
+  if (!SHA256.test(value)) {
+    throw new ContractError(`${path}.${key}`, 'must be a lowercase 64-character hexadecimal SHA-256')
+  }
+  return value
+}
+
 /** A Windows drive designator, which makes whatever follows it absolute. */
 const DRIVE_LETTER = /^[a-zA-Z]:/
 
@@ -319,11 +332,7 @@ export function parseApprovedArtifactRef(value: unknown, path = 'artifact'): App
   if (!named || DRIVE_LETTER.test(location)) {
     throw new ContractError(`${path}.path`, 'must be a repository-relative path of ordinary name segments')
   }
-  const digest = text(source, 'sha256', path)
-  if (!SHA256.test(digest)) {
-    throw new ContractError(`${path}.sha256`, 'must be a lowercase 64-character hexadecimal SHA-256')
-  }
-  return Object.freeze({ path: location, sha256: digest })
+  return Object.freeze({ path: location, sha256: digest(source, 'sha256', path) })
 }
 
 /**
@@ -339,6 +348,58 @@ export function parseApprovedArtifactSet(value: unknown, path = 'approvedArtifac
   return Object.freeze({
     spec: parseApprovedArtifactRef(source['spec'], `${path}.spec`),
     plan: parseApprovedArtifactRef(source['plan'], `${path}.plan`),
+  })
+}
+
+/**
+ * Read one conformance item back.
+ *
+ * @param value - The serialized item.
+ * @param path - Field path to report a rejection under.
+ * @returns The item, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing or outside its vocabulary.
+ */
+function parseConformanceItem(value: unknown, path: string): ConformanceItem {
+  const source = asRecord(value, path)
+  return Object.freeze({
+    id: text(source, 'id', path),
+    source: member(source, 'source', CONFORMANCE_SOURCES, path),
+    requirement: text(source, 'requirement', path),
+    status: member(source, 'status', CONFORMANCE_ITEM_STATUSES, path),
+    implementationEvidence: list(source, 'implementationEvidence', path, parseEvidenceRef),
+    verificationEvidence: list(source, 'verificationEvidence', path, parseEvidenceRef),
+    summary: text(source, 'summary', path),
+  })
+}
+
+/**
+ * Read one conformance result back.
+ *
+ * The two hashes are required because this record outlives the run that wrote
+ * it: a `PASS` that did not name the documents it measured reads, later, as a
+ * pass against whatever the plan says by then. And an obligation may be
+ * answered once — two answers for one id leave which one counts to whoever
+ * happens to read the list last.
+ *
+ * @param value - The serialized result.
+ * @param path - Field path to report a rejection under.
+ * @returns The result, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing, outside its vocabulary, or
+ *   answers one obligation twice.
+ */
+export function parseConformanceContract(value: unknown, path = 'conformance'): ConformanceContract {
+  const source = asRecord(value, path)
+  const items = list(source, 'items', path, parseConformanceItem)
+  const answered = new Set(items.map(item => item.id))
+  if (answered.size !== items.length) {
+    throw new ContractError(`${path}.items`, 'must answer each obligation exactly once')
+  }
+  return Object.freeze({
+    specSha256: digest(source, 'specSha256', path),
+    planSha256: digest(source, 'planSha256', path),
+    items,
+    verdict: member(source, 'verdict', WORKFLOW_VERDICTS, path),
+    summary: text(source, 'summary', path),
   })
 }
 

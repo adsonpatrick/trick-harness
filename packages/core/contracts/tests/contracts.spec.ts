@@ -16,6 +16,7 @@ import {
   parseRouteDecision,
   parseStageResult,
   parseStageRouteOverride,
+  parseConformanceContract,
   parseWorkflowObjective,
 } from '../src/index.ts'
 import type {
@@ -402,6 +403,99 @@ describe('reading the approved artifacts an objective was opened against', () =>
     }
     const parsed = parseWorkflowObjective({ ...objective, approvedArtifacts })
     expect(Object.hasOwn(parsed.approvedArtifacts.spec, 'transcript')).toBe(false)
+  })
+})
+
+describe('reading a conformance result back', () => {
+  const item = {
+    id: 'PLAN-3',
+    source: 'plan',
+    requirement: 'the delivery branch is derived, not chosen by a model',
+    status: 'PASS',
+    implementationEvidence: [{ kind: 'diff', locator: 'src/handlers.ts', summary: 'the derivation' }],
+    verificationEvidence: [{ kind: 'test', locator: 'tests/handlers.spec.ts', summary: 'pins it' }],
+    summary: 'derived from the objective id',
+  }
+
+  const contract = {
+    specSha256: 'a'.repeat(64),
+    planSha256: 'b'.repeat(64),
+    items: [item],
+    verdict: 'PASS',
+    summary: 'every obligation is satisfied',
+  }
+
+  it('survives a JSON round trip unchanged', () => {
+    expect(parseConformanceContract(roundTrip(contract))).toStrictEqual(contract)
+  })
+
+  it('binds the result to the documents it judged, since a verdict alone names nothing', () => {
+    // A conformance PASS that does not say which Spec and Plan it was measured
+    // against can be replayed against a later, different plan.
+    for (const field of ['specSha256', 'planSha256'] as const) {
+      const { [field]: _dropped, ...rest } = contract
+      expect(() => parseConformanceContract(rest)).toThrow(new RegExp(`conformance\\.${field}`))
+      expect(() => parseConformanceContract({ ...contract, [field]: 'not-a-digest' }))
+        .toThrow(new RegExp(`conformance\\.${field}`))
+    }
+  })
+
+  it('refuses a source or a status nobody defined', () => {
+    expect(() => parseConformanceContract({ ...contract, items: [{ ...item, source: 'vibes' }] }))
+      .toThrow(/conformance\.items\[0\]\.source/)
+    expect(() => parseConformanceContract({ ...contract, items: [{ ...item, status: 'PROBABLY' }] }))
+      .toThrow(/conformance\.items\[0\]\.status/)
+    expect(() => parseConformanceContract({ ...contract, verdict: 'GREAT' })).toThrow(/conformance\.verdict/)
+  })
+
+  it('accepts MISSING, which is the status a verdict vocabulary has no word for', () => {
+    // An obligation nothing addressed is not a failed obligation; conflating
+    // the two would let an unimplemented requirement read as an attempted one.
+    const missing = { ...item, status: 'MISSING', implementationEvidence: [], verificationEvidence: [] }
+    expect(parseConformanceContract({ ...contract, items: [missing], verdict: 'FAIL' }).items[0]?.status)
+      .toBe('MISSING')
+  })
+
+  it('requires every field of an item, so a partial answer is not a quiet PASS', () => {
+    for (const field of ['id', 'source', 'requirement', 'status', 'summary'] as const) {
+      const { [field]: _dropped, ...partial } = item
+      expect(() => parseConformanceContract({ ...contract, items: [partial] }))
+        .toThrow(new RegExp(`conformance\\.items\\[0\\]\\.${field}`))
+    }
+    for (const field of ['implementationEvidence', 'verificationEvidence'] as const) {
+      const { [field]: _dropped, ...partial } = item
+      expect(() => parseConformanceContract({ ...contract, items: [partial] }))
+        .toThrow(new RegExp(`conformance\\.items\\[0\\]\\.${field}`))
+    }
+  })
+
+  it('refuses two answers about one obligation', () => {
+    // Deterministic code decides the obligation set; a result that answered an
+    // id twice would leave which answer counts up to whoever read it last.
+    expect(() => parseConformanceContract({ ...contract, items: [item, { ...item, status: 'FAIL' }] }))
+      .toThrow(/conformance\.items/)
+  })
+
+  it('keeps no field the contract did not declare', () => {
+    const parsed = parseConformanceContract({
+      ...contract,
+      reasoning: 'here is how I thought about it',
+      items: [{ ...item, transcript: 'the whole session' }],
+    })
+    expect(Object.hasOwn(parsed, 'reasoning')).toBe(false)
+    expect(Object.hasOwn(parsed.items[0] ?? {}, 'transcript')).toBe(false)
+  })
+
+  it('quotes nothing it rejected, since a requirement can hold whatever was pasted into it', () => {
+    let failure = ''
+    try {
+      parseConformanceContract({ ...contract, items: [{ ...item, status: 'postgresql://u:hunter2@db/x' }] })
+    }
+    catch (error: unknown) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
+    expect(failure).toContain('conformance.items[0].status')
+    expect(failure).not.toContain('hunter2')
   })
 })
 

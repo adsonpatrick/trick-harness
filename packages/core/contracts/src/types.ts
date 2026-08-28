@@ -340,6 +340,105 @@ export interface ApprovedArtifactSet {
   readonly plan: ApprovedArtifactRef
 }
 
+/**
+ * Where one conformance obligation came from.
+ *
+ * Three sources rather than a free-text field: an obligation is traceable to
+ * the approved specification, to the approved plan, or to the profile's
+ * definition of done, and one that cites none of those is one nobody approved.
+ */
+export const CONFORMANCE_SOURCES = ['spec', 'plan', 'dod'] as const
+
+/** One conformance obligation source. */
+export type ConformanceSource = typeof CONFORMANCE_SOURCES[number]
+
+/**
+ * How one obligation came out.
+ *
+ * `MISSING` is why this is not the verdict vocabulary: an obligation nothing
+ * addressed is not one that was attempted and failed, and reading the two
+ * alike would let unimplemented work look like work that went wrong.
+ */
+export const CONFORMANCE_ITEM_STATUSES = [
+  'PASS', 'MISSING', 'PARTIAL', 'FAIL', 'BLOCKED', 'INCONCLUSIVE',
+] as const
+
+/** One conformance item status. */
+export type ConformanceItemStatus = typeof CONFORMANCE_ITEM_STATUSES[number]
+
+/**
+ * One thing the approved documents require of this implementation.
+ *
+ * `required` is `true` and has no other value it can hold. The obligation set
+ * is built by deterministic code before the stage runs, and a model that could
+ * mark an obligation optional could excuse itself from the one it did not do.
+ */
+export interface ConformanceObligation {
+  /** Stable id, unique within the manifest. */
+  readonly id: string
+  /** Which approved document this obligation comes from. */
+  readonly source: ConformanceSource
+  /** What the document requires, in the words that will be judged. */
+  readonly requirement: string
+  /** Always true; an obligation the run may skip is not an obligation. */
+  readonly required: true
+}
+
+/**
+ * The obligations one run must answer, and the documents they were read from.
+ *
+ * Built before the stage is dispatched, so the expected set is not something
+ * model output can shorten. The hashes bind the manifest to exact documents:
+ * a manifest built from one plan and answered against another is two questions
+ * with one answer.
+ */
+export interface ConformanceManifest {
+  /** SHA-256 of the approved specification the obligations were read from. */
+  readonly specSha256: string
+  /** SHA-256 of the approved plan the obligations were read from. */
+  readonly planSha256: string
+  /** Every obligation this run must answer. */
+  readonly obligations: readonly ConformanceObligation[]
+}
+
+/** One obligation's answer, with what supports it. */
+export interface ConformanceItem {
+  /** The obligation being answered. */
+  readonly id: string
+  /** Which approved document it came from. */
+  readonly source: ConformanceSource
+  /** What was required. */
+  readonly requirement: string
+  /** How it came out. */
+  readonly status: ConformanceItemStatus
+  /** Where the implementation satisfying it lives. */
+  readonly implementationEvidence: readonly EvidenceRef[]
+  /** What proves it works, as distinct from what claims it does. */
+  readonly verificationEvidence: readonly EvidenceRef[]
+  /** The bounded reason for the status. */
+  readonly summary: string
+}
+
+/**
+ * What a conformance stage concluded.
+ *
+ * The hashes are carried rather than assumed, because this record outlives the
+ * run: a `PASS` that did not name the documents it measured could be read
+ * later as a pass against whatever the plan says by then.
+ */
+export interface ConformanceContract {
+  /** SHA-256 of the specification this judged against. */
+  readonly specSha256: string
+  /** SHA-256 of the plan this judged against. */
+  readonly planSha256: string
+  /** One answer per obligation. */
+  readonly items: readonly ConformanceItem[]
+  /** The stage's overall judgement. */
+  readonly verdict: WorkflowVerdict
+  /** The bounded reason for that judgement. */
+  readonly summary: string
+}
+
 /** What a workflow was asked to accomplish, as approved before it started. */
 export interface WorkflowObjective {
   /** Stable workflow id, durable across restarts. */
