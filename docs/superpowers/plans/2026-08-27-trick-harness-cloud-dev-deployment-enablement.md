@@ -362,7 +362,12 @@ corepack pnpm run test:trick
 corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
-- [ ] Run real authenticated OpenCode + Codex catalogue startup and prove global config/auth files are unchanged in content and mtime.
+- [ ] Run real authenticated OpenCode + Codex catalogue startup against a throwaway copy of the real
+      credential directory (`CODEX_HOME` pointed at a temporary copy of `~/.codex`, likewise for OpenCode),
+      and prove the copy's config and auth files are byte-identical before and after the run. The real
+      home directory is never on the path the run can write to, which is the property this gate is for.
+      Content equality is the assertion; mtime is not, because `auth_mode: chatgpt` rewrites `auth.json`
+      on every token refresh, making an mtime assertion fail for a reason that has nothing to do with us.
 - [ ] Run host HTTP smoke: health -> start read-only workflow -> status -> cancel/dispose; prove whole process-tree quiescence.
 - [ ] Record the NeuroVia DB canary as `PENDING PLAN C`; do not simulate a project command that does not exist yet.
 - [ ] Update README only with behavior actually implemented/proven.
