@@ -55,7 +55,7 @@ Plan H therefore selects Commit Status for initial V2 activation and documents t
 | HC10 native gh auth/no token | Harness Tasks 2, 8; NeuroVia Task 6 |
 | HC11 branch protection adds fifth context | NeuroVia Task 3 |
 | HC12 bootstrap only after real status + fresh-SHA proof | NeuroVia Tasks 4–5 |
-| HC13 bounded status content | Harness Tasks 2, 5, 7 |
+| HC13 fixed safe status content | Harness Tasks 2, 5, 7 |
 | HC14 source-auth limitation documented | Spec + NeuroVia Task 6 |
 | HC15 independent adversarial/E2E verification | Harness Tasks 7–8; NeuroVia Tasks 5–6 |
 
@@ -69,7 +69,7 @@ Core owns only generic certification state/port and deterministic readiness-to-e
 
 ### GitHub certification integration
 
-`@trick-harness/github-certification` may read repository/branch/PR/head facts and POST/read a status for the verified SHA. Its public API contains no commit, push, PR edit, merge, release or deploy operation.
+`@trick-harness/github-certification` may read repository/branch/PR/head facts and POST/read a status for the verified SHA. Its public API contains no commit, push, PR edit, merge, release or deploy operation. It accepts no credential/environment injection option.
 
 ### Plurora host
 
@@ -86,6 +86,19 @@ Only project repository is non-secret deployment metadata; context/base branch a
 ### NeuroVia
 
 NeuroVia alone owns its branch-protection script. Harness does not mutate protection rules. The human/operator applies reviewed protection only after a real certification status exists.
+
+## Status-content review
+
+No model/workflow summary is sent to GitHub. Description is fixed from state:
+
+```text
+pending -> Harness engineering certification in progress
+success -> Harness engineering certification passed
+failure -> Harness engineering certification did not pass
+error   -> Harness engineering certification could not complete
+```
+
+This removes prompt/reasoning/path/secret leakage from the status-description surface rather than relying on text sanitization.
 
 ## Bootstrap-loop review
 
