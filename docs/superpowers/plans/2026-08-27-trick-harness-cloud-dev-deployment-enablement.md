@@ -2,28 +2,28 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add the small runtime capabilities required before NeuroVia can install Harness V2: a generic deterministic database-verification seam, support for a project-supplied cloud-development verifier, and a runnable Plurora host inside the pinned Trick Harness checkout.
+**Goal:** Add the runtime capabilities required before NeuroVia installs Harness V2: a generic deterministic database-verification seam, a project-supplied verifier path, and a runnable Plurora host inside the pinned Trick Harness checkout.
 
-**Architecture:** Keep the existing reusable runtime and built-in `supabase-preview` integration intact, but stop making Preview Branches the only implementation of database verification. The engineering workflow consumes a generic database-verification port; composition can either adapt the existing Preview integration or accept an explicitly injected verifier. A new private `apps/plurora-harness-host` application sits above `profiles/plurora`, composes OpenCode/Codex/GitHub plus the injected NeuroVia DB verifier, validates the deployment model registry, and exposes the existing loopback control server.
+**Architecture:** Preserve the built-in `supabase-preview` integration, but make the engineering workflow consume a generic database-verification port. Composition accepts either the built-in Preview adapter or one explicitly injected project verifier and rejects dual authority. A private `apps/plurora-harness-host` application sits above `profiles/plurora`, validates product-native model ids, composes the real providers/integrations, adapts NeuroVia's fixed DB verification command, and exposes the existing loopback control server.
 
-**Tech Stack:** TypeScript, Node.js 22.19+/24+, pnpm 11.7.0, existing `@trick-harness/*` workspaces, DSH subprocess/session packages, OpenCode SDK, Codex app-server, Supabase CLI invoked only by the NeuroVia project verifier, Vitest.
+**Tech Stack:** TypeScript, Node.js `^22.19.0 || >=24.0.0`, pnpm `11.7.0`, existing `@trick-harness/*` workspaces, DSH subprocess/session packages, OpenCode SDK, Codex app-server, Vitest.
 
 **Spec:** `docs/superpowers/specs/2026-08-27-neurovia-harness-deployment-cloud-dev-amendment.md`
 
 ## Global Constraints
 
-- Generic Core/composition contracts contain no `neuro-via`, `neurovia-dev`, Supabase project ref, Notion, Linear, or Plurora Design System assumption.
-- `profiles/plurora` may select project policy; the new runnable host may depend on that profile because it is explicitly Plurora deployment glue.
-- The existing `supabase-preview` package remains available and tested; this plan does not pretend its positive real-cloud path has been proven.
-- Project DB mutation remains a deterministic capability port; no model executor receives shell authority as a substitute.
-- Merge/release/deploy remain human/out-of-scope authority.
-- No secret, DB URL, control token, provider credential, raw stderr, or private model reasoning is journalled.
-- A project-supplied verifier and the built-in Preview verifier may not both own the same run; ambiguous composition is refused.
-- The host uses the exact `ModelRegistry` supplied by deployment configuration and never falls back to `DEFAULT_MODEL_REGISTRY` for a real product run.
+- Generic Core/providers/integrations/composition contain no NeuroVia database name/project ref or product-repository assumption.
+- `profiles/plurora` owns project policy; `apps/plurora-harness-host` is explicitly Plurora deployment glue and may depend on that profile.
+- Existing `supabase-preview` remains buildable/tested as an optional strategy.
+- Project DB mutation is a deterministic capability; no model executor receives shell authority as a substitute.
+- A project verifier and built-in Preview verifier cannot both own one composition.
+- No credential, DB URL, control token, raw stderr or private model reasoning is journalled.
+- Merge/release/deploy remain human-controlled.
+- Real deployments use their supplied `ModelRegistry`; `DEFAULT_MODEL_REGISTRY` is never substituted.
 
 ---
 
-### Task 1: Generalize the Workflow Database Capability Vocabulary
+### Task 1: Generalize the Workflow Database Capability
 
 **Files:**
 - Modify: `packages/core/engineering-workflow/src/types.ts`
@@ -32,20 +32,6 @@
 - Test: `packages/core/engineering-workflow/tests/lifecycle.spec.ts`
 
 **Interfaces:**
-- Produces `WorkflowDatabaseVerificationInput`, `WorkflowDatabaseVerificationResult`, `DatabaseVerificationCapabilityPort`.
-- `WorkflowCapabilities` exposes `databaseVerification?: DatabaseVerificationCapabilityPort`.
-- Retain deprecated type aliases `WorkflowDatabasePreviewInput`, `WorkflowDatabasePreviewResult`, `DatabasePreviewCapabilityPort` only if needed to keep existing fork callers compiling during this change.
-
-- [ ] **Step 1: Write RED type/runtime tests** proving a DB-changing lifecycle invokes `capabilities.databaseVerification.verify(...)`, blocks when that capability is absent, and records the same bounded evidence/verdict behavior that `databasePreview` currently provides.
-- [ ] **Step 2: Run the focused tests and verify RED.**
-
-```bash
-corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts
-```
-
-- [ ] **Step 3: Rename the generic contracts** in `types.ts` and update the runner in `index.ts` so the workflow concept is database verification, not Preview Branching.
-
-Required shape:
 
 ```ts
 export interface WorkflowDatabaseVerificationInput {
@@ -73,15 +59,24 @@ export interface WorkflowCapabilities {
 }
 ```
 
-- [ ] **Step 4: Keep compatibility aliases only at the export boundary**, marked deprecated, and ensure no new runtime code reads `databasePreview`.
-- [ ] **Step 5: Run focused tests GREEN, then `typecheck`.**
+Retain deprecated aliases `WorkflowDatabasePreviewInput`, `WorkflowDatabasePreviewResult` and `DatabasePreviewCapabilityPort` for one compatibility cycle, each pointing to the new generic type. New runtime code must use only `databaseVerification`.
+
+- [ ] Write RED tests proving DB-changing lifecycle calls `databaseVerification.verify`, blocks if it is absent, and preserves bounded DB evidence/verdict semantics.
+- [ ] Run RED:
+
+```bash
+corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts
+```
+
+- [ ] Implement the types/runner rename and compatibility aliases.
+- [ ] Run GREEN + typecheck:
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [ ] Commit:
 
 ```bash
 git add packages/core/engineering-workflow
@@ -90,15 +85,14 @@ git commit -m "refactor(trick): generalize database verification capability"
 
 ---
 
-### Task 2: Let Composition Inject One Deterministic Database Verifier
+### Task 2: Inject One Project Database Verifier Through Composition
 
 **Files:**
 - Modify: `packages/composition/runtime/src/harness.ts`
-- Modify: `packages/composition/runtime/src/index.ts` if exports require it
 - Test: `packages/composition/runtime/tests/harness.spec.ts`
 - Test: `profiles/plurora/tests/composition.spec.ts`
 
-**Interfaces:**
+**Interface:**
 
 ```ts
 export interface HarnessProjectCapabilities {
@@ -106,36 +100,31 @@ export interface HarnessProjectCapabilities {
 }
 
 export interface HarnessCompositionOptions {
-  // existing fields...
+  // existing fields unchanged
   readonly capabilities?: HarnessProjectCapabilities
 }
 ```
 
-- [ ] **Step 1: Write RED tests** for three cases: injected verifier is used for a DB-changing workflow; existing `integrations.supabase` still adapts to the same generic port; supplying both injected verification and built-in Preview config is rejected as ambiguous authority.
-- [ ] **Step 2: Verify RED.**
+`packages/composition/runtime/src/index.ts` already re-exports `./harness.ts`; no new export file is required.
+
+- [ ] Write RED tests for injected verifier, built-in Preview adapter, and ambiguous dual verifier refusal.
+- [ ] Run RED:
 
 ```bash
 corepack pnpm vitest run packages/composition/runtime/tests/harness.spec.ts profiles/plurora/tests/composition.spec.ts
 ```
 
-- [ ] **Step 3: Implement the composition rule:**
+- [ ] Implement exactly:
 
 ```text
-capabilities.databaseVerification present AND integrations.supabase present
-=> BundleCompositionError
-
-capabilities.databaseVerification present
-=> use it
-
-else integrations.supabase present
-=> adapt SupabasePreview to DatabaseVerificationCapabilityPort
-
-else
-=> no DB verification capability
+capabilities.databaseVerification + integrations.supabase => BundleCompositionError
+capabilities.databaseVerification only                    => use injected port
+integrations.supabase only                                => adapt SupabasePreview to generic port
+neither                                                   => no database verification port
 ```
 
-- [ ] **Step 4: Preserve the existing `supabase-preview` authorization checks** for the built-in integration; project capability injection is authorized separately by the profile capability id added in Task 3.
-- [ ] **Step 5: Run GREEN + constraints/typecheck.**
+- [ ] Preserve the existing built-in `supabase-preview` authorization boundary.
+- [ ] Run GREEN + constraints/typecheck:
 
 ```bash
 corepack pnpm vitest run packages/composition/runtime/tests/harness.spec.ts profiles/plurora/tests/composition.spec.ts
@@ -143,41 +132,32 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [ ] Commit:
 
 ```bash
-git add packages/composition profiles/plurora/tests/composition.spec.ts
+git add packages/composition/runtime profiles/plurora/tests/composition.spec.ts
 git commit -m "feat(trick): inject project database verification capability"
 ```
 
 ---
 
-### Task 3: Amend the Plurora Integration Policy Without Embedding the DB Target
+### Task 3: Authorize Generic DB Verification in the Plurora Profile
 
 **Files:**
 - Modify: `profiles/plurora/integrations.ts`
 - Modify: `profiles/plurora/tests/profile.spec.ts`
 - Modify: `profiles/plurora/tests/composition.spec.ts`
 
-**Interfaces:**
-- Add canonical capability id `database-verification` to Plurora's enabled integration/capability vocabulary.
-- Do **not** add `neurovia-dev` or `uljaajwwnygopsyvwsre` to the profile.
-
-- [ ] **Step 1: Write RED profile tests** proving Plurora authorizes deterministic database verification but generic profile data contains no project ref or database name.
-- [ ] **Step 2: Update the profile data** so `github-delivery`, `control-server`, and `database-verification` are enabled. Keep `supabase-preview` only if the built-in optional strategy still needs profile authorization; it is not the active Plurora deployment strategy.
-- [ ] **Step 3: Run profile/composition tests GREEN.**
+- [ ] Write RED tests requiring `database-verification` in Plurora's enabled capability vocabulary and forbidding `neurovia-dev`/`uljaajwwnygopsyvwsre` anywhere in profile data.
+- [ ] Enable `github-delivery`, `control-server`, `database-verification` and retain `supabase-preview` as an optional built-in strategy capability; the active deployment chooses only one verifier at composition time.
+- [ ] Run:
 
 ```bash
 corepack pnpm vitest run profiles/plurora/tests/profile.spec.ts profiles/plurora/tests/composition.spec.ts
-```
-
-- [ ] **Step 4: Run the project-identifier boundary scan** and confirm neither `neurovia-dev` nor `uljaajwwnygopsyvwsre` appears in generic packages/profile policy.
-
-```bash
 corepack pnpm run constraints
 ```
 
-- [ ] **Step 5: Commit.**
+- [ ] Commit:
 
 ```bash
 git add profiles/plurora
@@ -186,7 +166,7 @@ git commit -m "feat(trick): authorize Plurora database verification capability"
 
 ---
 
-### Task 4: Create the Private Plurora Runtime Host Application
+### Task 4: Create the Private Plurora Host App
 
 **Files:**
 - Create: `apps/plurora-harness-host/package.json`
@@ -199,9 +179,9 @@ git commit -m "feat(trick): authorize Plurora database verification capability"
 - Create: `apps/plurora-harness-host/tests/model-registry.spec.ts`
 - Create: `apps/plurora-harness-host/tests/project-database.spec.ts`
 - Create: `apps/plurora-harness-host/tests/host.spec.ts`
-- Modify: root build/test config only where `apps/*` convention requires registration.
+- Modify: root `package.json` (`test:trick` must include `apps/plurora-harness-host`)
 
-**Interfaces:**
+**Interface:**
 
 ```ts
 export interface PluroraDeploymentConfig {
@@ -225,69 +205,70 @@ export async function startPluroraHost(options: {
 }): Promise<{ dispose(): Promise<void> }>
 ```
 
-- [ ] **Step 1: Add RED config tests** requiring exact repository/profile, exact 40-hex revision, loopback URL, `environment=development`, `database.strategy=shared-cloud-development`, non-empty project ref, and exactly the semantic tiers used by `profiles/plurora`.
-- [ ] **Step 2: Add secret-key rejection tests** for any committed config key matching `token|secret|password|api[_-]?key|connection|dbUrl` case-insensitively.
-- [ ] **Step 3: Implement config parsing** from `<projectRoot>/plurora-harness.json`; do not accept routing rules or permission modes there.
-- [ ] **Step 4: Create `package.json` as private** with workspace dependencies on composition/profile/providers/subprocess/session packages and scripts `build`, `test`, `start` following existing app conventions.
-- [ ] **Step 5: Run config tests GREEN and commit the host skeleton.**
+- [ ] Write RED config tests requiring exact repository/profile, 40-hex revision, loopback URL, development/shared-cloud strategy, non-empty project ref and the exact semantic tiers referenced by the Plurora routing policy.
+- [ ] Add recursive secret-key rejection for `token|secret|password|api[_-]?key|connection|dbUrl`.
+- [ ] Implement `<projectRoot>/plurora-harness.json` parsing. Reject routing rules, permission modes and provider credentials in that file.
+- [ ] Create private package `@trick-harness/plurora-host` with workspace dependencies on composition/profile/providers/subprocess/session packages.
+- [ ] Add `apps/plurora-harness-host` to root `test:trick`.
+- [ ] Run:
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
+corepack pnpm run typecheck
 ```
 
+- [ ] Commit:
+
 ```bash
-git add apps/plurora-harness-host
+git add apps/plurora-harness-host package.json
 git commit -m "feat(trick): add Plurora runtime host skeleton"
 ```
 
 ---
 
-### Task 5: Validate Product-Native Model IDs Before Host Readiness
+### Task 5: Validate Native OpenCode and Codex Model Catalogues
 
 **Files:**
 - Modify: `apps/plurora-harness-host/src/model-registry.ts`
 - Modify: `apps/plurora-harness-host/src/main.ts`
+- Modify: `packages/subagent/subagent-codex/src/wire.ts`
+- Modify: `packages/subagent/subagent-codex/src/index.ts`
 - Test: `apps/plurora-harness-host/tests/model-registry.spec.ts`
 - Test: `apps/plurora-harness-host/tests/host.spec.ts`
-- Modify only if needed: `packages/providers/codex` app-server wire to expose a read-only `model/list` query already supported by the pinned app-server protocol.
+- Test: `packages/subagent/subagent-codex/tests/subagent-codex.spec.ts`
+- Test: `packages/subagent/subagent-codex/tests/real-product.spec.ts`
 
-**Interfaces:**
+**Interface:**
 
 ```ts
 export interface ModelCatalogReader {
   opencodeModels(): Promise<readonly string[]>
   codexModels(): Promise<readonly { id: string; reasoningEfforts: readonly string[] }[]>
 }
-
-export function validateDeploymentRegistry(
-  registry: Readonly<Record<string, string>>,
-  requiredTiers: readonly string[],
-  catalogs: { opencode: readonly string[]; codex: readonly string[] },
-): void
 ```
 
-- [ ] **Step 1: Generate/read the pinned Codex app-server schema** and confirm `model/list` exists before adding any wire method; the current upstream protocol exposes `model/list`, but the implementation must follow the pinned package schema rather than main-branch memory.
-- [ ] **Step 2: Write RED tests** for missing tier, duplicate/empty id, OpenCode pair not advertised by the authenticated provider catalogue, and Codex id absent from app-server `model/list`.
-- [ ] **Step 3: Implement OpenCode catalogue discovery** through the official SDK/server provider configuration endpoint used by the pinned SDK; normalize to `provider/model` ids.
-- [ ] **Step 4: Implement Codex catalogue discovery** as a read-only app-server `model/list` call. It must not create a model turn, consume a task run, rewrite `CODEX_HOME`, or inject `OPENAI_API_KEY`.
-- [ ] **Step 5: Make host startup validate every semantic tier referenced by `profiles/plurora` before the control server reports ready.** `DEFAULT_MODEL_REGISTRY` is never substituted.
-- [ ] **Step 6: Run tests GREEN plus provider focused suites.**
+- [ ] Generate/read the **pinned** `@openai/codex` app-server JSON schema and add a read-only `model/list` wire method matching that schema. Do not code from upstream-main types alone.
+- [ ] Write RED tests for missing tier, empty id, OpenCode pair absent from authenticated catalogue, and Codex id absent from `model/list`.
+- [ ] Implement OpenCode catalogue discovery through the official SDK/server provider configuration endpoint and normalize to `provider/model` ids.
+- [ ] Implement Codex `model/list` discovery without starting a model turn, rewriting Codex config/auth, or injecting `OPENAI_API_KEY`.
+- [ ] Make host readiness fail until every semantic tier used by `profiles/plurora` resolves in the relevant native catalogue.
+- [ ] Run:
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
-corepack pnpm vitest run packages/providers/codex/tests/codex.spec.ts profiles/plurora/tests/routing.spec.ts
+corepack pnpm vitest run packages/subagent/subagent-codex/tests/subagent-codex.spec.ts packages/subagent/subagent-codex/tests/real-product.spec.ts profiles/plurora/tests/routing.spec.ts
 ```
 
-- [ ] **Step 7: Commit.**
+- [ ] Commit:
 
 ```bash
-git add apps/plurora-harness-host packages/providers/codex
+git add apps/plurora-harness-host packages/subagent/subagent-codex
 git commit -m "feat(trick): validate deployment model registry"
 ```
 
 ---
 
-### Task 6: Adapt the Fixed NeuroVia DB Verification Command as a Capability
+### Task 6: Adapt NeuroVia's Fixed DB Command
 
 **Files:**
 - Modify: `apps/plurora-harness-host/src/project-database.ts`
@@ -295,18 +276,16 @@ git commit -m "feat(trick): validate deployment model registry"
 - Test: `apps/plurora-harness-host/tests/project-database.spec.ts`
 - Test: `apps/plurora-harness-host/tests/host.spec.ts`
 
-**Interface contract with Plan C:**
-
-The host executes only this project command in the supplied `projectRoot`:
+**Fixed child command:**
 
 ```text
 npm run db:verify:harness -- --json
 ```
 
-The command exits non-zero on `FAILED`/`BLOCKED` and emits exactly one bounded JSON object on stdout:
+**Envelope:**
 
 ```ts
-interface ProjectDatabaseVerificationEnvelope {
+export interface ProjectDatabaseVerificationEnvelope {
   readonly schemaVersion: 1
   readonly status: 'PASSED' | 'FAILED' | 'BLOCKED'
   readonly targetProjectRef: string
@@ -319,75 +298,60 @@ interface ProjectDatabaseVerificationEnvelope {
 }
 ```
 
-- [ ] **Step 1: Write RED tests** proving the adapter uses argv arrays/no shell, fixed command only, project cwd only, bounded output, schemaVersion=1, target ref equality with deployment config, and rejects malformed/multi-object/raw-secret output.
-- [ ] **Step 2: Implement the adapter** with DSH managed subprocess ownership, `waitForExit()` quiescence, cancellation, and safe failure taxonomy.
-- [ ] **Step 3: Map the envelope to `DatabaseVerificationCapabilityPort` evidence**; do not pass raw stdout to journal/status.
-- [ ] **Step 4: Wire it into `composeHarness({ capabilities: { databaseVerification } })`.**
-- [ ] **Step 5: Run tests GREEN.**
-
-```bash
-corepack pnpm --filter @trick-harness/plurora-host test
-```
-
-- [ ] **Step 6: Commit.**
-
-```bash
-git add apps/plurora-harness-host
-git commit -m "feat(trick): adapt project cloud database verification"
-```
+- [ ] Write RED tests proving argv-array/no-shell execution, fixed command only, project cwd only, bounded single JSON envelope, configured project-ref equality and secret/raw-output rejection.
+- [ ] Implement with DSH managed subprocess ownership, cancellation and `waitForExit()` quiescence.
+- [ ] Map only validated envelope fields into `DatabaseVerificationCapabilityPort`; raw stdout/stderr never reaches journal/status.
+- [ ] Wire through `composeHarness({ capabilities: { databaseVerification } })`.
+- [ ] Run host tests and commit.
 
 ---
 
-### Task 7: Wire the Plurora Host Lifecycle and Control Server
+### Task 7: Complete Host Lifecycle and Durable Runtime
 
 **Files:**
 - Modify: `apps/plurora-harness-host/src/main.ts`
+- Create: `apps/plurora-harness-host/src/session-store.ts`
+- Create: `apps/plurora-harness-host/src/workflow-handlers.ts`
 - Test: `apps/plurora-harness-host/tests/host.spec.ts`
 - Test: `profiles/plurora/tests/composition.spec.ts`
 
-**Host behavior:**
+**Startup sequence:**
 
 ```text
-load project config
--> verify config/profile/policy version
--> validate model registry against native catalogues
--> create durable Session + flush implementation
--> register OpenCode/Codex providers
--> register GitHubDelivery
--> register injected project database verifier
+load config
+-> validate profile/policy version
+-> validate native model catalogues
+-> create durable Session/flush
+-> register OpenCode/Codex
+-> bind GitHubDelivery
+-> bind injected project DB verifier
 -> compose profile=plurora
--> bind configured loopback control address using supplied token
+-> start loopback control server with supplied token
 -> ready
 ```
 
-- [ ] **Step 1: Write RED host tests** proving no socket is advertised before model/config validation, wrong profile/policyVersion fails before side effects, and disposal waits for control-server + providers + DB subprocess quiescence.
-- [ ] **Step 2: Implement a durable session store** using the DSH session persistence mechanism already approved by the Harness; do not substitute an in-memory-only flush in the runnable host.
-- [ ] **Step 3: Implement workflow handlers** using the approved Plurora PR lifecycle and bounded task/interpret contracts; they may interpret provider results but never grant deterministic mutation authority to the provider.
-- [ ] **Step 4: Bind the existing control server** to the configured loopback address and the caller-supplied process token.
-- [ ] **Step 5: Run the host integration suite GREEN.**
+- [ ] Write RED tests proving no readiness before config/model validation, profile mismatch fails before side effects, and disposal waits for control/server/provider/DB subprocess quiescence.
+- [ ] Implement durable session persistence using the DSH session persistence package already used by the fork; no in-memory-only runnable host.
+- [ ] Implement workflow handlers using the approved Plurora PR lifecycle; handlers may interpret provider results but cannot perform GitHub/DB mutation directly.
+- [ ] Bind the existing control server to configured loopback address and caller-supplied process token.
+- [ ] Run:
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
 corepack pnpm run test:trick
 ```
 
-- [ ] **Step 6: Commit.**
-
-```bash
-git add apps/plurora-harness-host profiles/plurora
-git commit -m "feat(trick): run the Plurora Harness host"
-```
+- [ ] Commit.
 
 ---
 
-### Task 8: Verification, Documentation and Known-Good SHA
+### Task 8: Independent Verification and Known-Good SHA
 
 **Files:**
 - Modify: `README.trick-harness.md`
-- Modify: `docs/verification/2026-08-27-harness-v2-plan-d-evidence.md` by append-only follow-up section or create a dated follow-up evidence file
 - Create: `docs/verification/2026-08-27-neurovia-deployment-enablement-evidence.md`
 
-- [ ] **Step 1: Run deterministic gates.**
+- [ ] Run deterministic gates:
 
 ```bash
 corepack pnpm run constraints
@@ -398,19 +362,14 @@ corepack pnpm run test:trick
 corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
-- [ ] **Step 2: Run a real OpenCode/Codex model-catalog startup smoke** using native authenticated product stores and prove no global config/auth file content or mtime changed.
-- [ ] **Step 3: Run a host HTTP smoke** with a non-DB read-only objective: health -> start -> status -> cancel/dispose, and prove process-tree quiescence.
-- [ ] **Step 4: Do not fake the NeuroVia DB canary in this repository.** Record `PENDING PLAN C` until the project command exists in `neuro-via`.
-- [ ] **Step 5: Update README** with the correct semantic-tier registry shape and the runnable host command; keep claims limited to evidence actually run.
-- [ ] **Step 6: Independent review** the diff for routing, authority, secret handling, subprocess quiescence, profile boundary and host dependency direction. Fix confirmed bugs, then rerun affected gates.
-- [ ] **Step 7: Record the exact reviewed 40-hex SHA** as the only SHA Plan C may pin initially.
-- [ ] **Step 8: Commit evidence/docs.**
-
-```bash
-git add README.trick-harness.md docs/verification
-git commit -m "docs(trick): verify NeuroVia deployment enablement"
-```
+- [ ] Run real authenticated OpenCode + Codex catalogue startup and prove global config/auth files are unchanged in content and mtime.
+- [ ] Run host HTTP smoke: health -> start read-only workflow -> status -> cancel/dispose; prove whole process-tree quiescence.
+- [ ] Record the NeuroVia DB canary as `PENDING PLAN C`; do not simulate a project command that does not exist yet.
+- [ ] Update README only with behavior actually implemented/proven.
+- [ ] Perform independent review of authority, secret handling, host dependency direction, model validation and subprocess lifecycle. Fix confirmed bugs and rerun affected gates.
+- [ ] Record the final reviewed exact 40-hex SHA as the only initial SHA Plan C* may pin.
+- [ ] Commit evidence/docs.
 
 ## Completion Contract
 
-This plan is complete when the generic workflow can consume a project-supplied deterministic database verifier, the existing Supabase Preview integration remains green, the Plurora profile authorizes database verification without embedding NeuroVia identifiers, the runnable host executes inside the Trick Harness workspace, every configured semantic tier is validated against the native authenticated product catalogues, the host can reach only the fixed project DB verification command, deterministic gates pass, and a reviewed exact SHA is recorded for Plan C.
+Complete only when the generic workflow uses `databaseVerification`, existing Preview tests remain green, Plurora authorizes generic verification without embedding NeuroVia identifiers, the runnable host executes inside the Trick workspace, every Plurora semantic tier is validated against native authenticated catalogues, the host can execute only the fixed project DB verification command, deterministic/real-product gates pass, and a reviewed exact SHA is recorded for the NeuroVia installation.
