@@ -144,18 +144,27 @@ canceled/interrupted/runtime/integration error -> error
 
 If certification publication itself is unavailable, the workflow cannot become `PR_READY` for Plurora. The GitHub status remains absent/pending/error and branch protection continues blocking merge.
 
-### 8. Status content is bounded
+### 8. Status content is fixed and bounded
 
 Status publication contains only:
 
 ```text
 state
 fixed context
-description <= 120 characters
-target_url = PR URL
+fixed description selected from state
+target_url = verified PR URL
 ```
 
-No token, prompt, transcript, raw command output, model reasoning, DB URL, local filesystem path or secret is sent in the status description.
+Descriptions are exactly:
+
+```text
+pending -> Harness engineering certification in progress
+success -> Harness engineering certification passed
+failure -> Harness engineering certification did not pass
+error   -> Harness engineering certification could not complete
+```
+
+No token, prompt, transcript, model/workflow summary, raw command output, model reasoning, DB URL, local filesystem path or secret is copied into GitHub status fields.
 
 ### 9. Native gh authentication only
 
@@ -174,7 +183,7 @@ revision
 external PR id
 state
 context
-summary/evidence locator
+deterministic summary/evidence locator
 ```
 
 If a process dies after the POST but before the post-publication record is durable, restart sees an open capability and must re-read GitHub before retrying. It must not blindly publish a contradictory status from stale local state.
@@ -191,13 +200,14 @@ install/wire Harness on NeuroVia feature PR
 -> verify GitHub reports plurora/harness-certification=success on that SHA
 -> add context to main branch protection
 -> re-read protection and verify strict=true + all required contexts
--> push the final evidence commit (new SHA)
+-> push a planned evidence/docs commit (new SHA)
 -> observe certification absent/pending for new SHA and merge blocked
--> re-run certification
--> verify success on new exact SHA
+-> commit every remaining project change
+-> run final certification on final immutable head
+-> verify success on that exact SHA
 ```
 
-This avoids permanently blocking the repository with a required context that has never been produced.
+This avoids permanently blocking the repository with a required context that has never been produced and avoids an infinite certify/commit/evidence loop.
 
 ### 12. Existing CI checks remain required
 
@@ -299,9 +309,9 @@ human merge only
 
 **HC11.** NeuroVia branch protection requires the four existing CI contexts plus `plurora/harness-certification`, with all existing protection invariants preserved.
 
-**HC12.** Branch-protection activation happens only after a real status exists and includes a fresh-SHA invalidation/recertification proof.
+**HC12.** Branch-protection activation happens only after a real status exists and includes a fresh-SHA invalidation/final-recertification proof.
 
-**HC13.** Status descriptions/target URLs are bounded and cannot contain prompts, reasoning, raw stderr/stdout, filesystem paths, DB URLs or credentials.
+**HC13.** GitHub status description is fixed by state and cannot contain prompts, summaries, reasoning, raw stderr/stdout, filesystem paths, DB URLs or credentials.
 
 **HC14.** The current single-writer status-source limitation and future GitHub-App hardening trigger are documented.
 
