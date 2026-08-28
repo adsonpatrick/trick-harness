@@ -3,6 +3,7 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import type { ControlWorkflowStatus } from '@trick-harness/control-server'
 import { planPullRequestStages } from '@trick-harness/engineering-workflow'
+import type { DatabaseVerificationCapabilityPort } from '@trick-harness/engineering-workflow'
 import type { ExecutorProvider, ExecutorStartRequest } from '@trick-harness/executor'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
@@ -789,5 +790,91 @@ describe('a composed run that changes a database', () => {
 
     expect(outcome.state).toBe('blocked')
     expect(outcome.summary).toContain('no database verification capability')
+  })
+
+  /**
+   * Options for a deployment that brings its own database verifier.
+   * @param started - where provider starts are recorded.
+   * @param verify - what the injected verifier answers.
+   * @param withSupabase - whether the built-in Preview strategy is also configured.
+   * @returns the options.
+   */
+  function withInjectedVerifier(
+    started: ExecutorStartRequest[],
+    verify: DatabaseVerificationCapabilityPort['verify'],
+    withSupabase: boolean,
+  ): HarnessCompositionOptions {
+    const base = baseOptions(
+      profileEnabling([GITHUB_DELIVERY_CAPABILITY, SUPABASE_PREVIEW_CAPABILITY]),
+      started,
+    )
+    return {
+      ...base,
+      workflow: {
+        ...base.workflow,
+        databaseChange: () => ({ required: true, migrationPaths: ['supabase/migrations/0001_thing.sql'] }),
+        ...withSupabase ? { describeDatabasePreview: () => ({ branchName: 'preview-run' }) } : {},
+      },
+      capabilities: { databaseVerification: { verify } },
+      integrations: {
+        github: { cwd: '/repo', spawn: deliveringSpawn },
+        ...withSupabase
+          ? {
+            supabase: {
+              cwd: '/repo', spawn: previewSpawn, projectRef: PARENT_REF, pollIntervalMs: 1, readyTimeoutMs: 50,
+            },
+          }
+          : {},
+      },
+    }
+  }
+
+  // A deployment that verifies migrations against a shared development database
+  // reaches it through its own bounded command. The runtime asks the same
+  // question either way.
+  it('asks the injected project verifier when the deployment supplied one', async () => {
+    const started: ExecutorStartRequest[] = []
+    const asked: string[] = []
+    const options = withInjectedVerifier(started, async (input) => {
+      asked.push(input.stageId)
+      return { status: 'PASSED', summary: 'the migrations applied and every gate passed', evidence: [], findings: [] }
+    }, false)
+    const harness = compose(options)
+
+    const outcome = await harness.run(OBJECTIVE)
+
+    expect(outcome.verdict).toBe('PASS')
+    expect(asked).toEqual(['delivery-1-database'])
+    const ids = outcome.stages.map(stage => stage.stageId)
+    expect(ids.indexOf('delivery-1-database')).toBeLessThan(ids.indexOf('delivery-1'))
+    // The built-in strategy was never configured, so nothing reached Supabase.
+    expect(JSON.stringify(options.session.events)).not.toContain('supabase:preview-created')
+  })
+
+  it('carries an injected verifier BLOCKED verdict without publishing', async () => {
+    const started: ExecutorStartRequest[] = []
+    const harness = compose(withInjectedVerifier(started, async () => ({
+      status: 'BLOCKED',
+      summary: 'the development database could not be reached',
+      evidence: [],
+      findings: [],
+    }), false))
+
+    const outcome = await harness.run(OBJECTIVE)
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('could not be reached')
+  })
+
+  // Two verifiers is not a redundancy, it is two answers about one database with
+  // nothing deciding which one the run was held to.
+  it('refuses a composition that configures both a project verifier and the built-in strategy', () => {
+    const started: ExecutorStartRequest[] = []
+    const options = withInjectedVerifier(started, async () => ({
+      status: 'PASSED', summary: 'unreached', evidence: [], findings: [],
+    }), true)
+
+    expect(() => compose(options)).toThrow(BundleCompositionError)
+    expect(() => compose(options)).toThrow(/database verification/i)
   })
 })
