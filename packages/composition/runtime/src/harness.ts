@@ -28,13 +28,13 @@ import {
   assessRestart,
 } from '@trick-harness/engineering-workflow'
 import type {
-  DatabasePreviewCapabilityPort,
+  DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
   StageInterpreter,
   StageSpec,
   WorkflowDatabaseChange,
-  WorkflowDatabasePreviewInput,
+  WorkflowDatabaseVerificationInput,
   WorkflowDeliveryInput,
   WorkflowOutcome,
   WorkflowRunRequest,
@@ -58,6 +58,9 @@ export const GITHUB_DELIVERY_CAPABILITY = 'github-delivery'
 
 /** Integration capability id for cloud-only Supabase preview validation. */
 export const SUPABASE_PREVIEW_CAPABILITY = 'supabase-preview'
+
+/** Integration capability id for a project-supplied database verifier. */
+export const DATABASE_VERIFICATION_CAPABILITY = 'database-verification'
 
 /** Integration capability id for the loopback control server. */
 export const CONTROL_SERVER_CAPABILITY = 'control-server'
@@ -94,7 +97,7 @@ export interface HarnessWorkflowHandlers {
    * connection string that passed through here would be one a status poll or an
    * error summary could later repeat.
    */
-  readonly describeDatabasePreview?: (input: WorkflowDatabasePreviewInput) => Pick<PreviewRunRequest, 'branchName'>
+  readonly describeDatabasePreview?: (input: WorkflowDatabaseVerificationInput) => Pick<PreviewRunRequest, 'branchName'>
   /**
    * Whether this objective changes a database, answered before the run starts.
    *
@@ -104,6 +107,18 @@ export interface HarnessWorkflowHandlers {
    * preview says the migrations survive.
    */
   readonly databaseChange?: (objective: WorkflowObjective) => WorkflowDatabaseChange | undefined
+}
+
+/**
+ * Deterministic capabilities a project supplies itself.
+ *
+ * A deployment whose database is not an isolated preview branch — a shared
+ * development database reached through a fixed project command, say — brings
+ * its own verifier here rather than teaching this package about its product.
+ * The port is the whole contract: this package never learns what answered.
+ */
+export interface HarnessProjectCapabilities {
+  readonly databaseVerification?: DatabaseVerificationCapabilityPort
 }
 
 /** Integration seams a profile may enable. */
@@ -135,6 +150,8 @@ export interface HarnessCompositionOptions {
   readonly providers?: HarnessRuntimeBundleOptions
   /** Integration seams, honoured only where the profile enables them. */
   readonly integrations?: HarnessIntegrationOptions
+  /** Deterministic capabilities this project supplies itself. */
+  readonly capabilities?: HarnessProjectCapabilities
   /** Control-server binding, honoured only where the profile enables one. */
   readonly control?: HarnessControlOptions
   /** Executors the breaker has already marked degraded. */
@@ -231,6 +248,23 @@ function assertAuthorised(profile: HarnessProfile, options: HarnessCompositionOp
       `profile ${JSON.stringify(profile.id)} does not enable ${SUPABASE_PREVIEW_CAPABILITY}`,
     )
   }
+  // Two verifiers is not redundancy. It is two answers about one database, with
+  // nothing in the run deciding which one it was actually held to, and a
+  // reviewer reading the passing one has no way to know the other existed.
+  if (options.capabilities?.databaseVerification !== undefined && options.integrations?.supabase !== undefined) {
+    throw new BundleCompositionError(
+      'this composition supplies a project database verification capability and configures the built-in '
+      + `${SUPABASE_PREVIEW_CAPABILITY} strategy; exactly one may own a database`,
+    )
+  }
+  if (
+    options.capabilities?.databaseVerification !== undefined
+    && !enabled(profile, DATABASE_VERIFICATION_CAPABILITY)
+  ) {
+    throw new BundleCompositionError(
+      `profile ${JSON.stringify(profile.id)} does not enable ${DATABASE_VERIFICATION_CAPABILITY}`,
+    )
+  }
   if (options.control !== undefined && !enabled(profile, CONTROL_SERVER_CAPABILITY)) {
     throw new BundleCompositionError(
       `profile ${JSON.stringify(profile.id)} does not enable ${CONTROL_SERVER_CAPABILITY}`,
@@ -309,7 +343,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
    * connection string, and never anything that authenticates.
    * @returns The capability, or nothing when this deployment cannot verify one.
    */
-  const databasePreviewFor = (): DatabasePreviewCapabilityPort | undefined => {
+  const databasePreviewFor = (): DatabaseVerificationCapabilityPort | undefined => {
     if (supabaseOptions === undefined || describePreview === undefined) return undefined
     return {
       verify: async (input, signal) => {
@@ -342,7 +376,9 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       },
     }
   }
-  const databasePreview = databasePreviewFor()
+  // The injected verifier wins where it exists, and `assertAuthorised` has
+  // already refused the composition where both could.
+  const databaseVerification = options.capabilities?.databaseVerification ?? databasePreviewFor()
 
   const describeDelivery = workflow.describeDelivery
   const githubOptions = options.integrations?.github
@@ -437,7 +473,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       ...options.degradedExecutors === undefined ? {} : { degradedExecutors: options.degradedExecutors },
       capabilities: {
         ...delivery === undefined ? {} : { delivery },
-        ...databasePreview === undefined ? {} : { databasePreview },
+        ...databaseVerification === undefined ? {} : { databaseVerification },
       },
     })
     const change = workflow.databaseChange?.(objective)

@@ -41,6 +41,7 @@ export const integrationPolicy: IntegrationPolicyDefinition = {
   enabled: [
     'github-delivery',
     'supabase-preview',
+    'database-verification',
     'control-server',
     'notion-knowledge',
     'linear-issues',
@@ -65,13 +66,33 @@ export const integrationPolicy: IntegrationPolicyDefinition = {
       use: {
         // The parent, and only ever the parent: this ref is what branches are
         // created under and asked about, never what a migration is run against.
-        parentProjectRef: 'uljaajwwnygopsyvwsre',
+        // Which project branches are created under is a deployment fact, read
+        // from the deployment's own configuration. A ref written down here is
+        // one every reader of the repository can point a migration at, and one
+        // no reviewer can tell apart from the ref the run actually used.
+        parentProjectRefSource: 'deployment-config',
         execution: 'cloud-only',
         previewBranchRequired: true,
         previewBranchIdentity: 'pull-request',
         onPreviewUnavailable: 'blocked',
         allowLocalFallback: false,
         allowSharedDevFallback: false,
+      },
+    },
+    {
+      id: 'database-verification',
+      when: { integration: 'database-verification' },
+      use: {
+        // The strategy is the deployment's choice; the requirement is not. A
+        // schema change is verified against a database that really exists
+        // before the branch is published, and a deployment that cannot reach
+        // one is blocked rather than allowed to publish an unapplied migration.
+        required: 'before-delivery',
+        execution: 'deterministic-capability',
+        targetSource: 'deployment-config',
+        onVerifierUnavailable: 'blocked',
+        allowModelExecution: false,
+        allowLocalFallback: false,
       },
     },
     {

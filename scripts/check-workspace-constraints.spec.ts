@@ -120,12 +120,17 @@ describe('fork-local Trick Harness workspace constraints', () => {
   it.each([
     'packages/experimental/profile',
     'packages/session/profile',
-    'apps/profile',
     'vendor/profile',
+    'apps/host/nested',
   ])('rejects the fork-local namespace outside an approved directory (%s)', (dir) => {
     expect(checkForkLocalManifest({ ...forkLocal, dir })).toEqual([
-      '@trick-harness/profile: fork-local package must live under packages/core, packages/providers, packages/integrations, or packages/composition',
+      '@trick-harness/profile: fork-local package must live under packages/core, packages/providers, '
+      + 'packages/integrations, packages/composition, or apps',
     ])
+  })
+
+  it('accepts a fork-local deployment app under apps', () => {
+    expect(checkForkLocalManifest({ ...forkLocal, dir: 'apps/plurora-harness-host' })).toEqual([])
   })
 
   it('exempts fork-local packages from release-member publication rules', () => {

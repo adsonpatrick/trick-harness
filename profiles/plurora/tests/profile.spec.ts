@@ -122,12 +122,22 @@ describe('plurora profile', () => {
     expect([...pluroraProfile.integrationPolicy.enabled]).toStrictEqual([
       'github-delivery',
       'supabase-preview',
+      'database-verification',
       'control-server',
       'notion-knowledge',
       'linear-issues',
     ])
     expect(JSON.stringify(pluroraProfile.integrationPolicy)).not.toContain('supabase-preview-branches')
-    expect(JSON.stringify(pluroraProfile.integrationPolicy)).not.toContain('neurovia-dev')
+  })
+
+  // The profile states which strategies are authorised. Which database any of
+  // them reaches is a deployment fact: a ref written down here is one every
+  // reader of the repository can point a migration at, and one no reviewer can
+  // tell apart from the ref the running deployment actually used.
+  it('names no database and no project ref anywhere in its policy data', () => {
+    const policy = JSON.stringify(pluroraProfile)
+    expect(policy).not.toContain('neurovia-dev')
+    expect(policy).not.toContain('uljaajwwnygopsyvwsre')
   })
 
   it('declares a rule for every enabled integration', () => {
@@ -322,7 +332,7 @@ describe('supabase preview policy names no standing execution target', () => {
 
   it('requires a preview branch whose identity is the pull request in flight', () => {
     expect(supabase()).toMatchObject({
-      parentProjectRef: 'uljaajwwnygopsyvwsre',
+      parentProjectRefSource: 'deployment-config',
       execution: 'cloud-only',
       previewBranchRequired: true,
       previewBranchIdentity: 'pull-request',

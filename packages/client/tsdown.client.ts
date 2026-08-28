@@ -77,7 +77,28 @@ const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
  */
 const SKIP_WORKSPACE_BUILD: UserConfig = { entry: '' }
 
-const REPOSITORY_ROOT = fileURLToPath(new URL('../..', import.meta.url))
+/**
+ * Locate the repository root by its workspace manifest rather than by a fixed
+ * depth above this file. A config loader re-emits this module from a temporary
+ * directory, which moves `import.meta.url` and makes a counted walk-up land
+ * somewhere else without ever failing loudly.
+ *
+ * @returns the absolute directory holding `pnpm-workspace.yaml`.
+ * @throws {Error} when neither this module nor the working directory sits under one.
+ */
+function repositoryRoot(): string {
+  for (const start of [fileURLToPath(new URL('.', import.meta.url)), process.cwd()]) {
+    for (let directory = start;;) {
+      if (existsSync(resolvePath(directory, 'pnpm-workspace.yaml'))) return directory
+      const parent = dirname(directory)
+      if (parent === directory) break
+      directory = parent
+    }
+  }
+  throw new Error('tsdown: no pnpm-workspace.yaml above this config or the working directory')
+}
+
+const REPOSITORY_ROOT = repositoryRoot()
 
 /** Rebase a physical lib-relative source onto a browser URL that mirrors the repository directories. */
 function browserSourcePath(source: string, sourcemapPath: string): string {

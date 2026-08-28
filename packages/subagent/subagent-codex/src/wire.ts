@@ -83,6 +83,28 @@ function string(value: unknown, label: string): string {
   return value
 }
 
+/** One entry of the authenticated Codex model catalogue. */
+export interface CodexCatalogModel {
+  /** The id a route names. */
+  readonly id: string
+  /** The reasoning efforts this model advertises, which may be empty. */
+  readonly reasoningEfforts: readonly string[]
+}
+
+/** Read one `model/list` entry, holding it to the pinned `Model` shape. */
+function catalogModel(value: unknown): CodexCatalogModel {
+  const entry = object(value, 'model/list entry')
+  const efforts = entry.supportedReasoningEfforts
+  if (!Array.isArray(efforts)) {
+    throw new Error('subagent-codex: app-server returned invalid model/list entry')
+  }
+  return {
+    id: string(entry.id, 'model/list entry id'),
+    reasoningEfforts: efforts.map(effort =>
+      string(object(effort, 'model/list entry effort').reasoningEffort, 'model/list entry effort')),
+  }
+}
+
 function unattendedDecision(params: JsonObject): 'cancel' | 'decline' {
   const available = params.availableDecisions
   if (available === undefined || available === null) return 'decline'
@@ -299,6 +321,51 @@ export class CodexAppServerWire {
     }, signal), signal), 'initialize response')
     this.transport.notify('initialized')
     await this.guarded(this.transport.flush(), signal)
+  }
+
+  /**
+   * Read the authenticated model catalogue.
+   *
+   * The one read-only product method on this wire, and it stays read-only in a
+   * way worth stating: it needs no thread, starts no turn, spends no tokens and
+   * writes nothing to the account. A deployment can therefore check at boot
+   * that the models its policy routes to actually exist for the signed-in user,
+   * rather than discovering it at the stage that needed one.
+   *
+   * Shapes follow the app-server JSON schema generated from the pinned
+   * `@openai/codex` build (`codex app-server generate-json-schema`), not from
+   * upstream's current types: `ModelListParams` carries an optional cursor and
+   * `ModelListResponse` carries `data` plus an optional `nextCursor`.
+   *
+   * @param signal - cancellation for the whole paged read.
+   * @returns every advertised model id and the reasoning efforts it supports.
+   */
+  async listModels(signal: AbortSignal): Promise<readonly CodexCatalogModel[]> {
+    const models: CodexCatalogModel[] = []
+    const seenCursors = new Set<string>()
+    let cursor: string | undefined
+    for (;;) {
+      const params: JsonObject = cursor === undefined ? {} : { cursor }
+      const response = object(
+        await this.guarded(this.transport.request('model/list', params, signal), signal),
+        'model/list response',
+      )
+      const data = response.data
+      if (!Array.isArray(data)) {
+        throw new Error('subagent-codex: app-server returned invalid model/list response')
+      }
+      for (const entry of data) models.push(catalogModel(entry))
+      const next = response.nextCursor
+      if (next === undefined || next === null) return models
+      cursor = string(next, 'model/list cursor')
+      // A server that keeps handing back the same cursor would page forever.
+      // Refusing is better than truncating: a catalogue silently cut short
+      // would fail a tier the account can actually serve.
+      if (seenCursors.has(cursor)) {
+        throw new Error('subagent-codex: app-server repeated a model/list cursor')
+      }
+      seenCursors.add(cursor)
+    }
   }
 
   /**

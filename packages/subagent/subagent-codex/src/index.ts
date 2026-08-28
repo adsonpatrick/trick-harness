@@ -46,6 +46,12 @@ export {
   type CodexTaskSpec,
 } from './run.ts'
 
+// Read-only catalogue discovery is public surface for the same reason the
+// scoped transport is: a deployment host checking its model registry at boot
+// has no delegating parent Session to enter through the Provider.
+export { listCodexModels, type CodexModelListSpec } from './models.ts'
+export type { CodexCatalogModel } from './wire.ts'
+
 export const name = 'subagent-codex'
 export const inject = ['subagents', 'subprocess']
 

@@ -18,7 +18,7 @@ import {
   permissionModeFor,
   planStages,
 } from '../src/index.ts'
-import type { DatabasePreviewCapabilityPort, DeliveryCapabilityPort, StageSpec } from '../src/index.ts'
+import type { DatabaseVerificationCapabilityPort, DeliveryCapabilityPort, StageSpec } from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
   policyVersion: 'test-v1.0.0',
@@ -1371,32 +1371,32 @@ describe('a run that changes a database', () => {
   })
 
   /**
-   * A runner with a scripted preview.
-   * @param databasePreview - the preview capability, if any.
+   * A runner with a scripted database verifier.
+   * @param databaseVerification - the verification capability, if any.
    * @param delivered - where delivery stage ids are recorded.
    * @returns the runner.
    */
   function runnerWith(
-    databasePreview: DatabasePreviewCapabilityPort | undefined,
+    databaseVerification: DatabaseVerificationCapabilityPort | undefined,
     delivered: string[],
   ): WorkflowRunner {
     return new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: {
         delivery: deliveryStub(delivered),
-        ...databasePreview === undefined ? {} : { databasePreview },
+        ...databaseVerification === undefined ? {} : { databaseVerification },
       },
     })
   }
 
-  it('blocks before publishing when no isolated preview was composed', async () => {
+  it('blocks before publishing when no database verifier was composed', async () => {
     const delivered: string[] = []
     const outcome = await runnerWith(undefined, delivered).run({
       objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
     })
 
     expect(outcome.state).toBe('blocked')
-    expect(outcome.summary).toContain('no isolated preview')
+    expect(outcome.summary).toContain('no database verification capability')
     expect(delivered).toEqual([])
     // Nothing stood in for it: no executor was asked to touch a database.
     expect(JSON.stringify(session.events)).not.toContain('supabase')
@@ -1446,7 +1446,7 @@ describe('a run that changes a database', () => {
     executors.register(provider('reviewer', async () => { order.push('verify'); return passing('reviewer') }))
     const runner = runnerWith({
       verify: async () => {
-        order.push('supabase-preview')
+        order.push('database-verification')
         return { status: 'PASSED', summary: 'the migrations applied and every gate passed', evidence: [], findings: [] }
       },
     }, delivered)
@@ -1456,7 +1456,7 @@ describe('a run that changes a database', () => {
     })
 
     expect(outcome.state).toBe('completed')
-    expect(order.slice(0, 3)).toEqual(['implement', 'verify', 'supabase-preview'])
+    expect(order.slice(0, 3)).toEqual(['implement', 'verify', 'database-verification'])
     expect(delivered).toEqual(['delivery-1'])
     expect(outcome.stages.map(stage => stage.stageId)).toContain('delivery-1-database')
     // A bounded command sequence, so the budget that counts questions to models
@@ -1477,5 +1477,27 @@ describe('a run that changes a database', () => {
     expect(outcome.state).toBe('completed')
     expect(asked).toBe(0)
     expect(delivered).toEqual(['delivery-1'])
+  })
+
+  // The journalled name is what a status poll and a restart assessment later
+  // repeat. A project-supplied verifier recorded under the name of the built-in
+  // Supabase strategy would be a fact about a run that never happened.
+  it('journals the verification under a product-neutral capability name', async () => {
+    const delivered: string[] = []
+    await runnerWith({
+      verify: async () => ({
+        status: 'PASSED', summary: 'the migrations applied and every gate passed', evidence: [], findings: [],
+      }),
+    }, delivered).run({
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+    })
+
+    const names = session.events
+      .filter(event => event.type === 'harness/capability-start' || event.type === 'harness/capability-end')
+      .map(event => (event.data as unknown as { capability: string }).capability)
+
+    expect(names.length).toBeGreaterThan(0)
+    expect(names).toContain('database-verification')
+    expect(names).not.toContain('supabase-preview')
   })
 })

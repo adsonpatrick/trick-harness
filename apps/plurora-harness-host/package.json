@@ -1,0 +1,29 @@
+{
+  "name": "@trick-harness/plurora-host",
+  "description": "Private Plurora deployment host: reads where this machine is pointed and holds the harness runtime open. Carries no policy of its own",
+  "version": "0.1.1-rc.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --root ../.. apps/plurora-harness-host"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-session": "workspace:^",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "workspace:^",
+    "@deepseek-ai/dsh-subagent-codex": "workspace:^",
+    "@deepseek-ai/dsh-subprocess": "workspace:^",
+    "@opencode-ai/sdk": "1.18.23",
+    "@trick-harness/composition": "workspace:^",
+    "@trick-harness/contracts": "workspace:^",
+    "@trick-harness/control-server": "workspace:^",
+    "@trick-harness/engineering-workflow": "workspace:^",
+    "@trick-harness/executor": "workspace:^",
+    "@trick-harness/journal": "workspace:^",
+    "@trick-harness/profile": "workspace:^",
+    "@trick-harness/provider-codex": "workspace:^",
+    "@trick-harness/provider-opencode": "workspace:^",
+    "@trick-harness/routing": "workspace:^"
+  }
+}
