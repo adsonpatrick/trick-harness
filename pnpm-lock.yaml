@@ -359,6 +359,42 @@ importers:
         specifier: ^10.0.0
         version: 10.0.0
 
+  apps/plurora-harness-host:
+    dependencies:
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:^
+        version: link:../../packages/core/session
+      '@deepseek-ai/dsh-subprocess':
+        specifier: workspace:^
+        version: link:../../packages/subprocess/subprocess
+      '@trick-harness/composition':
+        specifier: workspace:^
+        version: link:../../packages/composition/runtime
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../../packages/core/contracts
+      '@trick-harness/control-server':
+        specifier: workspace:^
+        version: link:../../packages/core/control-server
+      '@trick-harness/engineering-workflow':
+        specifier: workspace:^
+        version: link:../../packages/core/engineering-workflow
+      '@trick-harness/journal':
+        specifier: workspace:^
+        version: link:../../packages/core/journal
+      '@trick-harness/profile':
+        specifier: workspace:^
+        version: link:../../packages/core/profile
+      '@trick-harness/provider-codex':
+        specifier: workspace:^
+        version: link:../../packages/providers/codex
+      '@trick-harness/provider-opencode':
+        specifier: workspace:^
+        version: link:../../packages/providers/opencode
+      '@trick-harness/routing':
+        specifier: workspace:^
+        version: link:../../packages/core/routing
+
   apps/web:
     devDependencies:
       '@deepseek-ai/cordis-plugin-group':

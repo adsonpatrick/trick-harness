@@ -61,8 +61,16 @@ const releaseMemberDirectory = /^(?:packages\/(?!experimental\/)[^/]+\/[^/]+|app
  * composition roots that register them. The hierarchy shape stays
  * `packages/<group>/<pkg>` — these are four reserved group names, not a new
  * nesting rule.
+ *
+ * `apps/<app>` is admitted alongside them for a different kind of member: a
+ * deployment, which assembles the reusable packages for one machine and is
+ * reusable by nobody. The reusable-boundary checker scans only the four group
+ * dirs, so an app sits outside that scan by construction — which is the point.
+ * A deployment is allowed to name its own project's profile, and a reusable
+ * package is not. Kept to one level (`apps/<app>`, never `apps/<a>/<b>`) so the
+ * app tier cannot grow a private package hierarchy that dodges the scan.
  */
-const forkLocalPackageDirectory = /^packages\/(?:core|providers|integrations|composition)\/[^/]+$/
+const forkLocalPackageDirectory = /^(?:packages\/(?:core|providers|integrations|composition)|apps)\/[^/]+$/
 
 const localArtifactDirs = new Set(['node_modules'])
 const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
@@ -267,8 +275,8 @@ export function isForkLocalPackage(manifest: PackageManifest): boolean {
  * The fork adds reusable orchestration packages that upstream does not carry.
  * They stay unpublished so no fork-local code is ever redistributed under
  * upstream's release identity, and they stay inside the four reserved group
- * dirs so the reusable boundary the boundary checker enforces has a fixed set
- * of paths to scan.
+ * dirs — or, for a deployment, the app tier — so the reusable boundary the
+ * boundary checker enforces has a fixed set of paths to scan.
  * @param entry - One workspace manifest and its repo-relative path.
  * @returns One error for each violated fork-local rule.
  */
@@ -277,7 +285,10 @@ export function checkForkLocalManifest({ dir, manifest }: WorkspaceManifest): st
   const label = manifest.name ?? dir
   const errors: string[] = []
   if (!forkLocalPackageDirectory.test(dir)) {
-    errors.push(`${label}: fork-local package must live under packages/core, packages/providers, packages/integrations, or packages/composition`)
+    errors.push(
+      `${label}: fork-local package must live under packages/core, packages/providers, `
+      + 'packages/integrations, packages/composition, or apps',
+    )
   }
   if (manifest.private !== true) errors.push(`${label}: fork-local package must set "private": true`)
   if (manifest.publishConfig !== undefined) errors.push(`${label}: fork-local package must omit publishConfig`)
