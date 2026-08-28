@@ -85,7 +85,7 @@ export function nativeCatalogueReader(options: NativeCatalogueOptions): ModelCat
         const answered = await client.config.providers({ throwOnError: true })
         return normalizeOpencodeModels(answered.data.providers)
       } finally {
-        await server.close()
+        server.close()
       }
     },
 

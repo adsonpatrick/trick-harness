@@ -34,7 +34,7 @@ import type {
   StageInterpreter,
   StageSpec,
   WorkflowDatabaseChange,
-  WorkflowDatabasePreviewInput,
+  WorkflowDatabaseVerificationInput,
   WorkflowDeliveryInput,
   WorkflowOutcome,
   WorkflowRunRequest,
@@ -97,7 +97,7 @@ export interface HarnessWorkflowHandlers {
    * connection string that passed through here would be one a status poll or an
    * error summary could later repeat.
    */
-  readonly describeDatabasePreview?: (input: WorkflowDatabasePreviewInput) => Pick<PreviewRunRequest, 'branchName'>
+  readonly describeDatabasePreview?: (input: WorkflowDatabaseVerificationInput) => Pick<PreviewRunRequest, 'branchName'>
   /**
    * Whether this objective changes a database, answered before the run starts.
    *

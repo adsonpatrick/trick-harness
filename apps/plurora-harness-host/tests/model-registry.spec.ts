@@ -17,6 +17,11 @@ import {
   routedTiers,
 } from '../src/model-registry.ts'
 
+/** What a rejection said, read without assuming the thrown value was an Error. */
+function reported(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /** A deployment naming a model for every tier in `tiers`. */
 function deploymentFor(tiers: readonly string[]): PluroraDeploymentConfig {
   return {
@@ -138,8 +143,8 @@ describe('assertModelsAvailable', () => {
 
   it('names every unavailable tier at once rather than one per boot attempt', async () => {
     const { reader } = readerFor([], [])
-    const failure = await assertModelsAvailable(registry, pluroraProfile, reader).catch((error: Error) => error)
-    for (const tier of PLURORA_SEMANTIC_TIERS) expect(String(failure)).toContain(tier)
+    const failure = await assertModelsAvailable(registry, pluroraProfile, reader).catch(reported)
+    for (const tier of PLURORA_SEMANTIC_TIERS) expect(failure).toContain(tier)
   })
 
   it('reads each native catalogue once however many tiers route to it', async () => {
@@ -168,8 +173,9 @@ describe('assertModelsAvailable', () => {
       async opencodeModels() { throw new Error(secret) },
       async codexModels() { throw new Error(secret) },
     }
-    const failure = await assertModelsAvailable(registry, pluroraProfile, reader).catch((error: Error) => error)
-    expect(failure).toBeInstanceOf(ModelRegistryError)
-    expect(String(failure)).not.toContain('hunter2')
+    const raised = await assertModelsAvailable(registry, pluroraProfile, reader).catch((error: unknown) => error)
+    expect(raised).toBeInstanceOf(ModelRegistryError)
+    const failure = reported(raised)
+    expect(failure).not.toContain('hunter2')
   })
 })

@@ -97,7 +97,11 @@ The normative amendment and implementation plans are:
 
 The installation topology deliberately avoids importing private `@trick-harness/*` workspaces into `neuro-via`. The enablement plan adds a runnable Plurora host inside the exact-SHA Trick Harness checkout; NeuroVia verifies/starts that checkout and remains a bounded loopback HTTP client.
 
-**This branch contains planning/documentation only.** Until the enablement plan is implemented, the current runtime still has the built-in `supabase-preview` implementation and no runnable Plurora host app. Do not claim the shared-development path exists merely because this amendment is merged.
+The enablement plan is implemented. `apps/plurora-harness-host` is a runnable Plurora host: it reads `plurora-harness.json`, refuses a policy-version mismatch, resolves every Plurora semantic tier against the native OpenCode and Codex catalogues, opens a durable JSONL session under `.plurora-harness/sessions`, composes the Plurora profile and binds the control server to the configured loopback address with the caller-supplied token. Nothing is ready before every one of those questions has been answered, and `dispose()` unwinds what was opened in reverse.
+
+Database verification is a capability the deployment supplies rather than a strategy the runtime knows: this host executes one fixed project command and no other, and it configures no Supabase integration, because the composition refuses two owners of one database.
+
+**What is still unproven:** the NeuroVia end-to-end database canary, which waits on the project's own verification command (Plan C), and the Supabase Preview Branch path, which waits on an entitlement the organization does not have.
 
 Once implemented, a DB-changing Plurora development workflow will be cloud-only and serialized:
 
@@ -123,4 +127,4 @@ No canonical path may use local Docker/Supabase/Postgres, arbitrary remote proje
 
 Harness-specific deterministic gates passed in the recorded Plan D evidence, and real OpenCode, Codex, GitHub delivery, replay/quiescence and Supabase fail-closed paths were exercised. The built-in positive Supabase Preview path remains unproven because the organization does not currently have Preview Branch entitlement.
 
-The new NeuroVia host/shared-development path must produce its own fresh evidence after implementation. See `docs/verification/2026-08-27-harness-v2-plan-d-evidence.md` and the pending enablement plans above.
+The host and shared-development enablement produced its own fresh evidence: deterministic gates, a real authenticated catalogue read against throwaway copies of the credential directories proven byte-identical afterwards, and a host HTTP smoke (health, unauthenticated refusal, start, status, cancel, dispose) ending with no port open and no spawned process alive. The NeuroVia database canary is recorded as pending Plan C rather than simulated. See `docs/verification/2026-08-27-neurovia-deployment-enablement-evidence.md` and `docs/verification/2026-08-27-harness-v2-plan-d-evidence.md`.

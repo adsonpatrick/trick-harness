@@ -22,6 +22,11 @@ import { DeploymentConfigError, PLURORA_SEMANTIC_TIERS } from '../src/config.ts'
 import { ModelRegistryError, type ModelCatalogReader } from '../src/model-registry.ts'
 import { PluroraHostError, startPluroraHost } from '../src/main.ts'
 
+/** What a rejection said, read without assuming the thrown value was an Error. */
+function reported(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /** A deployment document the host accepts. */
 function deployment(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -214,8 +219,8 @@ describe('startPluroraHost', () => {
   })
 
   it('names every unserved tier so one boot reports the whole gap', async () => {
-    const failure = await start(deployment(), 'control-token', EMPTY_CATALOGUE).catch((error: Error) => error)
-    for (const tier of PLURORA_SEMANTIC_TIERS) expect(String(failure)).toContain(tier)
+    const failure = await start(deployment(), 'control-token', EMPTY_CATALOGUE).catch(reported)
+    for (const tier of PLURORA_SEMANTIC_TIERS) expect(failure).toContain(tier)
   })
 
   it('supplies a database capability the composed profile accepts', async () => {
