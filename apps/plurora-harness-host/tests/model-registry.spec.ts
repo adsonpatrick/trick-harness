@@ -9,7 +9,13 @@ import type { HarnessProfile } from '@trick-harness/profile'
 import { describe, expect, it } from 'vitest'
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import { PLURORA_SEMANTIC_TIERS, type PluroraDeploymentConfig } from '../src/config.ts'
-import { ModelRegistryError, buildModelRegistry, routedTiers } from '../src/model-registry.ts'
+import {
+  ModelRegistryError,
+  type ModelCatalogReader,
+  assertModelsAvailable,
+  buildModelRegistry,
+  routedTiers,
+} from '../src/model-registry.ts'
 
 /** A deployment naming a model for every tier in `tiers`. */
 function deploymentFor(tiers: readonly string[]): PluroraDeploymentConfig {
@@ -71,5 +77,99 @@ describe('buildModelRegistry', () => {
   it('hands back a registry the caller cannot mutate', () => {
     const registry = buildModelRegistry(deploymentFor(PLURORA_SEMANTIC_TIERS), pluroraProfile)
     expect(Object.isFrozen(registry)).toBe(true)
+  })
+})
+
+/** A catalogue reader answering with fixed ids, recording what was asked. */
+function readerFor(
+  opencode: readonly string[],
+  codex: readonly string[],
+): { reader: ModelCatalogReader; asked: string[] } {
+  const asked: string[] = []
+  return {
+    asked,
+    reader: {
+      async opencodeModels() {
+        asked.push('opencode')
+        return opencode
+      },
+      async codexModels() {
+        asked.push('codex')
+        return codex.map(id => ({ id, reasoningEfforts: ['medium'] }))
+      },
+    },
+  }
+}
+
+/** Every model id the Plurora deployment below names, by native catalogue. */
+const OPENCODE_IDS = PLURORA_SEMANTIC_TIERS
+  .filter(tier => tier.startsWith('opencode.'))
+  .map(tier => `model-for-${tier}`)
+const CODEX_IDS = PLURORA_SEMANTIC_TIERS
+  .filter(tier => tier.startsWith('codex.'))
+  .map(tier => `model-for-${tier}`)
+
+describe('assertModelsAvailable', () => {
+  const registry = buildModelRegistry(deploymentFor(PLURORA_SEMANTIC_TIERS), pluroraProfile)
+
+  it('passes when every routed tier resolves in its own native catalogue', async () => {
+    const { reader } = readerFor(OPENCODE_IDS, CODEX_IDS)
+    await expect(assertModelsAvailable(registry, pluroraProfile, reader)).resolves.toBeUndefined()
+  })
+
+  it('refuses a Codex id the authenticated model/list does not advertise', async () => {
+    const { reader } = readerFor(OPENCODE_IDS, [])
+    await expect(assertModelsAvailable(registry, pluroraProfile, reader))
+      .rejects.toThrow(ModelRegistryError)
+  })
+
+  it('refuses an OpenCode pair absent from the authenticated catalogue', async () => {
+    const { reader } = readerFor([], CODEX_IDS)
+    await expect(assertModelsAvailable(registry, pluroraProfile, reader))
+      .rejects.toThrow(/opencode\./)
+  })
+
+  it('refuses a blank model id rather than asking a catalogue for nothing', async () => {
+    const blank = { ...registry, 'codex.frontier': '   ' }
+    const { reader } = readerFor(OPENCODE_IDS, CODEX_IDS)
+    await expect(assertModelsAvailable(blank, pluroraProfile, reader))
+      .rejects.toThrow(/codex\.frontier/)
+  })
+
+  it('names every unavailable tier at once rather than one per boot attempt', async () => {
+    const { reader } = readerFor([], [])
+    const failure = await assertModelsAvailable(registry, pluroraProfile, reader).catch((error: Error) => error)
+    for (const tier of PLURORA_SEMANTIC_TIERS) expect(String(failure)).toContain(tier)
+  })
+
+  it('reads each native catalogue once however many tiers route to it', async () => {
+    const { reader, asked } = readerFor(OPENCODE_IDS, CODEX_IDS)
+    await assertModelsAvailable(registry, pluroraProfile, reader)
+    expect(asked.toSorted()).toEqual(['codex', 'opencode'])
+  })
+
+  it('does not reach for a catalogue no routed tier needs', async () => {
+    const codexOnly = { 'codex.balanced': 'model-for-codex.balanced' }
+    const profile = {
+      ...pluroraProfile,
+      routingPolicy: {
+        rules: [{ id: 'only', when: {}, use: { executor: 'codex', tier: 'codex.balanced' } }],
+        fallbackRules: [],
+      },
+    } as HarnessProfile
+    const { reader, asked } = readerFor([], ['model-for-codex.balanced'])
+    await assertModelsAvailable(codexOnly, profile, reader)
+    expect(asked).toEqual(['codex'])
+  })
+
+  it('carries no credential out of a catalogue that could not be read', async () => {
+    const secret = 'sk-live-hunter2'
+    const reader: ModelCatalogReader = {
+      async opencodeModels() { throw new Error(secret) },
+      async codexModels() { throw new Error(secret) },
+    }
+    const failure = await assertModelsAvailable(registry, pluroraProfile, reader).catch((error: Error) => error)
+    expect(failure).toBeInstanceOf(ModelRegistryError)
+    expect(String(failure)).not.toContain('hunter2')
   })
 })

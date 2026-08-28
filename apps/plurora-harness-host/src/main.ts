@@ -14,7 +14,8 @@ import type { ModelRegistry } from '@trick-harness/routing'
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import type { PluroraDeploymentConfig } from './config.ts'
 import { loadDeploymentConfig } from './config.ts'
-import { buildModelRegistry } from './model-registry.ts'
+import type { ModelCatalogReader } from './model-registry.ts'
+import { assertModelsAvailable, buildModelRegistry } from './model-registry.ts'
 
 /** Raised when the host cannot be started with what it was given. */
 export class PluroraHostError extends Error {
@@ -29,6 +30,14 @@ export interface PluroraHostOptions {
   readonly controlToken: string
   /** Cancels the start and, once started, the host. */
   readonly signal: AbortSignal
+  /**
+   * Read-only access to the native model catalogues.
+   *
+   * Required rather than optional: a deployment that could skip this check
+   * would boot green and fail at the stage that needed the model, which is
+   * precisely the failure the check exists to move earlier.
+   */
+  readonly catalogue: ModelCatalogReader
 }
 
 /** A started host. */
@@ -48,7 +57,8 @@ export interface PluroraHost {
  * @returns the started host.
  * @throws {PluroraHostError} when the token is missing or the start was cancelled.
  * @throws {DeploymentConfigError} when the deployment file is missing or breaks a rule.
- * @throws {ModelRegistryError} when a routed tier has no model behind it.
+ * @throws {ModelRegistryError} when a routed tier has no model behind it, or
+ *   names one the relevant native catalogue does not advertise.
  */
 export async function startPluroraHost(options: PluroraHostOptions): Promise<PluroraHost> {
   if (options.controlToken.trim() === '') {
@@ -66,6 +76,9 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
     )
   }
   const registry = buildModelRegistry(config, pluroraProfile)
+  // The registry being complete says the deployment named a model for every
+  // routed tier. This says the accounts can actually be asked for them.
+  await assertModelsAvailable(registry, pluroraProfile, options.catalogue)
 
   let disposed = false
   return {

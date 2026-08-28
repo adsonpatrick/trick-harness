@@ -247,19 +247,19 @@ export interface ModelCatalogReader {
 }
 ```
 
-- [ ] Generate/read the **pinned** `@openai/codex` app-server JSON schema and add a read-only `model/list` wire method matching that schema. Do not code from upstream-main types alone.
-- [ ] Write RED tests for missing tier, empty id, OpenCode pair absent from authenticated catalogue, and Codex id absent from `model/list`.
-- [ ] Implement OpenCode catalogue discovery through the official SDK/server provider configuration endpoint and normalize to `provider/model` ids.
-- [ ] Implement Codex `model/list` discovery without starting a model turn, rewriting Codex config/auth, or injecting `OPENAI_API_KEY`.
-- [ ] Make host readiness fail until every semantic tier used by `profiles/plurora` resolves in the relevant native catalogue.
-- [ ] Run:
+- [x] Generate/read the **pinned** `@openai/codex` app-server JSON schema and add a read-only `model/list` wire method matching that schema. Do not code from upstream-main types alone.
+- [x] Write RED tests for missing tier, empty id, OpenCode pair absent from authenticated catalogue, and Codex id absent from `model/list`.
+- [x] Implement OpenCode catalogue discovery through the official SDK/server provider configuration endpoint and normalize to `provider/model` ids.
+- [x] Implement Codex `model/list` discovery without starting a model turn, rewriting Codex config/auth, or injecting `OPENAI_API_KEY`.
+- [x] Make host readiness fail until every semantic tier used by `profiles/plurora` resolves in the relevant native catalogue.
+- [x] Run:
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
 corepack pnpm vitest run packages/subagent/subagent-codex/tests/subagent-codex.spec.ts packages/subagent/subagent-codex/tests/real-product.spec.ts profiles/plurora/tests/routing.spec.ts
 ```
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add apps/plurora-harness-host packages/subagent/subagent-codex

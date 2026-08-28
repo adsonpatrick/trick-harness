@@ -364,9 +364,15 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: workspace:^
         version: link:../../packages/core/session
+      '@deepseek-ai/dsh-subagent-codex':
+        specifier: workspace:^
+        version: link:../../packages/subagent/subagent-codex
       '@deepseek-ai/dsh-subprocess':
         specifier: workspace:^
         version: link:../../packages/subprocess/subprocess
+      '@opencode-ai/sdk':
+        specifier: 1.18.23
+        version: 1.18.23
       '@trick-harness/composition':
         specifier: workspace:^
         version: link:../../packages/composition/runtime

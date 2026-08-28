@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import { DeploymentConfigError, PLURORA_SEMANTIC_TIERS } from '../src/config.ts'
-import { ModelRegistryError } from '../src/model-registry.ts'
+import { ModelRegistryError, type ModelCatalogReader } from '../src/model-registry.ts'
 import { PluroraHostError, startPluroraHost } from '../src/main.ts'
 
 /** A deployment document the host accepts. */
@@ -29,6 +29,22 @@ function deployment(overrides: Record<string, unknown> = {}): Record<string, unk
   }
 }
 
+/** A catalogue advertising exactly the models `deployment()` names. */
+function servingCatalogue(): ModelCatalogReader {
+  const tiers = (prefix: string): string[] =>
+    PLURORA_SEMANTIC_TIERS.filter(tier => tier.startsWith(prefix)).map(tier => `model-for-${tier}`)
+  return {
+    async opencodeModels() { return tiers('opencode.') },
+    async codexModels() { return tiers('codex.').map(id => ({ id, reasoningEfforts: ['medium'] })) },
+  }
+}
+
+/** A catalogue that advertises nothing, standing in for an account without access. */
+const EMPTY_CATALOGUE: ModelCatalogReader = {
+  async opencodeModels() { return [] },
+  async codexModels() { return [] },
+}
+
 describe('startPluroraHost', () => {
   let root: string
   let controller: AbortController
@@ -44,9 +60,13 @@ describe('startPluroraHost', () => {
   })
 
   /** Write `document` as the deployment file and start the host on it. */
-  async function start(document: Record<string, unknown>, controlToken = 'control-token'): ReturnType<typeof startPluroraHost> {
+  async function start(
+    document: Record<string, unknown>,
+    controlToken = 'control-token',
+    catalogue: ModelCatalogReader = servingCatalogue(),
+  ): ReturnType<typeof startPluroraHost> {
     await writeFile(join(root, 'plurora-harness.json'), JSON.stringify(document), 'utf8')
-    return await startPluroraHost({ projectRoot: root, controlToken, signal: controller.signal })
+    return await startPluroraHost({ projectRoot: root, controlToken, signal: controller.signal, catalogue })
   }
 
   it('starts on a deployment that satisfies every rule', async () => {
@@ -83,6 +103,15 @@ describe('startPluroraHost', () => {
     // The config check already covers the Plurora tiers, so this asserts the
     // second gate exists rather than routing every gap through the first.
     expect(ModelRegistryError.prototype).toBeInstanceOf(Error)
+  })
+
+  it('refuses to come up while a routed tier resolves in no native catalogue', async () => {
+    await expect(start(deployment(), 'control-token', EMPTY_CATALOGUE)).rejects.toThrow(ModelRegistryError)
+  })
+
+  it('names every unserved tier so one boot reports the whole gap', async () => {
+    const failure = await start(deployment(), 'control-token', EMPTY_CATALOGUE).catch((error: Error) => error)
+    for (const tier of PLURORA_SEMANTIC_TIERS) expect(String(failure)).toContain(tier)
   })
 
   it('disposes without failing when disposed twice', async () => {

@@ -9,6 +9,10 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@deepseek-ai/dsh-session": "workspace:^",
+    "@deepseek-ai/dsh-subagent-codex": "workspace:^",
+    "@deepseek-ai/dsh-subprocess": "workspace:^",
+    "@opencode-ai/sdk": "1.18.23",
     "@trick-harness/composition": "workspace:^",
     "@trick-harness/contracts": "workspace:^",
     "@trick-harness/control-server": "workspace:^",
@@ -17,8 +21,6 @@
     "@trick-harness/profile": "workspace:^",
     "@trick-harness/provider-codex": "workspace:^",
     "@trick-harness/provider-opencode": "workspace:^",
-    "@trick-harness/routing": "workspace:^",
-    "@deepseek-ai/dsh-session": "workspace:^",
-    "@deepseek-ai/dsh-subprocess": "workspace:^"
+    "@trick-harness/routing": "workspace:^"
   }
 }

@@ -33,6 +33,7 @@ import {
   type CodexRouting,
   type CodexRunSpec,
 } from '../src/run.ts'
+import { listCodexModels, type CodexModelListSpec } from '../src/models.ts'
 import { CodexAppServerWire } from '../src/wire.ts'
 
 const { hostStderrWrite } = vi.hoisted(() => ({
@@ -140,6 +141,11 @@ class ProtocolPeer {
 
   respond(requestFrame: JsonObject, result: unknown): void {
     this.send({ id: requestFrame.id, result })
+  }
+
+  /** Frames the client sent that no `next` call has consumed yet. */
+  sent(): readonly JsonObject[] {
+    return [...this.frames]
   }
 }
 
@@ -2599,5 +2605,177 @@ describe('routed sandbox and diagnostic facts', () => {
   it('returns undefined for text it does not own', () => {
     expect(parseCodexDiagnostic('something else entirely')).toBeUndefined()
     expect(parseCodexDiagnostic('Product subagent failure (product: Codex)')).toBeUndefined()
+  })
+})
+
+describe('CodexAppServerWire model/list', () => {
+  /** An initialized wire with no thread: listing models must not need one. */
+  async function listableWire(): Promise<{ child: FakeChild; wire: CodexAppServerWire }> {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const initializing = wire.initialize(new AbortController().signal)
+    const initialize = await child.peer.nextMethod('initialize')
+    child.peer.respond(initialize, { userAgent: 'codex-cli 0.147.0' })
+    await initializing
+    await child.peer.nextMethod('initialized')
+    return { child, wire }
+  }
+
+  /** One catalogue entry shaped like the pinned ModelListResponse `Model`. */
+  function model(id: string, efforts: readonly string[]): JsonObject {
+    return {
+      id,
+      model: id,
+      displayName: id,
+      description: `the ${id} model`,
+      hidden: false,
+      isDefault: false,
+      defaultReasoningEffort: efforts[0] ?? 'medium',
+      supportedReasoningEfforts: efforts.map(effort => ({ reasoningEffort: effort, description: effort })),
+    }
+  }
+
+  it('asks for the catalogue without starting a thread or a turn', async () => {
+    const { child, wire } = await listableWire()
+    const listing = wire.listModels(new AbortController().signal)
+    const request = await child.peer.nextMethod('model/list')
+    expect(request['params']).toEqual({})
+    child.peer.respond(request, { data: [model('gpt-5.6-sol', ['medium'])] })
+    await listing
+    expect(child.peer.sent().filter(frame => frame.method === 'thread/start')).toEqual([])
+    expect(child.peer.sent().filter(frame => frame.method === 'turn/start')).toEqual([])
+  })
+
+  it('reports each model id with the reasoning efforts it advertises', async () => {
+    const { child, wire } = await listableWire()
+    const listing = wire.listModels(new AbortController().signal)
+    const request = await child.peer.nextMethod('model/list')
+    child.peer.respond(request, {
+      data: [model('gpt-5.6-sol', ['low', 'medium', 'high']), model('gpt-5.6-thinking', ['xhigh', 'max'])],
+    })
+    expect(await listing).toEqual([
+      { id: 'gpt-5.6-sol', reasoningEfforts: ['low', 'medium', 'high'] },
+      { id: 'gpt-5.6-thinking', reasoningEfforts: ['xhigh', 'max'] },
+    ])
+  })
+
+  it('follows nextCursor so a paged catalogue is not silently truncated', async () => {
+    const { child, wire } = await listableWire()
+    const listing = wire.listModels(new AbortController().signal)
+    const first = await child.peer.nextMethod('model/list')
+    child.peer.respond(first, { data: [model('a', ['medium'])], nextCursor: 'page-2' })
+    const second = await child.peer.nextMethod('model/list')
+    expect(second['params']).toEqual({ cursor: 'page-2' })
+    child.peer.respond(second, { data: [model('b', ['high'])], nextCursor: null })
+    expect((await listing).map(entry => entry.id)).toEqual(['a', 'b'])
+  })
+
+  it('refuses a response whose entries are not the pinned model shape', async () => {
+    const { child, wire } = await listableWire()
+    const listing = wire.listModels(new AbortController().signal)
+    const request = await child.peer.nextMethod('model/list')
+    child.peer.respond(request, { data: [{ displayName: 'no id here' }] })
+    await expect(listing).rejects.toThrow(/model\/list/)
+  })
+
+  it('refuses a response that carries no catalogue at all', async () => {
+    const { child, wire } = await listableWire()
+    const listing = wire.listModels(new AbortController().signal)
+    const request = await child.peer.nextMethod('model/list')
+    child.peer.respond(request, { nextCursor: null })
+    await expect(listing).rejects.toThrow(/model\/list/)
+  })
+
+  it('stops rather than looping when the server repeats a cursor', async () => {
+    const { child, wire } = await listableWire()
+    const listing = wire.listModels(new AbortController().signal)
+    const first = await child.peer.nextMethod('model/list')
+    child.peer.respond(first, { data: [model('a', ['medium'])], nextCursor: 'same' })
+    const second = await child.peer.nextMethod('model/list')
+    child.peer.respond(second, { data: [model('b', ['medium'])], nextCursor: 'same' })
+    await expect(listing).rejects.toThrow(/cursor/)
+  })
+})
+
+describe('listCodexModels', () => {
+  /** The spec a catalogue read runs under, backed by `child`. */
+  function catalogueSpec(
+    child: FakeChild,
+    overrides: Partial<CodexModelListSpec> = {},
+  ): CodexModelListSpec {
+    return {
+      cwd: process.cwd(),
+      env: {},
+      disposeGraceMs: DEFAULT_DISPOSE_GRACE_MS,
+      spawn: () => child.handle,
+      signal: AbortSignal.timeout(5_000),
+      ...overrides,
+    }
+  }
+
+  /** Answer the initialize handshake, then the catalogue request. */
+  async function serve(child: FakeChild, response: Record<string, unknown>): Promise<void> {
+    const initialize = await child.peer.nextMethod('initialize')
+    child.peer.respond(initialize, {})
+    const listing = await child.peer.nextMethod('model/list')
+    child.peer.respond(listing, response)
+  }
+
+  it('spawns the same fixed app-server the run path spawns', async () => {
+    const child = fakeChild()
+    const specs: SubprocessSpawnSpec[] = []
+    const reading = listCodexModels(catalogueSpec(child, {
+      spawn: (spec) => { specs.push(spec); return child.handle },
+    }))
+    await serve(child, { data: [] })
+    await reading
+    expect(specs.map(spec => spec.argv)).toEqual([codexAppServerArgv()])
+  })
+
+  it('returns the catalogue without ever starting a thread', async () => {
+    const child = fakeChild()
+    const reading = listCodexModels(catalogueSpec(child))
+    await serve(child, {
+      data: [{
+        id: 'gpt-5.6-sol',
+        model: 'gpt-5.6-sol',
+        displayName: 'Sol',
+        description: 'sol',
+        hidden: false,
+        isDefault: true,
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: 'medium' }],
+      }],
+    })
+    expect(await reading).toEqual([{ id: 'gpt-5.6-sol', reasoningEfforts: ['medium'] }])
+    expect(child.peer.sent().filter(frame => frame.method === 'thread/start')).toEqual([])
+  })
+
+  it('releases the app-server whether the read succeeded or failed', async () => {
+    const child = fakeChild()
+    const reading = listCodexModels(catalogueSpec(child))
+    await serve(child, { data: [] })
+    await reading
+    expect(child.terminate).toHaveBeenCalled()
+
+    const failing = fakeChild()
+    const broken = listCodexModels(catalogueSpec(failing))
+    await serve(failing, { nextCursor: null })
+    await expect(broken).rejects.toThrow(/model\/list/)
+    expect(failing.terminate).toHaveBeenCalled()
+  })
+
+  it('injects no API key and rewrites nothing in the Codex home', async () => {
+    const child = fakeChild()
+    const specs: SubprocessSpawnSpec[] = []
+    const reading = listCodexModels(catalogueSpec(child, {
+      env: { CODEX_HOME: '/somewhere' },
+      spawn: (spec) => { specs.push(spec); return child.handle },
+    }))
+    await serve(child, { data: [] })
+    await reading
+    expect(specs[0]?.env).toEqual({ CODEX_HOME: '/somewhere' })
+    expect(Object.keys(specs[0]?.env ?? {})).not.toContain('OPENAI_API_KEY')
   })
 })

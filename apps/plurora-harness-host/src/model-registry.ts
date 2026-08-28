@@ -60,3 +60,113 @@ export function buildModelRegistry(config: PluroraDeploymentConfig, profile: Har
   }
   return Object.freeze({ ...config.modelRegistry })
 }
+
+/**
+ * Read-only access to what the signed-in accounts can actually be asked for.
+ *
+ * Both halves are native catalogues: OpenCode's own provider configuration and
+ * Codex's `model/list`. Neither is a list this repository maintains, because a
+ * list maintained here would go stale silently and a stale one is worse than
+ * none — it would pass boot and fail the run.
+ */
+export interface ModelCatalogReader {
+  /** Every `provider/model` pair the authenticated OpenCode server offers. */
+  opencodeModels(): Promise<readonly string[]>
+  /** Every model the authenticated Codex account advertises. */
+  codexModels(): Promise<readonly { id: string; reasoningEfforts: readonly string[] }[]>
+}
+
+/** The native catalogues a routed tier can be served from. */
+type Catalogue = 'codex' | 'opencode'
+
+/**
+ * Which native catalogue each routed tier is served from.
+ *
+ * Taken from the executor the routing rule names, not from the tier's spelling:
+ * the tier string is a label the profile chose, and reading a `codex.` prefix as
+ * proof of a Codex route would validate against the wrong account the first time
+ * someone names a tier for what it does rather than for who runs it.
+ *
+ * @param profile - the profile whose routing table is being served.
+ * @returns tier name to catalogue, for every tier the table routes to.
+ */
+function tierCatalogues(profile: HarnessProfile): ReadonlyMap<string, Catalogue> {
+  const catalogues = new Map<string, Catalogue>()
+  for (const rule of [...profile.routingPolicy.rules, ...profile.routingPolicy.fallbackRules]) {
+    const tier = rule.use['tier']
+    const executor = rule.use['executor']
+    if (typeof tier !== 'string') continue
+    if (executor === 'codex' || executor === 'opencode') catalogues.set(tier, executor)
+  }
+  return catalogues
+}
+
+/**
+ * Check every routed tier against the native catalogue that has to serve it.
+ *
+ * This is the gate that separates "the deployment names a model" from "the
+ * account can be asked for it". A registry can be complete and still be wrong —
+ * a typo, a model retired upstream, an account that never had access — and
+ * every one of those failures would otherwise land mid-run on the stage that
+ * needed the model, long after the boot that could have refused.
+ *
+ * A catalogue is read at most once, and only when some tier is served from it,
+ * so a deployment that routes nowhere near Codex never touches a Codex account.
+ *
+ * @param registry - the tier-to-model registry this deployment would run with.
+ * @param profile - the profile whose routing table the registry has to serve.
+ * @param reader - read-only access to the native catalogues.
+ * @throws {ModelRegistryError} when any routed tier does not resolve natively.
+ */
+export async function assertModelsAvailable(
+  registry: ModelRegistry,
+  profile: HarnessProfile,
+  reader: ModelCatalogReader,
+): Promise<void> {
+  const catalogues = tierCatalogues(profile)
+  const wanted = new Map<Catalogue, string[]>()
+  const failures: string[] = []
+  for (const tier of routedTiers(profile)) {
+    const model = registry[tier]?.trim() ?? ''
+    const catalogue = catalogues.get(tier)
+    if (model === '') failures.push(`${tier} names no model`)
+    else if (catalogue === undefined) failures.push(`${tier} is routed to no known executor`)
+    else wanted.set(catalogue, [...wanted.get(catalogue) ?? [], tier])
+  }
+
+  for (const [catalogue, tiers] of wanted) {
+    const available = new Set(await read(catalogue, reader))
+    for (const tier of tiers) {
+      const model = registry[tier]?.trim() ?? ''
+      if (!available.has(model)) failures.push(`${tier} wants a ${catalogue} model this account cannot be asked for`)
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new ModelRegistryError(
+      `profile ${JSON.stringify(profile.id)} cannot be served as deployed: ${failures.join('; ')}`,
+    )
+  }
+}
+
+/**
+ * Read one native catalogue, reporting a failure without carrying it out.
+ *
+ * The cause is dropped deliberately: a catalogue read fails through an
+ * authenticated client, and its error can carry a token, a header or a server
+ * URL. This message reaches a boot log, so it says which catalogue went dark
+ * and nothing else.
+ *
+ * @param catalogue - which native catalogue to read.
+ * @param reader - read-only access to the native catalogues.
+ * @returns the model ids the catalogue advertises.
+ * @throws {ModelRegistryError} when the catalogue could not be read.
+ */
+async function read(catalogue: Catalogue, reader: ModelCatalogReader): Promise<readonly string[]> {
+  try {
+    if (catalogue === 'opencode') return await reader.opencodeModels()
+    return (await reader.codexModels()).map(model => model.id)
+  } catch {
+    throw new ModelRegistryError(`the ${catalogue} model catalogue could not be read, so nothing was validated`)
+  }
+}
