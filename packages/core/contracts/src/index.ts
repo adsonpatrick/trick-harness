@@ -324,12 +324,20 @@ export function parseApprovedArtifactRef(value: unknown, path = 'artifact'): App
   // on; and one that only refused `..` would admit `docs/./spec.md` — the same
   // bytes under a second spelling, so the path journalled would not be the
   // path approved.
+  //
+  // A trailing dot and a colon are refused for the same reason, and not as
+  // Windows trivia: Windows drops the dot and reads everything after the colon
+  // as an alternate data stream, so either names a file other than the one
+  // spelled. The path is required to be in NFC rather than normalized into it,
+  // because normalizing would accept two byte strings as one approved identity.
   const segments = location.split(/[/\\]/)
   const named = segments.every(segment =>
     segment !== '' && segment !== '.' && segment !== '..'
     && segment === segment.trim()
+    && !segment.endsWith('.')
+    && !segment.includes(':')
     && !hasControlCharacter(segment))
-  if (!named || DRIVE_LETTER.test(location)) {
+  if (!named || DRIVE_LETTER.test(location) || location !== location.normalize('NFC')) {
     throw new ContractError(`${path}.path`, 'must be a repository-relative path of ordinary name segments')
   }
   return Object.freeze({ path: location, sha256: digest(source, 'sha256', path) })

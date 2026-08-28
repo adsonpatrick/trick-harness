@@ -363,6 +363,31 @@ describe('reading the approved artifacts an objective was opened against', () =>
     }
   })
 
+  it('rejects a segment a filesystem resolves to a different name than the one written', () => {
+    // Windows strips a trailing dot from a name, so `docs./spec.md` opens
+    // `docs/spec.md`; and everything after a colon is an NTFS alternate data
+    // stream, so `docs/spec.md:hidden` opens a second stream of the approved
+    // file whose bytes the hash never covered. Both are one file under a name
+    // the journal would record as another.
+    for (const path of ['docs./spec.md', 'docs/spec.md.', 'docs/spec.md:hidden', 'docs:alt/spec.md']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, spec: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.spec\.path/)
+    }
+  })
+
+  it('rejects a path that is not Unicode-normalized, which is one file under two byte strings', () => {
+    // A decomposed `e` plus a combining acute names the same file on macOS as
+    // the composed one, and the two are different strings. Whichever spelling
+    // arrives, only one can be the approved identity, so the parser takes the
+    // composed one and refuses the other rather than normalizing silently.
+    const decomposed = 'docs/refere\u0301ncia.md'
+    expect(decomposed).not.toBe(decomposed.normalize('NFC'))
+    const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path: decomposed, sha256: 'c'.repeat(64) } }
+    expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+      .toThrow(/objective\.approvedArtifacts\.plan\.path/)
+  })
+
   it('rejects a path carrying a NUL or a control character, which no document name holds', () => {
     for (const path of ['docs/spec.md\0../../etc/passwd', 'docs/\nspec.md']) {
       const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path, sha256: 'c'.repeat(64) } }
