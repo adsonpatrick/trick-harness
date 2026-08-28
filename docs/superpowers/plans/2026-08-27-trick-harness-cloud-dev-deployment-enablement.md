@@ -298,11 +298,11 @@ export interface ProjectDatabaseVerificationEnvelope {
 }
 ```
 
-- [ ] Write RED tests proving argv-array/no-shell execution, fixed command only, project cwd only, bounded single JSON envelope, configured project-ref equality and secret/raw-output rejection.
-- [ ] Implement with DSH managed subprocess ownership, cancellation and `waitForExit()` quiescence.
-- [ ] Map only validated envelope fields into `DatabaseVerificationCapabilityPort`; raw stdout/stderr never reaches journal/status.
-- [ ] Wire through `composeHarness({ capabilities: { databaseVerification } })`.
-- [ ] Run host tests and commit.
+- [x] Write RED tests proving argv-array/no-shell execution, fixed command only, project cwd only, bounded single JSON envelope, configured project-ref equality and secret/raw-output rejection.
+- [x] Implement with DSH managed subprocess ownership, cancellation and `waitForExit()` quiescence.
+- [x] Map only validated envelope fields into `DatabaseVerificationCapabilityPort`; raw stdout/stderr never reaches journal/status.
+- [x] Wire through `composeHarness({ capabilities: { databaseVerification } })`.
+- [x] Run host tests and commit.
 
 ---
 

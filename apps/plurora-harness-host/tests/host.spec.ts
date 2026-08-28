@@ -9,6 +9,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { BundleCompositionError, composeHarness } from '@trick-harness/composition'
+import { DEFAULT_MODEL_REGISTRY } from '@trick-harness/routing'
+import type { DatabaseVerificationCapabilityPort } from '@trick-harness/engineering-workflow'
+import type { ExecutorProvider } from '@trick-harness/executor'
+import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import { DeploymentConfigError, PLURORA_SEMANTIC_TIERS } from '../src/config.ts'
 import { ModelRegistryError, type ModelCatalogReader } from '../src/model-registry.ts'
@@ -45,6 +51,69 @@ const EMPTY_CATALOGUE: ModelCatalogReader = {
   async codexModels() { return [] },
 }
 
+/** A child that never runs; the database command is not exercised here. */
+function unusedSpawn(_spec: SubprocessSpawnSpec): SubprocessHandle {
+  throw new Error('the database command was not expected to run')
+}
+
+/**
+ * A provider that registers under `name` and is never dispatched to.
+ *
+ * The composition refuses a profile routing to an unregistered executor, so
+ * both of Plurora's have to exist for this file to reach the check it is about.
+ *
+ * @param name - the executor name the routing table asks for.
+ * @returns a provider that satisfies registration and nothing more.
+ */
+function registeredOnly(name: string): ExecutorProvider {
+  return {
+    name,
+    capabilities: {
+      modelOverride: true,
+      reasoningEffort: true,
+      permissionModes: ['read-only', 'workspace-write'],
+    },
+    start: async () => { throw new Error(`${name} was not expected to run`) },
+  }
+}
+
+/**
+ * Compose the Plurora profile around one database verification port.
+ *
+ * @param databaseVerification - the port under test.
+ * @param withSupabase - also configure the built-in preview integration.
+ * @returns the composed harness, which the caller disposes.
+ */
+function compose(
+  databaseVerification: DatabaseVerificationCapabilityPort,
+  withSupabase = false,
+): ReturnType<typeof composeHarness> {
+  return composeHarness({
+    profile: pluroraProfile,
+    registry: DEFAULT_MODEL_REGISTRY,
+    session: Session.create(SessionId('plurora-host-compose')),
+    flush: async () => true,
+    workflow: {
+      interpret: (stage, executor) => ({
+        role: stage.role, executor, verdict: 'PASS', summary: 'passed', findings: [], evidence: [],
+      }),
+      task: stage => `${stage.role}: do the work`,
+    },
+    capabilities: { databaseVerification },
+    ...withSupabase
+      ? {
+        integrations: {
+          supabase: {
+            cwd: '/repo', spawn: unusedSpawn, projectRef: 'uljaajwwnygopsyvwsre',
+            pollIntervalMs: 1, readyTimeoutMs: 50,
+          },
+        },
+      }
+      : {},
+    providers: { extraProviders: [registeredOnly('opencode'), registeredOnly('codex')] },
+  })
+}
+
 describe('startPluroraHost', () => {
   let root: string
   let controller: AbortController
@@ -66,7 +135,13 @@ describe('startPluroraHost', () => {
     catalogue: ModelCatalogReader = servingCatalogue(),
   ): ReturnType<typeof startPluroraHost> {
     await writeFile(join(root, 'plurora-harness.json'), JSON.stringify(document), 'utf8')
-    return await startPluroraHost({ projectRoot: root, controlToken, signal: controller.signal, catalogue })
+    return await startPluroraHost({
+      projectRoot: root,
+      controlToken,
+      signal: controller.signal,
+      catalogue,
+      spawn: unusedSpawn,
+    })
   }
 
   it('starts on a deployment that satisfies every rule', async () => {
@@ -112,6 +187,42 @@ describe('startPluroraHost', () => {
   it('names every unserved tier so one boot reports the whole gap', async () => {
     const failure = await start(deployment(), 'control-token', EMPTY_CATALOGUE).catch((error: Error) => error)
     for (const tier of PLURORA_SEMANTIC_TIERS) expect(String(failure)).toContain(tier)
+  })
+
+  it('supplies a database capability the composed profile accepts', async () => {
+    const host = await start(deployment())
+    // Composition refuses a capability the profile does not enable, so this
+    // composing at all is the wiring under test, not a smoke check.
+    expect(() => compose(host.databaseVerification)).not.toThrow()
+    await host.dispose()
+  })
+
+  it('is refused alongside the built-in preview strategy, since one database has one owner', async () => {
+    const host = await start(deployment())
+    expect(() => compose(host.databaseVerification, true)).toThrow(BundleCompositionError)
+    await host.dispose()
+  })
+
+  it('binds the capability to the project ref the deployment names', async () => {
+    const specs: SubprocessSpawnSpec[] = []
+    await writeFile(join(root, 'plurora-harness.json'), JSON.stringify(deployment()), 'utf8')
+    const host = await startPluroraHost({
+      projectRoot: root,
+      controlToken: 'control-token',
+      signal: controller.signal,
+      catalogue: servingCatalogue(),
+      spawn: (spec) => { specs.push(spec); throw new Error('not run') },
+    })
+    const result = await host.databaseVerification.verify({
+      stageId: 'delivery',
+      objective: {
+        id: 'obj-1', cwd: root, requirement: 'add a column',
+        risk: 'medium', workload: 'light', profileId: 'plurora',
+      },
+    }, AbortSignal.timeout(1_000))
+    expect(specs[0]?.cwd).toBe(root)
+    expect(result.status).toBe('BLOCKED')
+    await host.dispose()
   })
 
   it('disposes without failing when disposed twice', async () => {

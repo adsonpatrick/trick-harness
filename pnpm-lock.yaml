@@ -385,6 +385,9 @@ importers:
       '@trick-harness/engineering-workflow':
         specifier: workspace:^
         version: link:../../packages/core/engineering-workflow
+      '@trick-harness/executor':
+        specifier: workspace:^
+        version: link:../../packages/core/executor
       '@trick-harness/journal':
         specifier: workspace:^
         version: link:../../packages/core/journal

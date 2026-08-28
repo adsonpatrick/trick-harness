@@ -17,6 +17,7 @@
     "@trick-harness/contracts": "workspace:^",
     "@trick-harness/control-server": "workspace:^",
     "@trick-harness/engineering-workflow": "workspace:^",
+    "@trick-harness/executor": "workspace:^",
     "@trick-harness/journal": "workspace:^",
     "@trick-harness/profile": "workspace:^",
     "@trick-harness/provider-codex": "workspace:^",

@@ -10,12 +10,23 @@
  * @module apps/plurora-harness-host/main
  */
 
+import type { DatabaseVerificationCapabilityPort } from '@trick-harness/engineering-workflow'
 import type { ModelRegistry } from '@trick-harness/routing'
+import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import type { PluroraDeploymentConfig } from './config.ts'
 import { loadDeploymentConfig } from './config.ts'
 import type { ModelCatalogReader } from './model-registry.ts'
 import { assertModelsAvailable, buildModelRegistry } from './model-registry.ts'
+import { createProjectDatabaseVerifier } from './project-database.ts'
+
+/**
+ * Default subprocess termination grace for what the host starts.
+ *
+ * Long enough for a database command to close a connection cleanly, short
+ * enough that a stuck one does not hold a disposal open indefinitely.
+ */
+export const DEFAULT_DISPOSE_GRACE_MS = 5_000
 
 /** Raised when the host cannot be started with what it was given. */
 export class PluroraHostError extends Error {
@@ -38,6 +49,10 @@ export interface PluroraHostOptions {
    * precisely the failure the check exists to move earlier.
    */
   readonly catalogue: ModelCatalogReader
+  /** Shared subprocess service spawn operation, used for the database command. */
+  readonly spawn: (spec: SubprocessSpawnSpec) => SubprocessHandle
+  /** Subprocess termination grace; defaults to {@link DEFAULT_DISPOSE_GRACE_MS}. */
+  readonly disposeGraceMs?: number
 }
 
 /** A started host. */
@@ -46,6 +61,18 @@ export interface PluroraHost {
   readonly config: PluroraDeploymentConfig
   /** The models behind the profile's semantic tiers. */
   readonly registry: ModelRegistry
+  /**
+   * The project's database verification capability, bound to this deployment's
+   * project ref.
+   *
+   * Exposed rather than composed here because a composition also decides what
+   * else owns a database. This deployment verifies a shared cloud development
+   * project through the project's own fixed command, so it supplies this port
+   * and configures no Supabase preview integration — the composition refuses
+   * both, since two verifiers is two answers about one database with nothing in
+   * the run saying which one it was held to.
+   */
+  readonly databaseVerification: DatabaseVerificationCapabilityPort
   /** Release everything the host holds. Safe to call more than once. */
   dispose(): Promise<void>
 }
@@ -80,10 +107,18 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
   // routed tier. This says the accounts can actually be asked for them.
   await assertModelsAvailable(registry, pluroraProfile, options.catalogue)
 
+  const databaseVerification = createProjectDatabaseVerifier({
+    projectRoot: options.projectRoot,
+    projectRef: config.database.projectRef,
+    disposeGraceMs: options.disposeGraceMs ?? DEFAULT_DISPOSE_GRACE_MS,
+    spawn: options.spawn,
+  })
+
   let disposed = false
   return {
     config,
     registry,
+    databaseVerification,
     async dispose() {
       // Idempotent on purpose: a signal-driven shutdown and an explicit
       // dispose routinely race, and the second one must not fail the process.
