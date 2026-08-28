@@ -73,8 +73,17 @@ export async function openDurableSession(options: DurableSessionOptions): Promis
   // Ordered rather than concurrent: the backend declares `inject = ['sessions']`,
   // so the store has to be a service before the backend can attach its
   // write-path listeners to it.
-  await ctx.plugin(SessionStore)
-  await ctx.plugin(JsonlSessionPersistence, { root })
+  try {
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(JsonlSessionPersistence, { root })
+  }
+  catch (error: unknown) {
+    // The fiber already holds whatever attached before the failure. Leaving it
+    // stranded would keep a session store alive for the life of the process
+    // with nobody holding a handle that could ever close it.
+    await ctx.fiber.dispose()
+    throw error
+  }
   // `cwd` is the checkout because the backend groups logs by the directory a
   // session ran in; a session without one lands in a shared bucket.
   const session = ctx.sessions.create(SessionId(options.sessionId), { meta: { cwd: options.projectRoot } })

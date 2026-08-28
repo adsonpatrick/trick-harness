@@ -43,6 +43,16 @@ export const MAX_SUMMARY_CHARS = 400
 /** The branch prefix an automated run is allowed to publish under. */
 export const DELIVERY_BRANCH_PREFIX = 'harness/'
 
+/**
+ * How long a derived branch name may get.
+ *
+ * An objective id is written by whoever opened the objective and is bounded by
+ * nothing; a refname is bounded by the filesystem the ref is stored on. Cutting
+ * here means a long id yields a usable branch rather than a delivery that fails
+ * on a path length nobody was thinking about.
+ */
+export const MAX_BRANCH_NAME_CHARS = 80
+
 /** What the handlers need from the deployment. */
 export interface PluroraWorkflowHandlerOptions {
   /** The pull request's base branch; the run may never push to it. */
@@ -65,13 +75,25 @@ const DEFAULT_BASE_BRANCH = 'main'
  * @returns the branch name, restricted to characters git and this policy allow.
  */
 export function deliveryBranch(objectiveId: string): string {
-  const slug = objectiveId.toLowerCase()
+  const room = MAX_BRANCH_NAME_CHARS - DELIVERY_BRANCH_PREFIX.length
+  const slug = trimEdges(objectiveId.toLowerCase()
     .replaceAll(/[^a-z0-9._-]+/g, '-')
     // Collapsed after substitution, not before: a run of separators is one
     // separator, and `--` at the head of a segment is a git refname error.
     .replaceAll(/-{2,}/g, '-')
-    .replaceAll(/^-+|-+$/g, '')
-  return `${DELIVERY_BRANCH_PREFIX}${slug === '' ? 'objective' : slug}`
+    // `..` is a refname error too, and it is exactly what an id like `a..b`
+    // produces through a substitution that leaves dots alone.
+    .replaceAll(/\.{2,}/g, '.'))
+    .slice(0, room)
+  // Trimmed again after the cut, and `.lock` dropped last: both are endings the
+  // slicing itself can create, and either one makes git refuse the whole ref.
+  const named = trimEdges(slug).replace(/\.lock$/, '')
+  return `${DELIVERY_BRANCH_PREFIX}${named === '' ? 'objective' : named}`
+}
+
+/** Drop the leading and trailing characters git will not accept on a segment. */
+function trimEdges(value: string): string {
+  return value.replaceAll(/^[-.]+|[-.]+$/g, '')
 }
 
 /** Trim a stage's own text to what this deployment will keep. */
@@ -179,9 +201,23 @@ function interpret(stage: StageSpec, executor: string, result: ExecutorResult): 
   return {
     ...parsed,
     summary: safeSummary(parsed.summary),
-    evidence: parsed.evidence.filter(item => !looksLikeSecret(item.locator) && !looksLikeSecret(item.summary)),
-    findings: parsed.findings.filter(item => !looksLikeSecret(item.summary)),
+    evidence: safeEvidence(parsed.evidence),
+    // A finding carries an evidence list of its own, and the promise this host
+    // makes is about what reaches the journal rather than about one field of it.
+    findings: parsed.findings
+      .filter(item => !looksLikeSecret(item.summary))
+      .map(item => ({ ...item, evidence: safeEvidence(item.evidence) })),
   }
+}
+
+/**
+ * Keep only the references carrying nothing credential-shaped.
+ *
+ * @param evidence - the references a stage stated.
+ * @returns those this host will journal.
+ */
+function safeEvidence(evidence: readonly EvidenceRef[]): readonly EvidenceRef[] {
+  return evidence.filter(item => !looksLikeSecret(item.locator) && !looksLikeSecret(item.summary))
 }
 
 /** Prompt text for one stage, stating the envelope every stage owes back. */
@@ -262,7 +298,9 @@ export function createPluroraWorkflowHandlers(
         // Sorted so two runs over the same set produce the same request, and a
         // reviewer comparing two deliveries is comparing content, not order.
         files: [...writeSet].toSorted(),
-        message: `${input.objective.requirement.split('\n', 1)[0] ?? 'harness change'}\n\n`
+        // Bounded exactly as the pull request title is: the same text, and a
+        // commit subject is the one place a wall of it is least readable.
+        message: `${bounded(input.objective.requirement) || 'harness change'}\n\n`
           + `Objective: ${input.objective.id}\nStage: ${input.stageId}`,
         pullRequest: {
           title: bounded(input.objective.requirement),

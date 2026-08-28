@@ -14,6 +14,7 @@ import type { ExecutorResult } from '@trick-harness/executor'
 import type { WorkflowObjective } from '@trick-harness/contracts'
 import {
   DELIVERY_BRANCH_PREFIX,
+  MAX_BRANCH_NAME_CHARS,
   MAX_SUMMARY_CHARS,
   RESULT_MARKER,
   createPluroraWorkflowHandlers,
@@ -58,6 +59,23 @@ describe('deliveryBranch', () => {
 
   it('never yields the bare prefix, which would be a branch nobody named', () => {
     expect(deliveryBranch('!!!')).toBe(`${DELIVERY_BRANCH_PREFIX}objective`)
+  })
+
+  it('yields a name git will accept, since a rejected refname explains nothing', () => {
+    // Each of these is an ordinary objective id and an invalid refname: git
+    // refuses `..`, a leading dot, a trailing dot and a `.lock` suffix. A run
+    // that derived one would be refused at delivery with nothing saying why.
+    for (const id of ['a..b', '.hidden', 'x.lock', 'trailing.', '...']) {
+      const branch = deliveryBranch(id)
+      expect(branch).not.toContain('..')
+      expect(branch.startsWith(`${DELIVERY_BRANCH_PREFIX}.`)).toBe(false)
+      expect(branch.endsWith('.')).toBe(false)
+      expect(branch.endsWith('.lock')).toBe(false)
+    }
+  })
+
+  it('bounds the name, because an objective id is not a length git agreed to', () => {
+    expect(deliveryBranch('a'.repeat(300)).length).toBeLessThanOrEqual(MAX_BRANCH_NAME_CHARS)
   })
 })
 
@@ -120,6 +138,24 @@ describe('the Plurora stage interpreter', () => {
     expect(result.summary.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS + 1)
   })
 
+  it('journals no credential a finding carried in its own evidence', () => {
+    // The top-level evidence list is filtered; a finding carries its own, and
+    // the promise this host makes is about the journal, not about one field.
+    const secret = 'postgresql://user:hunter2@db.example.com:5432/plurora'
+    const result = createPluroraWorkflowHandlers().interpret(STAGE, 'codex', completed(envelope({
+      findings: [{
+        id: 'F-1',
+        class: 'defect',
+        raisedBy: 'implement',
+        summary: 'the migration is wrong',
+        confirmed: true,
+        evidence: [{ kind: 'log', locator: secret, summary: 'the session' }],
+      }],
+    })))
+    expect(JSON.stringify(result)).not.toContain('hunter2')
+    expect(JSON.stringify(result)).not.toContain('db.example.com')
+  })
+
   it('journals no credential a stage put in a field this host keeps', () => {
     const secret = 'postgresql://user:hunter2@db.example.com:5432/plurora'
     const result = createPluroraWorkflowHandlers().interpret(STAGE, 'codex', completed(envelope({
@@ -178,6 +214,18 @@ describe('the Plurora delivery description', () => {
 
   it('publishes on the branch the objective derives, never one a model chose', () => {
     expect(describeAfter(completed(envelope())).branch).toBe(deliveryBranch(OBJECTIVE.id))
+  })
+
+  it('bounds the commit subject the same way it bounds the pull request title', () => {
+    const long = 'x'.repeat(MAX_SUMMARY_CHARS * 3)
+    const handlers = createPluroraWorkflowHandlers()
+    handlers.interpret(STAGE, 'codex', completed(envelope()))
+    const request = handlers.describeDelivery?.({
+      stageId: 'delivery',
+      objective: { ...OBJECTIVE, requirement: long },
+    })
+    const subject = request?.message.split('\n', 1)[0] ?? ''
+    expect(subject.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS + 1)
   })
 
   it('opens against the base branch and says merging stays a human decision', () => {

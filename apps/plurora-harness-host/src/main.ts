@@ -191,10 +191,13 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       capabilities: { databaseVerification },
       control: {
         host: endpoint.hostname,
-        port: endpoint.port === '' ? undefined : Number(endpoint.port),
+        // Spread rather than an explicit `undefined`: the port is optional, and
+        // a cast asserting that shape would hide a change to it rather than
+        // fail on one.
+        ...(endpoint.port === '' ? {} : { port: Number(endpoint.port) }),
         // Supplied by the caller from the environment, never from the file.
         token: options.controlToken,
-      } as { host: string; port?: number; token: string },
+      },
     })
     unwind.push(async () => { await harness.dispose() })
 
@@ -204,6 +207,23 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
     const control = await harness.server.listen()
 
     let disposed = false
+    /** Release everything the host holds, once. */
+    const dispose = async (): Promise<void> => {
+      // Idempotent on purpose: a signal-driven shutdown and an explicit
+      // dispose routinely race, and the second one must not fail the process.
+      if (disposed) return
+      disposed = true
+      options.signal.removeEventListener('abort', onAbort)
+      await unwindAll(unwind)
+    }
+    // The option promises the signal cancels the start "and, once started, the
+    // host"; a signal that only guarded the start would leave a bound port and
+    // a live process tree behind exactly when the operator asked for neither.
+    function onAbort(): void {
+      void dispose()
+    }
+    options.signal.addEventListener('abort', onAbort, { once: true })
+
     return {
       config,
       registry,
@@ -212,13 +232,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       control,
       session: durable.session,
       flush: durable.flush,
-      async dispose() {
-        // Idempotent on purpose: a signal-driven shutdown and an explicit
-        // dispose routinely race, and the second one must not fail the process.
-        if (disposed) return
-        disposed = true
-        await unwindAll(unwind)
-      },
+      dispose,
     }
   }
   catch (error: unknown) {

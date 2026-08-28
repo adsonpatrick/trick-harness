@@ -8,7 +8,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { BundleCompositionError, composeHarness } from '@trick-harness/composition'
 import { DEFAULT_MODEL_REGISTRY } from '@trick-harness/routing'
@@ -192,6 +192,19 @@ describe('startPluroraHost', () => {
   it('refuses to start once the signal is already aborted', async () => {
     controller.abort()
     await expect(start(deployment())).rejects.toThrow(PluroraHostError)
+  })
+
+  it('stops a started host when the signal it was given aborts', async () => {
+    // The option says the signal cancels the start "and, once started, the
+    // host". A signal that only guarded the start would leave a listening port
+    // and a live process tree behind exactly when the operator asked for neither.
+    const host = await start(deployment())
+    const url = `http://${host.control.host}:${host.control.port}/health`
+    expect((await fetch(url)).status).toBe(200)
+    controller.abort()
+    // Disposal is asynchronous; the abort schedules it rather than performing it.
+    await vi.waitFor(async () => { await expect(fetch(url)).rejects.toThrow() })
+    await host.dispose()
   })
 
   it('refuses a deployment file that breaks a config rule', async () => {
