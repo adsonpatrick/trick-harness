@@ -349,11 +349,11 @@ export const pluroraDodObligations: readonly ConformanceObligation[] = [
 { id: 'codex-unavailable-conformance', when: { unavailable: 'codex', role: 'conformance' }, use: { executor: 'opencode', tier: 'opencode.reasoning-fast' } }
 ```
 
-- [ ] **Step 1: Write RED routing tests** for all four risk levels and Codex-unavailable fallback.
-- [ ] **Step 2: Write RED independence tests** proving high/critical conformance cannot certify when implementation executor is OpenCode and fallback also resolves to OpenCode under `cross-executor-required`.
-- [ ] **Step 3: Add the eight baseline DoD rows exactly as above** and reference them from the Plurora profile without embedding NeuroVia file paths, database refs or native model ids.
-- [ ] **Step 4: Implement routing rows before generic review/default rows** so conformance-specific routes win deterministically.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 1: Write RED routing tests** for all four risk levels and Codex-unavailable fallback.
+- [x] **Step 2: Write RED independence tests** proving high/critical conformance cannot certify when implementation executor is OpenCode and fallback also resolves to OpenCode under `cross-executor-required`.
+- [x] **Step 3: Add the eight baseline DoD rows exactly as above** and reference them from the Plurora profile without embedding NeuroVia file paths, database refs or native model ids.
+- [x] **Step 4: Implement routing rows before generic review/default rows** so conformance-specific routes win deterministically.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run profiles/plurora/tests/routing.spec.ts profiles/plurora/tests/profile.spec.ts profiles/plurora/tests/composition.spec.ts
@@ -361,7 +361,7 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add profiles/plurora

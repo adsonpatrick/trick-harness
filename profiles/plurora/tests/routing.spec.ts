@@ -149,6 +149,7 @@ describe('independence under the approved table', () => {
   it('routes every role the vocabulary declares, so no stage is unroutable', () => {
     const roles: readonly Role[] = [
       'refine', 'plan', 'implement', 'debug', 'repair', 'verify', 'review', 'security', 'qa', 'delivery',
+      'conformance',
     ]
     const risks: readonly Risk[] = ['low', 'medium', 'high', 'critical']
     const workloads: readonly Workload[] = ['light', 'medium', 'heavy']
@@ -163,5 +164,74 @@ describe('independence under the approved table', () => {
         }
       }
     }
+  })
+})
+
+describe('conformance routing under the approved table', () => {
+  const byRisk: readonly { readonly risk: Risk; readonly model: string; readonly effort: string }[] = [
+    { risk: 'low', model: 'GPT-5.6 Terra', effort: 'high' },
+    { risk: 'medium', model: 'GPT-5.6 Terra', effort: 'high' },
+    { risk: 'high', model: 'GPT-5.6 Sol', effort: 'xhigh' },
+    { risk: 'critical', model: 'GPT-5.6 Sol', effort: 'xhigh' },
+  ]
+
+  for (const row of byRisk) {
+    it(`reads ${row.risk}-risk conformance on ${row.model}`, () => {
+      // Conformance is the last thing that can stop a branch reaching a human,
+      // so it is priced like the review it stands beside rather than like the
+      // implementation it judges.
+      const decision = route(context({ role: 'conformance', risk: row.risk }), policy)
+      expect(decision.resolvedModel).toBe(row.model)
+      expect(decision.reasoningEffort).toBe(row.effort)
+    })
+  }
+
+  it('never sends conformance to the executor that writes the code', () => {
+    // The whole gate is a second opinion. A row that let the workhorse answer
+    // it would have the implementation grading itself.
+    for (const row of byRisk) {
+      expect(route(context({ role: 'conformance', risk: row.risk }), policy).executor).toBe('codex')
+    }
+  })
+
+  it('still answers conformance when Codex is unavailable, at a stated cost', () => {
+    const decision = route(context({ role: 'conformance', degradedExecutors: ['codex'] }), policy)
+    expect(decision.executor).toBe('opencode')
+    expect(decision.semanticModelTier).toBe('opencode.reasoning-fast')
+  })
+
+  it('cannot claim independent conformance when the fallback lands on the implementer', () => {
+    // High risk requires a different executor from the one that wrote the code.
+    // With Codex down the fallback is OpenCode, which is where the
+    // implementation ran, so the run must say the requirement went unmet rather
+    // than pass a reading that is not independent of the work it judges.
+    for (const risk of ['high', 'critical'] as const) {
+      const decision = route(
+        context({
+          role: 'conformance',
+          risk,
+          independenceRequirement: pluroraProfile.independencePolicy[risk],
+          implementationExecutor: 'opencode',
+          degradedExecutors: ['codex'],
+        }),
+        policy,
+      )
+      expect(decision.executor, risk).toBe('opencode')
+      expect(decision.reasonCodes, risk).toContain('independence:unsatisfied')
+    }
+  })
+
+  it('is independent when Codex is up, whichever executor implemented', () => {
+    const decision = route(
+      context({
+        role: 'conformance',
+        risk: 'critical',
+        independenceRequirement: pluroraProfile.independencePolicy.critical,
+        implementationExecutor: 'opencode',
+      }),
+      policy,
+    )
+    expect(decision.executor).toBe('codex')
+    expect(decision.reasonCodes).not.toContain('independence:unsatisfied')
   })
 })

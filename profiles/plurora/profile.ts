@@ -29,3 +29,9 @@ export const pluroraProfile: HarnessProfile = {
   integrationPolicy,
   trustedComposition,
 }
+
+/**
+ * Plurora's Definition of Done, re-exported so the profile module is the one
+ * place a runtime reaches for this project's policy.
+ */
+export { pluroraDodObligations } from './conformance-policy.ts'
