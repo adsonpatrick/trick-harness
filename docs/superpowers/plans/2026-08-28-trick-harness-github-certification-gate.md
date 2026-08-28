@@ -23,7 +23,8 @@
 - Every delivery/redelivery publishes `pending` before certifying stages continue.
 - A certification capability/auth/network failure is fail-closed and cannot produce `PR_READY`.
 - Native `gh` authentication remains the only GitHub credential path; no token is read/injected/journalled.
-- Status description is at most 120 characters; target URL is the PR URL; no raw output/reasoning/path/secret is published.
+- Status description is a fixed trusted string selected only from certification state, at most 120 characters; target URL is the verified PR URL.
+- No prompt, model summary, raw output, reasoning, filesystem path, DB URL or secret may be copied into GitHub status fields.
 - Status mutation follows durable-before-mutate capability semantics.
 - Existing GitHubDelivery authority and MiMo/routing invariants remain unchanged.
 - Merge/release/deploy remain human-controlled.
@@ -54,7 +55,6 @@ export type ExternalCertificationState =
 export interface WorkflowCertificationInput {
   readonly objective: WorkflowObjective
   readonly state: ExternalCertificationState
-  readonly summary: string
   readonly expectedRevision?: string
 }
 
@@ -89,7 +89,7 @@ export interface WorkflowCertificationDecision {
 }
 ```
 
-The decision's `ready=true` branch must call the exact same post-Plan-F/G readiness predicate that permits `PR_READY`; it may not duplicate a weaker checklist.
+The decision's `ready=true` branch must call the exact same post-Plan-F/G readiness predicate that permits `PR_READY`; it may not duplicate a weaker checklist. `summary` remains internal/journal-facing and is never sent to GitHub status fields.
 
 - [ ] **Step 1: Write RED contract/runtime tests** proving the new states are bounded and `WorkflowCapabilities.certification` is callable only through the workflow runtime.
 
@@ -150,7 +150,6 @@ export interface GitHubCertificationOptions {
   readonly context: string
   readonly spawn: (spec: SubprocessSpawnSpec) => SubprocessHandle
   readonly graceMs?: number
-  readonly env?: NodeJS.ProcessEnv
 }
 
 export class GitHubCertification {
@@ -162,7 +161,18 @@ export class GitHubCertification {
 }
 ```
 
-`GitHubCertification` exposes no delivery/merge/release API.
+`GitHubCertification` exposes no delivery/merge/release API and accepts no environment/token option.
+
+**Fixed description mapping:**
+
+```ts
+const STATUS_DESCRIPTIONS: Record<ExternalCertificationState, string> = {
+  pending: 'Harness engineering certification in progress',
+  success: 'Harness engineering certification passed',
+  failure: 'Harness engineering certification did not pass',
+  error: 'Harness engineering certification could not complete',
+}
+```
 
 **Fixed command vocabulary:**
 
@@ -207,9 +217,9 @@ interface GitHubCertificationTarget {
 
 - [ ] **Step 1: Write RED command tests** proving every endpoint/argv is fixed and that repository, PR number and SHA are validated before interpolation. Reject repository strings outside `owner/repo`, non-positive PR numbers and non-40-hex SHAs.
 - [ ] **Step 2: Write RED identity tests** for wrong repository, detached/empty branch, closed PR, wrong base branch, PR head branch mismatch, local HEAD vs PR head mismatch and `expectedRevision` mismatch. Every case must perform zero POST-status calls.
-- [ ] **Step 3: Write RED status tests** proving only `pending|success|failure|error` are accepted, context is the constructor's trusted value, descriptions over 120 chars are rejected, target URL comes from the verified PR, and raw subprocess output is absent from errors/evidence.
+- [ ] **Step 3: Write RED status tests** proving only `pending|success|failure|error` are accepted, context is the constructor's trusted value, descriptions come only from `STATUS_DESCRIPTIONS`, target URL comes from the verified PR, and raw subprocess/model output is absent from errors/evidence/status fields.
 - [ ] **Step 4: Write RED publication verification tests** proving POST is followed by a bounded GET of statuses and the latest matching context must report the requested state; mismatch produces a certification error.
-- [ ] **Step 5: Write RED subprocess lifecycle tests** proving cancellation still waits for whole-process-tree quiescence and no token is constructed/injected by this integration.
+- [ ] **Step 5: Write RED subprocess lifecycle tests** proving cancellation still waits for whole-process-tree quiescence and no token/environment credential is constructed/injected by this integration.
 - [ ] **Step 6: Run RED.**
 
 ```bash
@@ -282,7 +292,7 @@ re-review
 
 and assert `sha2` becomes the only revision eligible for terminal success.
 - [ ] **Step 3: Write RED missing-capability test** for Plurora composition semantics: a workflow that requires certification and has no certification port ends fail-closed before a certifying stage can claim readiness.
-- [ ] **Step 4: Write RED same-SHA rerun test** proving a second certification run publishes `pending` again even if the previous latest status for that SHA was success.
+- [ ] **Step 4: Write RED same-SHA rerun test** proving a second certification run publishes `pending` again if it reaches the published certification boundary, even if the previous latest status for that SHA was success.
 - [ ] **Step 5: Run RED.**
 
 ```bash
@@ -409,7 +419,7 @@ export interface CertificationRecord {
 }
 ```
 
-Projection exposes ordered records and `latestCertification` only. It does not persist PR HTML, command output, tokens or model content beyond bounded evidence locators.
+Projection exposes ordered records and `latestCertification` only. It does not persist PR HTML, command output, tokens or model content beyond bounded evidence locators. `summary` is generated deterministically from state, not copied from model output.
 
 - [ ] **Step 1: Write RED journal tests** proving certification records round-trip, revision is 40-hex, state is bounded, context/summary are length-bounded and raw credential-shaped fields are rejected by parser/invariant checks.
 - [ ] **Step 2: Write RED durability test** proving capability-start is flushed before the POST seam is invoked and the confirmed certification record is flushed after publication.
@@ -534,19 +544,19 @@ git commit -m "feat(trick): require Plurora GitHub certification capability"
 
 ```text
 CI green but conformance missing                    -> never success
-conformance PASS but verify-final missing            -> never success
-security required by Plan G but skipped/failed       -> never success
-old success on same SHA + new run                    -> pending overwrites latest context state
-pending SHA A + external PR head moves to SHA B      -> stale-ref refusal, never success
-repair redelivery SHA A -> SHA B                     -> pending B required; success A irrelevant
-wrong repository                                    -> zero POST
-wrong base branch                                   -> zero POST
-closed PR                                           -> zero POST
-missing certification capability                    -> Plurora not PR_READY
-publisher auth/network failure                      -> fail closed
-terminal BLOCKED                                    -> failure, not success
-cancellation after pending                          -> error, not success
-status description contains secret-shaped text      -> reject before POST
+conformance PASS but verify-final missing           -> never success
+security required by Plan G but skipped/failed      -> never success
+old success on same SHA + new run                   -> latest state becomes pending
+pending SHA A + external PR head moves to SHA B     -> stale-ref refusal, never success
+repair redelivery SHA A -> SHA B                    -> pending B required; success A irrelevant
+wrong repository                                   -> zero POST
+wrong base branch                                  -> zero POST
+closed PR                                          -> zero POST
+missing certification capability                   -> Plurora not PR_READY
+publisher auth/network failure                     -> fail closed
+terminal BLOCKED                                   -> failure, not success
+cancellation after pending                         -> error, not success
+model/raw output contains secret/path material      -> status description remains fixed safe text
 ```
 
 - [ ] **Step 1: Implement the adversarial tests using fakes at the subprocess/capability seam**, not by mocking the readiness predicate itself.
@@ -588,9 +598,9 @@ corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
 - [ ] **Step 1: Run all deterministic gates fresh** and record command, exit status and material result.
-- [ ] **Step 2: Run a real authenticated read-only GitHub certification canary on the Plan H implementation PR** using native `gh` auth and a non-success state (`pending` then `failure`) so the real endpoint/identity/read-back path is proven without falsely claiming the Trick PR itself passed the complete Plurora certification contract.
+- [ ] **Step 2: Run a real authenticated read-only GitHub certification canary on the Plan H implementation PR** using native `gh` auth and a dedicated non-required canary context, ending in a non-success state. This proves the real endpoint/identity/read-back path without falsely claiming the Trick PR itself passed Plurora's production certification contract.
 - [ ] **Step 3: Re-read the canary commit statuses** and verify exact SHA/context/latest state through GitHub.
-- [ ] **Step 4: Perform independent code/security review** of endpoint construction, repository/head binding, status-state mapping, status-content redaction, subprocess lifecycle, durability ordering and absence of merge authority.
+- [ ] **Step 4: Perform independent code/security review** of endpoint construction, repository/head binding, status-state mapping, fixed safe descriptions, subprocess lifecycle, durability ordering and absence of merge authority.
 - [ ] **Step 5: Fix confirmed defects and rerun all affected gates.**
 - [ ] **Step 6: Record the final reviewed exact Trick Harness SHA.** This SHA supersedes the post-Plan-G intermediate SHA for initial NeuroVia installation.
 - [ ] **Step 7: Update README only with implemented/proven behavior and commit.**
@@ -602,4 +612,4 @@ git commit -m "docs(trick): record Plan H certification evidence"
 
 ## Completion Contract
 
-Plan H Harness-side work is complete only when the runtime owns certification state, every successful delivery/redelivery is marked `pending`, terminal `success` is reachable only from the exact post-Plan-F/G `PR_READY` decision for the same re-read PR head SHA, all non-ready/error states fail closed, certification evidence is durable/bounded/restart-safe, Plurora composition requires the capability, native `gh` auth remains unchanged, no merge/release/deploy authority was introduced, adversarial tests pass and a reviewed exact SHA is recorded for the companion NeuroVia certification wiring overlay.
+Plan H Harness-side work is complete only when the runtime owns certification state, every successful delivery/redelivery is marked `pending`, terminal `success` is reachable only from the exact post-Plan-F/G `PR_READY` decision for the same re-read PR head SHA, all non-ready/error states fail closed, GitHub status descriptions are fixed trusted strings rather than model/workflow text, certification evidence is durable/bounded/restart-safe, Plurora composition requires the capability, native `gh` auth remains unchanged, no merge/release/deploy authority was introduced, adversarial tests pass and a reviewed exact SHA is recorded for the companion NeuroVia certification wiring overlay.
