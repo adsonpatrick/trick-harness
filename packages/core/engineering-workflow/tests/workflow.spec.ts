@@ -10,7 +10,7 @@ import type {
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { RoutingPolicy } from '@trick-harness/routing'
-import type { DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
+import type { ConformanceManifest, DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import {
   WorkflowError,
   WorkflowRunner,
@@ -28,6 +28,7 @@ const POLICY: RoutingPolicy = Object.freeze({
     Object.freeze({ id: 'debug', when: Object.freeze({ role: 'debug' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'qa', when: Object.freeze({ role: 'qa' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'security', when: Object.freeze({ role: 'security' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
+    Object.freeze({ id: 'conformance', when: Object.freeze({ role: 'conformance' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'default', when: Object.freeze({}), use: Object.freeze({ executor: 'builder', tier: 'implementation' }) }),
   ]),
   fallbackRules: Object.freeze([
@@ -107,6 +108,42 @@ function taskFor(stage: StageSpec, objective: WorkflowObjective): string {
   return `${stage.role}: ${objective.requirement}`
 }
 
+/**
+ * The approved documents as they stand, hashing to the identity the objective
+ * was opened against. One criterion and one task is enough for a manifest.
+ */
+const ARTIFACTS = Object.freeze({
+  specText: '- **ND1:** the work satisfies the approved specification',
+  planText: '### Task 1: do the approved work',
+  specSha256: 'a'.repeat(64),
+  planSha256: 'b'.repeat(64),
+})
+
+/** A conformance reading that answers every obligation the manifest states. */
+const CONFORMS = {
+  loadApprovedArtifacts: async (): Promise<typeof ARTIFACTS> => ARTIFACTS,
+  conformance: (
+    _stage: StageSpec,
+    _executor: string,
+    _result: unknown,
+    manifest: ConformanceManifest,
+  ): unknown => ({
+    specSha256: manifest.specSha256,
+    planSha256: manifest.planSha256,
+    items: manifest.obligations.map(obligation => ({
+      id: obligation.id,
+      source: obligation.source,
+      requirement: obligation.requirement,
+      status: 'PASS',
+      implementationEvidence: [],
+      verificationEvidence: [],
+      summary: 'satisfied',
+    })),
+    verdict: 'PASS',
+    summary: 'the branch satisfies the approved artifacts',
+  }),
+}
+
 const DIAGNOSIS: DiagnosisContract = Object.freeze({
   symptom: 'rounding is off by a cent on the last item',
   reproduction: 'pnpm vitest run cart.spec.ts -t "totals"',
@@ -144,20 +181,20 @@ const REPAIRED = Object.freeze({
 describe('the stage plan', () => {
   it('delivers before it certifies, and ends on a fresh verification', () => {
     expect(planStages(OBJECTIVE).map(stage => stage.role))
-      .toEqual(['implement', 'verify', 'delivery', 'review', 'verify'])
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
     expect(planStages(OBJECTIVE).at(-1)?.stageId).toBe('verify-final')
   })
 
   it('buys QA from medium risk upwards', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'high' })
     expect(stages.map(stage => stage.role))
-      .toEqual(['implement', 'verify', 'delivery', 'review', 'qa', 'verify'])
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'qa', 'conformance', 'verify'])
   })
 
   it('adds a security stage for a critical objective', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'critical' })
     expect(stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'verify',
+      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
     ])
   })
 
@@ -227,16 +264,17 @@ describe('a normal run', () => {
       return passing('reviewer')
     }))
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('completed')
     expect(outcome.verdict).toBe('PASS')
     expect(outcome.stages.map(stage => stage.role))
-      .toEqual(['implement', 'verify', 'delivery', 'review', 'verify'])
+      .toEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
     // No executor was asked for delivery: publishing is a bounded command
     // sequence, not a question put to a model.
     expect(seen).toEqual([
       'builder:workspace-write', 'reviewer:read-only', 'reviewer:read-only', 'reviewer:read-only',
+      'reviewer:read-only',
     ])
   })
 
@@ -244,7 +282,7 @@ describe('a normal run', () => {
     executors.register(provider('builder', async () => passing('builder', 'SECRET-TRANSCRIPT')))
     executors.register(provider('reviewer', async () => passing('reviewer', 'SECRET-TRANSCRIPT')))
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(JSON.stringify(outcome)).not.toContain('SECRET-TRANSCRIPT')
     for (const stage of outcome.stages) {
@@ -257,13 +295,13 @@ describe('a normal run', () => {
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
 
-    await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
     const projection = projectWorkflow(session.events, 'wf-1')
 
     expect(projection.objective?.id).toBe('obj-1')
-    // Four routed stages, five verdicts: delivery reports one without being routed.
-    expect(projection.routes).toHaveLength(4)
-    expect(projection.verdicts).toHaveLength(5)
+    // Five routed stages, six verdicts: delivery reports one without being routed.
+    expect(projection.routes).toHaveLength(5)
+    expect(projection.verdicts).toHaveLength(6)
     // The capability window opened and closed, so nothing is left open.
     expect(projection.openCapabilities).toEqual([])
     expect(JSON.stringify(session.events)).toContain('github-delivery')
@@ -279,7 +317,7 @@ describe('a normal run', () => {
       objective: { ...OBJECTIVE, risk: 'high' },
       implementationExecutor: 'builder',
       interpret: interpretAllPass,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     const review = outcome.stages.find(stage => stage.role === 'review')
@@ -306,7 +344,7 @@ describe('a run that goes wrong', () => {
       return { status: 'aborted', output: '' }
     }))
 
-    const running = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const running = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
     runner.cancel('caller asked')
     const outcome = await running
 
@@ -326,7 +364,7 @@ describe('a run that goes wrong', () => {
       },
     })))
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     // The single registered executor cannot serve, and there is nobody to
     // reroute to. Blocking is the expected outcome of that, not a defect: the
@@ -359,7 +397,7 @@ describe('a run that goes wrong', () => {
           evidence: [],
         }
         : interpretAllPass(stage, executor),
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -394,16 +432,16 @@ describe('a run that goes wrong', () => {
       },
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('completed')
     expect(outcome.repairCycles).toBe(1)
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'debug', 'repair', 'verify', 'delivery', 'review', 'verify',
+      'implement', 'verify', 'debug', 'repair', 'verify', 'delivery', 'review', 'conformance', 'verify',
     ])
     expect(outcome.stages.find(stage => stage.role === 'debug')?.permissionMode).toBe('read-only')
-    expect(modes).toEqual(['read-only', 'read-only', 'read-only', 'read-only', 'read-only'])
+    expect(modes).toEqual(['read-only', 'read-only', 'read-only', 'read-only', 'read-only', 'read-only'])
     for (const stage of outcome.stages) expect(stage.permissionMode).toBe(permissionModeFor(stage.role))
     expect(JSON.stringify(session.events)).toContain('harness/diagnosis')
   })
@@ -417,7 +455,7 @@ describe('a run that goes wrong', () => {
       interpret: (stage, executor) => stage.role === 'verify'
         ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [], evidence: [] }
         : interpretAllPass(stage, executor),
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -435,7 +473,7 @@ describe('a run that goes wrong', () => {
         ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => undefined,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -457,7 +495,7 @@ describe('a run that goes wrong', () => {
         ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => ({ ...DIAGNOSIS, productDecisionDependency: 'nobody said which currency to round to' }),
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -478,7 +516,7 @@ describe('a run that goes wrong', () => {
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => ({ focusedGreen: REPAIRED.focusedGreen, rootCauseAddressed: true }),
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('failed')
@@ -506,12 +544,12 @@ describe('a run that goes wrong', () => {
         }
       },
       repairEvidence: () => REPAIRED,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'repair', 'verify', 'delivery', 'review', 'verify',
+      'implement', 'verify', 'repair', 'verify', 'delivery', 'review', 'conformance', 'verify',
     ])
   })
 
@@ -526,7 +564,7 @@ describe('a run that goes wrong', () => {
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.repairCycles).toBe(PROFILE.workflowPolicy.maxRepairCycles)
@@ -546,7 +584,7 @@ describe('a run that goes wrong', () => {
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
 
-    const outcome = await tight.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await tight.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.executorStarts).toBe(2)
     expect(outcome.state).toBe('blocked')
@@ -564,8 +602,8 @@ describe('the lifecycle owner', () => {
       return { status: 'aborted', output: '' }
     }))
 
-    const first = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
-    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
+    const first = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS }))
       .rejects.toThrow(WorkflowError)
     runner.cancel('done testing')
     await first
@@ -586,7 +624,7 @@ describe('the lifecycle owner', () => {
       return { status: 'aborted', output: '' }
     }))
 
-    const running = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const running = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
     await started
     runner.dispose()
     await running
@@ -603,7 +641,7 @@ describe('the lifecycle owner', () => {
     const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     runner.dispose()
 
-    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
+    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS }))
       .rejects.toThrow(WorkflowError)
   })
 })
@@ -616,7 +654,7 @@ describe('what a restart may conclude', () => {
     const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
-    await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
 
@@ -758,7 +796,7 @@ describe('triage inside a run', () => {
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     // The claimed PASS became a FAIL, which is what opened the repair cycle.
@@ -779,7 +817,7 @@ describe('triage inside a run', () => {
           evidence: [],
         }
         : interpretAllPass(stage, executor),
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -805,14 +843,14 @@ describe('triage inside a run', () => {
       },
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
       'implement', 'verify', 'delivery', 'review', 'qa',
       'debug', 'repair', 'verify', 'delivery', 'qa',
-      'verify',
+      'conformance', 'verify',
     ])
     expect(outcome.stages.filter(stage => stage.role === 'qa').map(stage => stage.stageId))
       .toEqual(['qa-1', 'qa-2'])
@@ -838,7 +876,7 @@ describe('triage inside a run', () => {
       },
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     // A tooling defect alone would have skipped diagnosis; the security bug did not.
@@ -871,7 +909,7 @@ describe('triage inside a run', () => {
       // The diagnosis is complete and honest; it simply names ground no rule covers.
       diagnose: () => ({ ...DIAGNOSIS, affectedBoundary: 'packages/billing/src/charge.ts' }),
       repairEvidence: () => REPAIRED,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -907,7 +945,7 @@ describe('independence the profile actually requires', () => {
     const outcome = await runner.run({
       objective: { ...OBJECTIVE, risk: 'high' },
       interpret: interpretAllPass,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -929,7 +967,7 @@ describe('independence the profile actually requires', () => {
     const outcome = await runner.run({
       objective: { ...OBJECTIVE, risk: 'medium' },
       interpret: interpretAllPass,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('completed')
@@ -951,7 +989,7 @@ describe('a pass the route it ran on cannot support', () => {
     const outcome = await runner.run({
       objective: { ...OBJECTIVE, risk: 'high' },
       interpret: interpretAllPass,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('failed')
@@ -970,7 +1008,7 @@ describe('a pass the route it ran on cannot support', () => {
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('spare', async () => passing('spare')))
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('completed')
     expect(outcome.verdict).toBe('PASS')
@@ -994,7 +1032,7 @@ describe('a stage the policy cannot answer for', () => {
     })
     executors.register(provider('builder', async () => passing('builder')))
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('blocked')
     expect(outcome.summary).toContain('could not be routed')
@@ -1018,7 +1056,7 @@ describe('a plan that asks for a repair with nothing to repair', () => {
       objective: OBJECTIVE,
       plan: () => [{ stageId: 'repair-1', role: 'repair' }],
       interpret: interpretAllPass,
-      task: taskFor,
+      task: taskFor, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -1052,7 +1090,7 @@ describe('an executor that stops serving mid-run', () => {
     executors.register(provider('reviewer', async () => passing('reviewer')))
     executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('completed')
     expect(seen).toContain('spare')
@@ -1071,7 +1109,7 @@ describe('an executor that stops serving mid-run', () => {
     executors.register(provider('reviewer', async () => passing('reviewer')))
     executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     // A quality failure is an answer, not an outage. Rerouting it would record a
     // second opinion as a recovery, so the run ends on what the first one said.
@@ -1085,7 +1123,7 @@ describe('an executor that stops serving mid-run', () => {
     executors.register(failing('builder', 'server-overloaded', true, seen))
     executors.register(failing('spare', 'server-overloaded', true, seen))
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(seen).toEqual(['builder', 'spare'])
     expect(outcome.executorStarts).toBe(2)
@@ -1129,6 +1167,7 @@ describe('a human route override', () => {
       objective: OBJECTIVE,
       interpret: interpretAllPass,
       task: taskFor,
+      ...CONFORMS,
       plan: twoReviews,
       routeOverride: { role: 'review', executor: 'spare', semanticModelTier: 'implementation' },
     })
@@ -1147,6 +1186,7 @@ describe('a human route override', () => {
       objective: OBJECTIVE,
       interpret: interpretAllPass,
       task: taskFor,
+      ...CONFORMS,
       plan: twoReviews,
       routeOverride: { role: 'qa', executor: 'spare', semanticModelTier: 'implementation' },
     })
@@ -1159,6 +1199,7 @@ describe('a human route override', () => {
       objective: OBJECTIVE,
       interpret: interpretAllPass,
       task: taskFor,
+      ...CONFORMS,
       plan: twoReviews,
       routeOverride: { role: 'review', executor: 'builder', semanticModelTier: 'implementation' },
     })
@@ -1201,7 +1242,7 @@ describe('the durable barrier in front of a dispatch', () => {
       return passing('reviewer')
     }))
 
-    const running = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const running = runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
     for (let tick = 0; tick < 20; tick += 1) await Promise.resolve()
 
     // The implementing stage is the one that may rewrite the working tree. Its
@@ -1231,7 +1272,7 @@ describe('the durable barrier in front of a dispatch', () => {
     // A checkpoint that did not happen stops the run. Downgrading it to a
     // warning would let an implementation stage rewrite a tree with no durable
     // record that it was ever authorised to.
-    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
+    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS }))
       .rejects.toThrow(/durable checkpoint/)
     expect(starts).toEqual([])
   })
@@ -1262,7 +1303,7 @@ describe('the durable barrier in front of a dispatch', () => {
     // One rule for every start. A barrier that read the role first would make
     // the role classification itself a durability decision, and a stage
     // misclassified once would dispatch unrecorded forever after.
-    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor }))
+    await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS }))
       .rejects.toThrow(/durable checkpoint/)
     expect(starts).toEqual(['builder'])
   })
@@ -1288,7 +1329,7 @@ describe('who is allowed to publish the work', () => {
       capabilities: { delivery: deliveryStub(delivered) },
     })
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('completed')
     expect(delivered).toEqual(['delivery-1'])
@@ -1301,7 +1342,7 @@ describe('who is allowed to publish the work', () => {
   it('blocks a lifecycle that must publish when nothing was composed to publish with', async () => {
     const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('blocked')
     expect(outcome.summary).toContain('no delivery capability')
@@ -1321,7 +1362,7 @@ describe('who is allowed to publish the work', () => {
       },
     })
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('failed')
     expect(outcome.verdict).toBe('FAIL')
@@ -1338,7 +1379,7 @@ describe('who is allowed to publish the work', () => {
       },
     })
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('failed')
     expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
@@ -1350,13 +1391,13 @@ describe('who is allowed to publish the work', () => {
       capabilities: { delivery: DELIVERY },
     })
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    expect(outcome.stages).toHaveLength(5)
+    expect(outcome.stages).toHaveLength(6)
     // Implement, verify, review and the final verify. The budget bounds how
     // often a model is asked, and a bounded command sequence is not one of
     // those times.
-    expect(outcome.executorStarts).toBe(4)
+    expect(outcome.executorStarts).toBe(5)
   })
 })
 
@@ -1396,7 +1437,7 @@ describe('a run that changes a database', () => {
   it('blocks before publishing when no database verifier was composed', async () => {
     const delivered: string[] = []
     const outcome = await runnerWith(undefined, delivered).run({
-      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS, databaseChange: CHANGE,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -1416,7 +1457,7 @@ describe('a run that changes a database', () => {
         findings: [],
       }),
     }, delivered).run({
-      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS, databaseChange: CHANGE,
     })
 
     expect(outcome.state).toBe('failed')
@@ -1435,7 +1476,7 @@ describe('a run that changes a database', () => {
         findings: [],
       }),
     }, delivered).run({
-      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS, databaseChange: CHANGE,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -1456,7 +1497,7 @@ describe('a run that changes a database', () => {
     }, delivered)
 
     const outcome = await runner.run({
-      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS, databaseChange: CHANGE,
     })
 
     expect(outcome.state).toBe('completed')
@@ -1465,7 +1506,7 @@ describe('a run that changes a database', () => {
     expect(outcome.stages.map(stage => stage.stageId)).toContain('delivery-1-database')
     // A bounded command sequence, so the budget that counts questions to models
     // is untouched by it.
-    expect(outcome.executorStarts).toBe(4)
+    expect(outcome.executorStarts).toBe(5)
   })
 
   it('leaves a run that changes no database alone', async () => {
@@ -1476,7 +1517,7 @@ describe('a run that changes a database', () => {
         asked += 1
         return { status: 'PASSED', summary: 'never reached', evidence: [], findings: [] }
       },
-    }, delivered).run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor })
+    }, delivered).run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.state).toBe('completed')
     expect(asked).toBe(0)
@@ -1493,7 +1534,7 @@ describe('a run that changes a database', () => {
         status: 'PASSED', summary: 'the migrations applied and every gate passed', evidence: [], findings: [],
       }),
     }, delivered).run({
-      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, databaseChange: CHANGE,
+      objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS, databaseChange: CHANGE,
     })
 
     const names = session.events

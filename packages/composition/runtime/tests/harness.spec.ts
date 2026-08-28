@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import type { StageResult, WorkflowObjective } from '@trick-harness/contracts'
+import type { ConformanceManifest, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import type { ControlWorkflowStatus } from '@trick-harness/control-server'
 import { planPullRequestStages } from '@trick-harness/engineering-workflow'
-import type { DatabaseVerificationCapabilityPort } from '@trick-harness/engineering-workflow'
+import type { DatabaseVerificationCapabilityPort, StageSpec } from '@trick-harness/engineering-workflow'
 import type { ExecutorProvider, ExecutorStartRequest } from '@trick-harness/executor'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
@@ -18,6 +18,43 @@ import {
   composeHarness,
 } from '../src/index.ts'
 import type { ComposedHarness, HarnessCompositionOptions } from '../src/index.ts'
+/**
+ * The approved documents as they stand, hashing to the identity the objective
+ * was opened against. One criterion and one task is enough for a manifest.
+ */
+const ARTIFACTS = Object.freeze({
+  specText: '- **ND1:** the work satisfies the approved specification',
+  planText: '### Task 1: do the approved work',
+  specSha256: 'a'.repeat(64),
+  planSha256: 'b'.repeat(64),
+})
+
+/** A conformance reading that answers every obligation the manifest states. */
+const CONFORMS = {
+  loadApprovedArtifacts: async (): Promise<typeof ARTIFACTS> => ARTIFACTS,
+  conformance: (
+    _stage: StageSpec,
+    _executor: string,
+    _result: unknown,
+    manifest: ConformanceManifest,
+  ): unknown => ({
+    specSha256: manifest.specSha256,
+    planSha256: manifest.planSha256,
+    items: manifest.obligations.map(obligation => ({
+      id: obligation.id,
+      source: obligation.source,
+      requirement: obligation.requirement,
+      status: 'PASS',
+      implementationEvidence: [],
+      verificationEvidence: [],
+      summary: 'satisfied',
+    })),
+    verdict: 'PASS',
+    summary: 'the branch satisfies the approved artifacts',
+  }),
+}
+
+
 
 const RULES = Object.freeze([
   Object.freeze({ id: 'implement', when: Object.freeze({ role: 'implement' }), use: Object.freeze({ executor: 'builder', tier: 'implementation' }) }),
@@ -192,6 +229,7 @@ function baseOptions(profile: HarnessProfile, started: ExecutorStartRequest[]): 
     workflow: {
       interpret,
       task: stage => `${stage.role}: do the work`,
+      ...CONFORMS,
       plan: planPullRequestStages,
       describeDelivery: (input): Omit<DeliveryRequest, 'signal'> => ({
         branch: 'feature',
@@ -380,11 +418,11 @@ describe('a workflow through the real control-server entry path', () => {
     expect(status.state).toBe('completed')
     expect(status.verdict).toBe('PASS')
     expect(status.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'delivery', 'review', 'verify',
+      'implement', 'verify', 'delivery', 'review', 'conformance', 'verify',
     ])
-    // Four starts for five stages: delivery is the one nothing was asked about.
+    // Five starts for six stages: delivery is the one nothing was asked about.
     expect(started.map(request => request.route.model)).toEqual([
-      'mimo-v2.5', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash',
+      'mimo-v2.5', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash',
     ])
   })
 
@@ -445,6 +483,7 @@ describe('a workflow through the real control-server entry path', () => {
       workflow: {
         interpret: base.workflow.interpret,
         task: base.workflow.task,
+        ...CONFORMS,
         ...base.workflow.describeDelivery === undefined ? {} : { describeDelivery: base.workflow.describeDelivery },
       },
     })
@@ -728,6 +767,7 @@ describe('publishing from a composed deployment', () => {
       workflow: {
         interpret: base.workflow.interpret,
         task: base.workflow.task,
+        ...CONFORMS,
         ...base.workflow.plan === undefined ? {} : { plan: base.workflow.plan },
       },
     })

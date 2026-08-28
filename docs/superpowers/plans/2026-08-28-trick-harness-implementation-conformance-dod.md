@@ -253,19 +253,19 @@ export interface WorkflowRunRequest {
 }
 ```
 
-- [ ] **Step 1: Write RED tests** proving approved artifact hashes are verified before first mutation-capable implementation dispatch and reverified before `conformance`; a changed/missing artifact returns `BLOCKED` before the affected stage.
-- [ ] **Step 2: Write RED lifecycle tests** expecting `implement -> verify -> delivery -> review -> applicable qa -> applicable security -> conformance -> verify-final`.
-- [ ] **Step 3: Write RED PR-readiness tests** proving no conformance stage, conformance `PARTIAL/FAIL/BLOCKED/INCONCLUSIVE`, or a later mutation without fresh conformance prevents `PR_READY`.
-- [ ] **Step 4: Implement workflow integration.** Parse and coverage-validate conformance output before it becomes stage facts. PR lifecycle requests always require the `conformance` callback; a callback that cannot produce a valid contract yields `INCONCLUSIVE`.
-- [ ] **Step 5: Ensure repair invalidation.** Any repair/delivery after a conformance reading requires review/applicable QA/security/conformance to run again before `verify-final` may certify the final branch.
-- [ ] **Step 6: Run GREEN.**
+- [x] **Step 1: Write RED tests** proving approved artifact hashes are verified before first mutation-capable implementation dispatch and reverified before `conformance`; a changed/missing artifact returns `BLOCKED` before the affected stage.
+- [x] **Step 2: Write RED lifecycle tests** expecting `implement -> verify -> delivery -> review -> applicable qa -> applicable security -> conformance -> verify-final`.
+- [x] **Step 3: Write RED PR-readiness tests** proving no conformance stage, conformance `PARTIAL/FAIL/BLOCKED/INCONCLUSIVE`, or a later mutation without fresh conformance prevents `PR_READY`.
+- [x] **Step 4: Implement workflow integration.** Parse and coverage-validate conformance output before it becomes stage facts. PR lifecycle requests always require the `conformance` callback; a callback that cannot produce a valid contract yields `INCONCLUSIVE`.
+- [x] **Step 5: Ensure repair invalidation.** Any repair/delivery after a conformance reading requires review/applicable QA/security/conformance to run again before `verify-final` may certify the final branch.
+- [x] **Step 6: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow

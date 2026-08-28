@@ -70,6 +70,11 @@ export function planPullRequestStages(objective: WorkflowObjective): readonly St
   ]
   if (objective.risk !== 'low') stages.push({ stageId: 'qa-1', role: 'qa' })
   if (objective.risk === 'critical') stages.push({ stageId: 'security-1', role: 'security' })
+  // Conformance runs last of the certifying stages, and after every reading
+  // that can still open a repair cycle: it asks whether the branch as it now
+  // stands satisfies what was approved, and a repair after it would make its
+  // answer describe a tree that no longer exists.
+  stages.push({ stageId: 'conformance-1', role: 'conformance' })
   stages.push({ stageId: 'verify-final', role: 'verify' })
   return Object.freeze(stages)
 }
@@ -111,13 +116,38 @@ export function assessPullRequest(outcome: WorkflowOutcome): PullRequestOutcome 
   })
 }
 
+/** Roles that can change what the branch holds, so a reading before one is stale. */
+const MUTATING_ROLES: readonly Role[] = ['implement', 'repair', 'delivery']
+
+/**
+ * Why conformance does not support a ready pull request, or `undefined`.
+ *
+ * Three separate ways it can fail to: the run never established conformance at
+ * all, it established it and then changed the branch afterwards, or it
+ * established that the implementation does not satisfy what was approved.
+ * @param outcome - The workflow as the runner finished it.
+ * @returns The state to report instead of `PR_READY`, or `undefined`.
+ */
+function conformanceShortfall(outcome: WorkflowOutcome): PullRequestState | undefined {
+  const read = outcome.stages.findLastIndex(stage => stage.role === 'conformance')
+  // A run that never asked has not answered. Ready is a claim that the branch
+  // satisfies the approved Spec and Plan, and silence is not that claim.
+  if (read === -1) return 'INCONCLUSIVE'
+  const changed = outcome.stages.findLastIndex(stage => MUTATING_ROLES.includes(stage.role))
+  if (changed > read) return 'INCONCLUSIVE'
+  const verdict = outcome.stages[read]?.verdict ?? 'INCONCLUSIVE'
+  return verdict === 'PASS' ? undefined : terminalOf(verdict)
+}
+
 /** Map a workflow's own terminal facts onto the pull-request vocabulary. */
 function stateOf(outcome: WorkflowOutcome, openDefects: readonly Finding[]): PullRequestState {
   // Checked before the verdict rather than after: a run whose last certifying
   // reading still names a confirmed defect is not ready, whatever it concluded
   // about itself, and a ceiling reached is exactly the case where it might.
   if (openDefects.length > 0 && outcome.verdict === 'PASS') return 'PARTIAL'
-  if (outcome.state === 'completed' && outcome.verdict === 'PASS') return 'PR_READY'
+  if (outcome.state === 'completed' && outcome.verdict === 'PASS') {
+    return conformanceShortfall(outcome) ?? 'PR_READY'
+  }
   return terminalOf(outcome.verdict)
 }
 
@@ -139,6 +169,10 @@ function summaryOf(
   const carried = reportedFindings.length === 0
     ? ''
     : `; ${String(reportedFindings.length)} finding(s) reported and not implemented`
+  if (state !== 'PR_READY' && outcome.verdict === 'PASS' && openDefects.length === 0) {
+    return 'every stage passed, but conformance does not stand for the branch as it is now: '
+      + `${outcome.summary}${carried}`
+  }
   if (state === 'PR_READY') {
     return `the pull request is ready for a person after ${String(outcome.repairCycles)} repair cycle(s)${carried}`
   }

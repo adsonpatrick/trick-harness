@@ -8,6 +8,7 @@ import type {
   WorkflowObjective,
   WorkflowVerdict,
 } from '@trick-harness/contracts'
+import type { ConformanceManifest } from '@trick-harness/contracts'
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { WorkflowEndState } from '@trick-harness/journal'
 import type { RepairEvidence } from './repair.ts'
@@ -138,6 +139,43 @@ export interface WorkflowRunRequest {
    * database with nothing having read it back.
    */
   readonly databaseChange?: WorkflowDatabaseChange
+  /**
+   * Reads the approved Spec and Plan back, with the hashes they carry now.
+   *
+   * The runtime never opens a file. A caller that knows where the checkout is
+   * supplies this, and the runtime compares what comes back with the identity
+   * the objective was approved under. It is called again before conformance
+   * rather than once at the start, because the documents can change under a
+   * run and a conformance reading taken against an edited Plan is a reading of
+   * obligations nobody approved.
+   */
+  readonly loadApprovedArtifacts?: (
+    objective: WorkflowObjective,
+    signal: AbortSignal,
+  ) => Promise<ApprovedArtifactTexts>
+  /**
+   * Reads the conformance stage's result back as a contract.
+   *
+   * The manifest is handed in so the caller can put the obligations in front of
+   * the model; what comes back is parsed and held to that manifest before it
+   * becomes stage facts. Returning something that is not a valid contract is
+   * not a pass — the run ends INCONCLUSIVE, because nothing established
+   * whether the implementation satisfies what was approved.
+   */
+  readonly conformance?: (
+    stage: StageSpec,
+    executor: string,
+    result: ExecutorResult,
+    manifest: ConformanceManifest,
+  ) => unknown
+}
+
+/** The approved documents as they stand right now, with the identity they carry. */
+export interface ApprovedArtifactTexts {
+  readonly specText: string
+  readonly planText: string
+  readonly specSha256: string
+  readonly planSha256: string
 }
 
 /**

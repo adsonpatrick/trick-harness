@@ -80,6 +80,16 @@ export interface HarnessWorkflowHandlers {
   readonly diagnose?: (stage: StageSpec, executor: string, result: ExecutorResult) => unknown
   readonly repairEvidence?: WorkflowRunRequest['repairEvidence']
   /**
+   * How the approved Spec and Plan are read back, and how conformance is read.
+   *
+   * Both are the deployment's, for the same reason `interpret` is: this package
+   * does not know where a checkout keeps its documents, and it does not know
+   * the shape of the product that answers the obligations. A run that reaches
+   * conformance without them establishes none and says so.
+   */
+  readonly loadApprovedArtifacts?: WorkflowRunRequest['loadApprovedArtifacts']
+  readonly conformance?: WorkflowRunRequest['conformance']
+  /**
    * What the run should publish, when it reaches delivery.
    *
    * No default, for the same reason `task` has none: the objective names a
@@ -484,6 +494,10 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       ...workflow.plan === undefined ? {} : { plan: workflow.plan },
       ...workflow.diagnose === undefined ? {} : { diagnose: workflow.diagnose },
       ...workflow.repairEvidence === undefined ? {} : { repairEvidence: workflow.repairEvidence },
+      ...workflow.loadApprovedArtifacts === undefined
+        ? {}
+        : { loadApprovedArtifacts: workflow.loadApprovedArtifacts },
+      ...workflow.conformance === undefined ? {} : { conformance: workflow.conformance },
       ...routeOverride === undefined ? {} : { routeOverride },
       ...change === undefined ? {} : { databaseChange: change },
     })
