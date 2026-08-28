@@ -115,4 +115,16 @@ and the affected gates were rerun after those.
 
 ## 6. Known-good SHA
 
-Recorded in the commit that follows this file, which adds nothing but that line.
+The reviewed tree is commit `8551738cfa14173f05e34f388335ad8c4978cb0c` — the commit that added everything above.
+This file's own commit adds nothing but this paragraph, so the two trees differ by
+documentation alone.
+
+Plan C and its successors may pin exactly one initial SHA, and it is:
+
+```text
+8551738cfa14173f05e34f388335ad8c4978cb0c
+```
+
+Anything not listed as proven above is not proven at this SHA. In particular the NeuroVia
+database canary is pending Plan C, and the Supabase Preview path is unproven for want of
+an entitlement.
