@@ -265,6 +265,29 @@ export function parseStageRouteOverride(value: unknown, path = 'routeOverride'):
 /** A lowercase 64-hex SHA-256 digest and nothing else. */
 const SHA256 = /^[0-9a-f]{64}$/
 
+/** A Windows drive designator, which makes whatever follows it absolute. */
+const DRIVE_LETTER = /^[a-zA-Z]:/
+
+/**
+ * Whether `value` holds a character no document name does.
+ *
+ * By code point rather than by a control-character class: a NUL truncates the
+ * path for whoever opens it, and the rest are unprintable in the journal a
+ * person later reads.
+ *
+ * @param value - one path segment.
+ * @returns whether it holds a control character.
+ */
+function hasControlCharacter(value: string): boolean {
+  // By code unit rather than by code point: every character being looked for
+  // is ASCII, and a surrogate half is not one of them.
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 0x20 || code === 0x7F) return true
+  }
+  return false
+}
+
 /**
  * Read one approved artifact reference back.
  *
@@ -282,11 +305,19 @@ const SHA256 = /^[0-9a-f]{64}$/
 export function parseApprovedArtifactRef(value: unknown, path = 'artifact'): ApprovedArtifactRef {
   const source = asRecord(value, path)
   const location = text(source, 'path', path)
+  // Stated as what a segment may be rather than as a list of what it may not.
+  // A check that enumerated `/` and a drive letter would still admit
+  // `\\server\share` and `\etc`, both roots on a platform this harness runs
+  // on; and one that only refused `..` would admit `docs/./spec.md` — the same
+  // bytes under a second spelling, so the path journalled would not be the
+  // path approved.
   const segments = location.split(/[/\\]/)
-  const escapes = location.startsWith('/') || /^[a-zA-Z]:/.test(location)
-    || segments.includes('..') || segments.at(-1)?.trim() === ''
-  if (escapes) {
-    throw new ContractError(`${path}.path`, 'must be a repository-relative path naming a file')
+  const named = segments.every(segment =>
+    segment !== '' && segment !== '.' && segment !== '..'
+    && segment === segment.trim()
+    && !hasControlCharacter(segment))
+  if (!named || DRIVE_LETTER.test(location)) {
+    throw new ContractError(`${path}.path`, 'must be a repository-relative path of ordinary name segments')
   }
   const digest = text(source, 'sha256', path)
   if (!SHA256.test(digest)) {

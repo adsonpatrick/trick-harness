@@ -344,7 +344,37 @@ describe('reading the approved artifacts an objective was opened against', () =>
   })
 
   it('requires a repository-relative path, since an absolute one names another machine', () => {
-    for (const path of ['/etc/passwd', 'C:\docs\spec.md', '../outside/spec.md', 'docs/../../spec.md', './']) {
+    for (const path of ['/etc/passwd', 'C:\\docs\\spec.md', '../outside/spec.md', 'docs/../../spec.md', './']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.plan\.path/)
+    }
+  })
+
+  it('rejects every way a path can name a root, not only the ways POSIX writes one', () => {
+    // A backslash root and a UNC share are absolute on Windows, which is a
+    // platform this harness runs on. Checking only for a leading `/` and a
+    // drive letter would let both name a document outside the tree under review.
+    for (const path of ['\\\\server\\share\\spec.md', '\\etc\\passwd', 'docs\\..\\..\\spec.md']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, spec: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.spec\.path/)
+    }
+  })
+
+  it('rejects a path carrying a NUL or a control character, which no document name holds', () => {
+    for (const path of ['docs/spec.md\0../../etc/passwd', 'docs/\nspec.md']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.plan\.path/)
+    }
+  })
+
+  it('requires a canonical path, since two spellings of one file are two identities', () => {
+    // `docs/./spec.md` and `docs//spec.md` name the same document as
+    // `docs/spec.md` and hash the same bytes. Accepting all three would mean
+    // the path that is journalled is not the path that was approved.
+    for (const path of ['docs/./spec.md', 'docs//spec.md', ' docs/spec.md']) {
       const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path, sha256: 'c'.repeat(64) } }
       expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
         .toThrow(/objective\.approvedArtifacts\.plan\.path/)
