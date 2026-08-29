@@ -12,6 +12,7 @@ import type { HarnessProfile } from '@trick-harness/profile'
 import type { RoutingPolicy } from '@trick-harness/routing'
 import type { ConformanceManifest, DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import {
+  EXTERNAL_CERTIFICATION_STATES,
   WorkflowError,
   WorkflowRunner,
   assessRestart,
@@ -19,6 +20,7 @@ import {
   planStages,
 } from '../src/index.ts'
 import type {
+  CertificationCapabilityPort,
   DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   StageSpec,
@@ -2114,5 +2116,38 @@ describe('when the run writes down what it thinks the change is', () => {
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(outcome.changeImpact).toBeUndefined()
+  })
+})
+
+describe('the external certification contract', () => {
+  it('bounds the states a certification may ever be published in', () => {
+    expect(EXTERNAL_CERTIFICATION_STATES).toEqual([
+      'pending', 'success', 'failure', 'error',
+    ])
+  })
+
+  it('freezes that vocabulary, so nothing can widen it at runtime', () => {
+    expect(Object.isFrozen(EXTERNAL_CERTIFICATION_STATES)).toBe(true)
+  })
+
+  it('leaves a supplied certification capability untouched by a run that publishes nothing', async () => {
+    // The capability is the runtime's to call. A working-tree run delivers
+    // nothing, so there is no revision to certify and nothing may reach GitHub
+    // on its behalf — not the executors, and not the runner either.
+    const publish = vi.fn()
+    const executors = createExecutorRuntime()
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-cert', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal: new WorkflowJournal(Session.create(SessionId('s')), 'wf-cert', async () => true),
+      capabilities: { certification: { publish } satisfies CertificationCapabilityPort },
+    })
+
+    await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(publish).not.toHaveBeenCalled()
   })
 })

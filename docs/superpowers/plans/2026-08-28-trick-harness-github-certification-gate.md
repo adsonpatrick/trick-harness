@@ -91,7 +91,7 @@ export interface WorkflowCertificationDecision {
 
 The decision's `ready=true` branch must call the exact same post-Plan-F/G readiness predicate that permits `PR_READY`; it may not duplicate a weaker checklist. `summary` remains internal/journal-facing and is never sent to GitHub status fields.
 
-- [ ] **Step 1: Write RED contract/runtime tests** proving the new states are bounded and `WorkflowCapabilities.certification` is callable only through the workflow runtime.
+- [x] **Step 1: Write RED contract/runtime tests** proving the new states are bounded and `WorkflowCapabilities.certification` is callable only through the workflow runtime.
 
 Representative assertion:
 
@@ -101,8 +101,8 @@ expect(EXTERNAL_CERTIFICATION_STATES).toEqual([
 ])
 ```
 
-- [ ] **Step 2: Write RED lifecycle tests** proving `ready=true` cannot be constructed before `conformance=PASS` and `verify-final=PASS` under the post-Plan-F lifecycle fixture.
-- [ ] **Step 3: Run RED.**
+- [x] **Step 2: Write RED lifecycle tests** proving `ready=true` cannot be constructed before `conformance=PASS` and `verify-final=PASS` under the post-Plan-F lifecycle fixture.
+- [x] **Step 3: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -110,8 +110,8 @@ corepack pnpm vitest run \
   packages/core/engineering-workflow/tests/lifecycle.spec.ts
 ```
 
-- [ ] **Step 4: Implement the contracts and a single readiness-to-certification decision helper** beside the existing final readiness reconciliation. Do not add GitHub vocabulary to Core.
-- [ ] **Step 5: Run GREEN + typecheck.**
+- [x] **Step 4: Implement the contracts and a single readiness-to-certification decision helper** beside the existing final readiness reconciliation. Do not add GitHub vocabulary to Core.
+- [x] **Step 5: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -120,7 +120,7 @@ corepack pnpm vitest run \
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow

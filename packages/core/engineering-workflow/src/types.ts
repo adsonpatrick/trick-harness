@@ -323,6 +323,95 @@ export type WorkflowDatabasePreviewResult = WorkflowDatabaseVerificationResult
 export type DatabasePreviewCapabilityPort = DatabaseVerificationCapabilityPort
 
 /**
+ * Every state a certification may be published in, and nothing else.
+ *
+ * Four states because that is what an external certifier can honestly say: the
+ * run is under way, it finished and the revision is certified, it finished and
+ * the revision is not, or the question could not be answered at all. The last
+ * one matters most — a capability that cannot reach its certifier has not
+ * learned the revision is fine, so it says `error` rather than staying quiet
+ * and leaving a stale `pending` to be read as caution or as neglect depending
+ * on who is reading.
+ *
+ * Stated as a frozen list rather than a bare union so a run can be checked
+ * against it, and so nothing can widen the vocabulary at runtime.
+ */
+export const EXTERNAL_CERTIFICATION_STATES = Object.freeze([
+  'pending',
+  'success',
+  'failure',
+  'error',
+] as const)
+
+/** One of {@link EXTERNAL_CERTIFICATION_STATES}. */
+export type ExternalCertificationState = typeof EXTERNAL_CERTIFICATION_STATES[number]
+
+/**
+ * What the runtime tells a certification capability, and nothing more.
+ *
+ * Deliberately thin: a state the runtime chose, and the revision it believes it
+ * is talking about. There is no description, no summary and no URL here,
+ * because everything a certification publishes outside the harness is chosen by
+ * the capability from the state alone. A field a run could fill is a field a
+ * model's output could reach, and a commit status is read by people deciding
+ * whether to merge.
+ */
+export interface WorkflowCertificationInput {
+  readonly objective: WorkflowObjective
+  readonly state: ExternalCertificationState
+  /**
+   * The revision this certification is meant for, when the run already knows it.
+   *
+   * The capability re-reads the revision itself either way; this is what it
+   * checks that reading against. A run that has certified a revision and then
+   * finds the branch has moved has not certified the branch, and must not be
+   * able to publish as though it had.
+   */
+  readonly expectedRevision?: string
+}
+
+/** What a certification capability reports back about what it published. */
+export interface WorkflowCertificationResult {
+  /** The revision the capability actually certified, as it re-read it. */
+  readonly revision: string
+  /** The certifier's own id for the status, so a later read can find it. */
+  readonly externalId: string
+  /** Where a person can see it. */
+  readonly url?: string
+  readonly evidence: readonly EvidenceRef[]
+}
+
+/**
+ * Certifying a revision outside the harness is deterministic, so it is a port.
+ *
+ * Separate from {@link DeliveryCapabilityPort} on purpose. Delivery may move a
+ * branch; this may not move anything at all. It publishes one status against
+ * one revision, and has no way to express a commit, a push, a pull-request
+ * edit, a merge, a release or a deploy — which is what makes it safe to let a
+ * branch-protection rule require it.
+ */
+/**
+ * Whether the run is ready, as the workflow owner alone computes it.
+ *
+ * Internal to the harness: `summary` is journal-facing prose that may name
+ * stages and findings, and is never copied into anything published outside.
+ * Built by {@link certificationDecision} from the same predicate that permits
+ * `PR_READY`, never from a second checklist that agrees with it today.
+ */
+export interface WorkflowCertificationDecision {
+  readonly ready: boolean
+  readonly verdict: WorkflowVerdict
+  readonly summary: string
+}
+
+export interface CertificationCapabilityPort {
+  publish(
+    input: WorkflowCertificationInput,
+    signal: AbortSignal,
+  ): Promise<WorkflowCertificationResult>
+}
+
+/**
  * The deterministic capabilities a run may reach, if a deployment supplied them.
  *
  * Absent is not the same as unnecessary. A lifecycle that needs one and does not
@@ -331,6 +420,7 @@ export type DatabasePreviewCapabilityPort = DatabaseVerificationCapabilityPort
 export interface WorkflowCapabilities {
   readonly delivery?: DeliveryCapabilityPort
   readonly databaseVerification?: DatabaseVerificationCapabilityPort
+  readonly certification?: CertificationCapabilityPort
 }
 
 /**

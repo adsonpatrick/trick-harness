@@ -50,6 +50,9 @@ import type { ExecutorCircuit, RoutingPolicy } from '@trick-harness/routing'
 import type { RouteDecision, RoutingContext, StageRouteOverride } from '@trick-harness/contracts'
 
 export type * from './types.ts'
+// The one value in `types.ts`: the certification vocabulary is checked
+// against at runtime, not only referred to in a signature.
+export { EXTERNAL_CERTIFICATION_STATES } from './types.ts'
 export * from './repair.ts'
 export * from './triage.ts'
 export * from './lifecycle.ts'
