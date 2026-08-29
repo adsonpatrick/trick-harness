@@ -143,4 +143,4 @@ Fixed by two rules in `profiles/plurora/change-impact-policy.ts`: `credential-ma
 195cbbcf080a3037340c885b6824852a3cff781a
 ```
 
-Its parent is `a1a81e726b043f4abdc8752cc5b3d56e17b4b2dc`. Sections 1 through 6 were produced on the tree this commit records; the commit adds only this document, the README paragraph and the plan's checkboxes on top of it.
+Its parent is `a1a81e726b043f4abdc8752cc5b3d56e17b4b2dc`. Every gate, lifecycle and smoke in sections 1 through 6 was run on the source this commit records. The only thing added after the last of them was documentation — this file, the README paragraph and the plan's checkboxes — so no runtime, profile or test file differs between what was gated and what is recorded here.
