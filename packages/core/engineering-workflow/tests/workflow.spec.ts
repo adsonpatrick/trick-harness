@@ -18,7 +18,12 @@ import {
   permissionModeFor,
   planStages,
 } from '../src/index.ts'
-import type { DatabaseVerificationCapabilityPort, DeliveryCapabilityPort, StageSpec } from '../src/index.ts'
+import type {
+  DatabaseVerificationCapabilityPort,
+  DeliveryCapabilityPort,
+  StageSpec,
+  WorkflowOutcome,
+} from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
   policyVersion: 'test-v1.0.0',
@@ -1752,5 +1757,158 @@ describe('routing a stage as what the change turned out to be', () => {
     const routes = await routesFor(['docs/readme.md'])
 
     expect(routes.find(route => route.role === 'implement')?.executor).toBe('builder')
+  })
+})
+
+describe('a database change nobody declared', () => {
+  /** A profile whose migration paths mean what they say. */
+  const DB_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({
+          id: 'database-migrations',
+          paths: Object.freeze(['supabase/migrations/**']),
+          use: Object.freeze({
+            surface: 'database',
+            riskFloor: 'critical',
+            requiredCapability: 'database-verification',
+            evidenceProfile: 'db-standard',
+            databaseMutation: true,
+          }),
+        }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  const MIGRATION = 'supabase/migrations/20260828090000_example.sql'
+
+  /** A run whose planned paths include a migration and which declares nothing. */
+  async function runUndeclared(options: {
+    databaseVerification?: DatabaseVerificationCapabilityPort
+    delivered?: string[]
+  } = {}): Promise<WorkflowOutcome> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: DB_PROFILE, policy: POLICY, executors, journal,
+      capabilities: {
+        delivery: deliveryStub(options.delivered ?? []),
+        ...options.databaseVerification === undefined
+          ? {}
+          : { databaseVerification: options.databaseVerification },
+      },
+    })
+
+    return await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => [MIGRATION], actualPaths: async () => [MIGRATION] },
+      ...CONFORMS,
+    })
+  }
+
+  it('blocks before publishing a classified migration with no verifier composed', async () => {
+    // The caller said nothing about a database. The paths did, and the paths
+    // are the half of this that cannot be talked out of what it found.
+    const delivered: string[] = []
+    const outcome = await runUndeclared({ delivered })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no database verification capability')
+    expect(delivered).toEqual([])
+  })
+
+  it('runs the deterministic verifier before a classified migration is published', async () => {
+    const delivered: string[] = []
+    const order: string[] = []
+    const outcome = await runUndeclared({
+      delivered,
+      databaseVerification: {
+        verify: async () => {
+          order.push('verify')
+          return {
+            status: 'PASSED', summary: 'the schema applied and the gates passed', evidence: [], findings: [],
+          }
+        },
+      },
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(order).toStrictEqual(['verify'])
+    expect(delivered).toHaveLength(1)
+  })
+})
+
+describe('what evidence a certifying stage is told to produce', () => {
+  const EVIDENCE_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    qaPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'ui', when: Object.freeze({ surface: 'ui' }), use: Object.freeze({ evidence: 'visual-regression', independentReview: true, risk: 'medium' }) }),
+      ]),
+    }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'ui', paths: Object.freeze(['src/ui/**']), use: Object.freeze({ surface: 'ui', evidenceProfile: 'ui-standard', riskFloor: 'medium' }) }),
+        Object.freeze({ id: 'auth', paths: Object.freeze(['src/auth/**']), use: Object.freeze({ surface: 'auth', evidenceProfile: 'auth-standard', riskFloor: 'critical' }) }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  /** The stage specs the run handed to the task builder, by role. */
+  async function stageSpecsFor(paths: readonly string[]): Promise<Map<string, StageSpec>> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: EVIDENCE_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    const seen = new Map<string, StageSpec>()
+
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: (stage, objective) => { seen.set(stage.role, stage); return taskFor(stage, objective) },
+      changeImpact: { plannedPaths: async () => paths, actualPaths: async () => paths },
+      ...CONFORMS,
+    })
+    return seen
+  }
+
+  it('tells the QA stage which evidence profile the change owes', async () => {
+    const specs = await stageSpecsFor(['src/ui/button.tsx'])
+
+    expect(specs.get('qa')?.requiredEvidenceProfiles).toContain('ui-standard')
+    expect(specs.get('qa')?.requiredEvidenceProfiles).toContain('visual-regression')
+  })
+
+  it('carries an auth change onto every stage that certifies it', async () => {
+    const specs = await stageSpecsFor(['src/auth/session.ts'])
+
+    for (const role of ['review', 'qa', 'security', 'conformance']) {
+      expect(specs.get(role)?.requiredEvidenceProfiles, role).toContain('auth-standard')
+    }
+  })
+
+  it('tells an implementation stage nothing about evidence it does not owe', async () => {
+    // The bar is a fact about certifying the change, not about producing it.
+    const specs = await stageSpecsFor(['src/ui/button.tsx'])
+
+    expect(specs.get('implement')?.requiredEvidenceProfiles).toBeUndefined()
+  })
+
+  it('hands back a list a stage cannot edit', async () => {
+    const specs = await stageSpecsFor(['src/auth/session.ts'])
+
+    expect(Object.isFrozen(specs.get('qa')?.requiredEvidenceProfiles)).toBe(true)
   })
 })

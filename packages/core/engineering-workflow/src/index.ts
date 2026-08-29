@@ -536,7 +536,13 @@ export class WorkflowRunner {
         // The schema is verified before the branch is published, not after: a
         // pull request is what a person reviews and a reviewer reading a
         // migration nobody has applied anywhere is reading a guess.
-        if (request.databaseChange?.required === true && !schemaVerified) {
+        // Either the caller declared a schema change, or the change set was
+        // classified as one. There is deliberately no caller field that can
+        // turn the second half off: a migration in the tree is a fact about
+        // the change, not a claim about it.
+        const databaseRequired
+          = request.databaseChange?.required === true || measurement.impact?.databaseMutation === true
+        if (databaseRequired && !schemaVerified) {
           const verifier = this.#options.capabilities?.databaseVerification
           if (verifier === undefined) {
             return await this.#blocked(

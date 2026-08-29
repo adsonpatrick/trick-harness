@@ -139,10 +139,16 @@ export function planPullRequestImplementationStages(): readonly StageSpec[] {
 export function planPullRequestCertificationStages(
   requirements: CertificationRequirements,
 ): readonly StageSpec[] {
-  const stages: StageSpec[] = [{ stageId: 'review-1', role: 'review' }]
-  if (requirements.qaRequired) stages.push({ stageId: 'qa-1', role: 'qa' })
-  if (requirements.securityRequired) stages.push({ stageId: 'security-1', role: 'security' })
-  stages.push({ stageId: 'conformance-1', role: 'conformance' })
+  // Every certifying stage carries the same resolved list, and carries the
+  // same frozen array: a stage that could edit its own evidence requirement
+  // could certify itself against a bar it lowered.
+  const evidence = requirements.evidenceProfiles
+  const stages: StageSpec[] = [{ stageId: 'review-1', role: 'review', requiredEvidenceProfiles: evidence }]
+  if (requirements.qaRequired) stages.push({ stageId: 'qa-1', role: 'qa', requiredEvidenceProfiles: evidence })
+  if (requirements.securityRequired) {
+    stages.push({ stageId: 'security-1', role: 'security', requiredEvidenceProfiles: evidence })
+  }
+  stages.push({ stageId: 'conformance-1', role: 'conformance', requiredEvidenceProfiles: evidence })
   // Last, and after every certifying reading: a verification that ran before a
   // stage could still change something attests to a tree nobody certified.
   stages.push({ stageId: 'verify-final', role: 'verify' })

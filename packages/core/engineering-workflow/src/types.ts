@@ -17,6 +17,15 @@ import type { RepairEvidence } from './repair.ts'
 export interface StageSpec {
   readonly stageId: string
   readonly role: Role
+  /**
+   * The evidence profiles this stage owes, named by the change's own impact.
+   *
+   * Present only on stages that certify a change: what evidence a change owes
+   * is resolved from what it turned out to be, which is not known while it is
+   * still being produced. Profile names, never commands — the runtime that
+   * holds the profile decides what producing one costs.
+   */
+  readonly requiredEvidenceProfiles?: readonly string[]
 }
 
 /**

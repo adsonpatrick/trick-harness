@@ -557,19 +557,19 @@ const databaseRequired =
 
 There is no inverse caller field that can force this false.
 
-- [ ] **Step 1: Write RED DB test** where objective/caller omits `databaseChange`, planned path includes `supabase/migrations/20260828090000_example.sql`, and delivery is BLOCKED when no database verification capability exists.
-- [ ] **Step 2: Write RED DB-positive test** proving the same classified migration runs the deterministic `databaseVerification.verify` capability before delivery can succeed.
-- [ ] **Step 3: Write RED evidence-profile tests** proving `ui-standard` is carried to QA for UI and `auth-standard` is carried to QA/Security/conformance-relevant stage facts for auth.
-- [ ] **Step 4: Implement impact-driven DB requirement and immutable evidence-profile arrays** on certification stages. Do not put concrete npm commands into StageSpec.
-- [ ] **Step 5: Ensure composition supplies the Plan E generic DB verifier unchanged.** Plan G must not reintroduce Preview-only semantics.
-- [ ] **Step 6: Run GREEN.**
+- [x] **Step 1: Write RED DB test** where objective/caller omits `databaseChange`, planned path includes `supabase/migrations/20260828090000_example.sql`, and delivery is BLOCKED when no database verification capability exists.
+- [x] **Step 2: Write RED DB-positive test** proving the same classified migration runs the deterministic `databaseVerification.verify` capability before delivery can succeed.
+- [x] **Step 3: Write RED evidence-profile tests** proving `ui-standard` is carried to QA for UI and `auth-standard` is carried to QA/Security/conformance-relevant stage facts for auth.
+- [x] **Step 4: Implement impact-driven DB requirement and immutable evidence-profile arrays** on certification stages. Do not put concrete npm commands into StageSpec.
+- [x] **Step 5: Ensure composition supplies the Plan E generic DB verifier unchanged.** Plan G must not reintroduce Preview-only semantics.
+- [x] **Step 6: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts packages/composition/runtime/tests/harness.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow packages/composition/runtime
