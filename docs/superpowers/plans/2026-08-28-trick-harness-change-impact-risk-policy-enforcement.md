@@ -186,25 +186,25 @@ const RISK_ORDER = ['low', 'medium', 'high', 'critical'] as const
 const WRITE_VOLUME_ORDER = ['none', 'small', 'medium', 'large'] as const
 ```
 
-- [ ] **Step 1: Write RED normalization tests** for `src\\lib\\auth\\route-policy.ts -> src/lib/auth/route-policy.ts`, duplicate slash removal, `./src/x.ts -> src/x.ts`, absolute POSIX refusal, drive-letter refusal, empty path refusal and `../` traversal refusal.
-- [ ] **Step 2: Write RED classifier tests** proving all matching rules accumulate; duplicate surfaces/classes/capabilities/evidence IDs are deduplicated in policy order; dotfiles match; broad UI and specific auth can both survive; and matched-rule IDs are stable.
-- [ ] **Step 3: Write RED write-volume tests** for exactly `0=none`, `1..smallMaxFiles=small`, `smallMaxFiles+1..mediumMaxFiles=medium`, and larger=`large`.
-- [ ] **Step 4: Write RED merge tests** proving effective risk/write volume take the maximum, actual facts cannot lower planned facts, and actual paths absent from `approvedPlannedPaths` populate `unplannedPaths`.
-- [ ] **Step 5: Run RED.**
+- [x] **Step 1: Write RED normalization tests** for `src\\lib\\auth\\route-policy.ts -> src/lib/auth/route-policy.ts`, duplicate slash removal, `./src/x.ts -> src/x.ts`, absolute POSIX refusal, drive-letter refusal, empty path refusal and `../` traversal refusal.
+- [x] **Step 2: Write RED classifier tests** proving all matching rules accumulate; duplicate surfaces/classes/capabilities/evidence IDs are deduplicated in policy order; dotfiles match; broad UI and specific auth can both survive; and matched-rule IDs are stable.
+- [x] **Step 3: Write RED write-volume tests** for exactly `0=none`, `1..smallMaxFiles=small`, `smallMaxFiles+1..mediumMaxFiles=medium`, and larger=`large`.
+- [x] **Step 4: Write RED merge tests** proving effective risk/write volume take the maximum, actual facts cannot lower planned facts, and actual paths absent from `approvedPlannedPaths` populate `unplannedPaths`.
+- [x] **Step 5: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/change-impact/tests/change-impact.spec.ts
 ```
 
-- [ ] **Step 6: Add the package dependency exactly.**
+- [x] **Step 6: Add the package dependency exactly.**
 
 ```bash
 corepack pnpm --filter @trick-harness/change-impact add picomatch@4.0.5
 corepack pnpm --filter @trick-harness/change-impact add -D @types/picomatch@4.0.3 @trick-harness/contracts@workspace:^ @trick-harness/profile@workspace:^
 ```
 
-- [ ] **Step 7: Implement classifier/merge logic** with precompiled matchers per call, stable policy-order accumulation and frozen outputs. Do not use basename matching; rules are repository-relative path rules.
-- [ ] **Step 8: Run GREEN, constraints and typecheck.**
+- [x] **Step 7: Implement classifier/merge logic** with precompiled matchers per call, stable policy-order accumulation and frozen outputs. Do not use basename matching; rules are repository-relative path rules.
+- [x] **Step 8: Run GREEN, constraints and typecheck.**
 
 ```bash
 corepack pnpm vitest run packages/core/change-impact/tests/change-impact.spec.ts
@@ -212,7 +212,7 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
 ```bash
 git add packages/core/change-impact pnpm-lock.yaml
