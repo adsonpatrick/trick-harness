@@ -147,6 +147,18 @@ export interface WorkflowRunRequest {
    */
   readonly databaseChange?: WorkflowDatabaseChange
   /**
+   * Reads the two sets of repository paths a run's impact is classified from.
+   *
+   * Supplied by a deployment that knows where the checkout is; the runtime
+   * never opens a repository. Both answers are lists of paths and nothing else:
+   * what they mean is decided here, from the profile's declared rules, so no
+   * reader — and no stage — can hand back a classification of its own work.
+   *
+   * Absent, the run uses the fixed risk-driven plan. Present, the run splits at
+   * delivery and its certification is planned from what was actually published.
+   */
+  readonly changeImpact?: ChangeImpactReader
+  /**
    * Reads the approved Spec and Plan back, with the hashes they carry now.
    *
    * The runtime never opens a file. A caller that knows where the checkout is
@@ -298,4 +310,30 @@ export type DatabasePreviewCapabilityPort = DatabaseVerificationCapabilityPort
 export interface WorkflowCapabilities {
   readonly delivery?: DeliveryCapabilityPort
   readonly databaseVerification?: DatabaseVerificationCapabilityPort
+}
+
+/**
+ * Where the two readings of a change's paths come from.
+ *
+ * The planned reading is taken from the Plan a person approved, before any
+ * mutation-capable stage runs; the actual one from the published branch, after
+ * delivery. Both are asked for paths, never for conclusions: a stage that could
+ * describe its own change could describe a smaller one, and a smaller change
+ * scores as lower risk with a thinner evidence bar.
+ */
+export interface ChangeImpactReader {
+  /**
+   * The paths the approved Plan says this objective will touch.
+   *
+   * @param objective - the approved objective.
+   * @param signal - the run's abort signal.
+   */
+  plannedPaths(objective: WorkflowObjective, signal: AbortSignal): Promise<readonly string[]>
+  /**
+   * The paths the published branch turned out to touch.
+   *
+   * @param objective - the approved objective.
+   * @param signal - the run's abort signal.
+   */
+  actualPaths(objective: WorkflowObjective, signal: AbortSignal): Promise<readonly string[]>
 }

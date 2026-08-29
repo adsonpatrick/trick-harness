@@ -10,11 +10,15 @@
  * @packageDocumentation
  */
 
+import { ChangeImpactError, classifyChangeImpact, mergeChangeImpact } from '@trick-harness/change-impact'
 import { READ_ONLY_ROLES, parseConformanceContract } from '@trick-harness/contracts'
 import type {
+  ChangeImpactFacts,
+  ChangeImpactSource,
   ConformanceManifest,
   ConformanceStatusSummary,
   DiagnosisContract,
+  EffectiveChangeImpact,
   EvidenceRef,
   Finding,
   Role,
@@ -47,6 +51,7 @@ export type * from './types.ts'
 export * from './repair.ts'
 export * from './triage.ts'
 export * from './lifecycle.ts'
+export * from './impact-policy.ts'
 export * from './conformance.ts'
 
 import {
@@ -59,6 +64,11 @@ import {
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
 import { planPullRequestStages } from './lifecycle.ts'
 import {
+  planPullRequestCertificationStages,
+  planPullRequestImplementationStages,
+  resolveCertificationRequirements,
+} from './impact-policy.ts'
+import {
   ConformanceError,
   buildConformanceManifest,
   summarizeConformance,
@@ -68,6 +78,7 @@ import type { ApprovedArtifactTexts } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type {
+  ChangeImpactReader,
   DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
@@ -407,7 +418,13 @@ export class WorkflowRunner {
     const { maxRepairCycles, maxExecutorStarts } = profile.workflowPolicy
 
     journal.start(objective)
-    const queue = [...(request.plan ?? planStages)(objective)]
+    // A run that can read its own change set plans in two halves: what it does,
+    // then what that turned out to be worth certifying. Everything else keeps
+    // the fixed risk-driven plan, and an explicit caller plan still wins.
+    const measured = request.plan === undefined && request.changeImpact !== undefined
+    const queue = measured
+      ? [...planPullRequestImplementationStages()]
+      : [...(request.plan ?? planStages)(objective)]
     const stages: StageFacts[] = []
     let repairCycles = 0
     let executorStarts = 0
@@ -437,6 +454,24 @@ export class WorkflowRunner {
     // The approved documents as they last read, held so the conformance stage
     // scores against the same bytes the implementation was gated on.
     let approved: ApprovedArtifactTexts | undefined
+    // What the paths say this change is. The planned reading is taken before
+    // anything writes, so the run cannot be classified from work it has already
+    // done; the actual one after delivery, once there is a branch to read.
+    let impact: EffectiveChangeImpact | undefined
+    let plannedPaths: readonly string[] | undefined
+    // Set once the certification half has been planned, so a re-delivery after
+    // a repair does not queue a second copy of it.
+    let certificationPlanned = false
+    if (measured) {
+      const read = await this.#classify(
+        'planned', request, reader => reader.plannedPaths(objective, signal),
+      )
+      if (typeof read === 'string') {
+        return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
+      }
+      plannedPaths = read.paths
+      impact = mergeChangeImpact({ objectiveRisk: objective.risk, planned: read.facts })
+    }
 
     while (queue.length > 0) {
       const stage = queue.shift() as StageSpec
@@ -540,6 +575,27 @@ export class WorkflowRunner {
             published.facts.summary)
         }
         delivered = true
+        if (measured && !certificationPlanned) {
+          // Only now: what the branch turned out to touch is a fact about a
+          // branch, and before delivery there is none. The planned reading
+          // stays part of the resolution, so a delivery that touched less than
+          // it was approved to touch cannot hand back what that already bought.
+          const read = await this.#classify(
+            'actual', request, reader => reader.actualPaths(objective, signal), plannedPaths,
+          )
+          if (typeof read === 'string') {
+            return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
+          }
+          impact = mergeChangeImpact({
+            objectiveRisk: objective.risk,
+            planned: (impact as EffectiveChangeImpact).planned,
+            actual: read.facts,
+          })
+          queue.unshift(...planPullRequestCertificationStages(
+            resolveCertificationRequirements(profile, impact),
+          ))
+          certificationPlanned = true
+        }
         continue
       }
 
@@ -753,6 +809,47 @@ export class WorkflowRunner {
 
     return await this.#end(objective, stages, repairCycles, executorStarts, 'completed', 'PASS',
       `all ${stages.length} stages passed`)
+  }
+
+  /**
+   * Read one set of repository paths and classify what it means.
+   *
+   * @param source - which of the two readings this is.
+   * @param request - the run request, which supplies the reader.
+   * @param read - the reader call this reading is taken from.
+   * @param approvedPlannedPaths - the planned set, when there is one to compare against.
+   * @returns the paths and the facts, or the refusal to state as a blocker.
+   */
+  async #classify(
+    source: ChangeImpactSource,
+    request: WorkflowRunRequest,
+    read: (reader: ChangeImpactReader) => Promise<readonly string[]>,
+    approvedPlannedPaths?: readonly string[],
+  ): Promise<{ paths: readonly string[]; facts: ChangeImpactFacts } | string> {
+    const reader = request.changeImpact as ChangeImpactReader
+    let paths: readonly string[]
+    try {
+      paths = await read(reader)
+    } catch {
+      // The reader's own error text is not repeated: it comes from a project
+      // checkout and this summary reaches the journal.
+      return `the ${source} change set could not be read, so nothing can be certified against it`
+    }
+    try {
+      return {
+        paths,
+        facts: classifyChangeImpact({
+          source,
+          paths,
+          policy: this.#options.profile.changeImpactPolicy,
+          ...approvedPlannedPaths === undefined ? {} : { approvedPlannedPaths },
+        }),
+      }
+    } catch (error) {
+      if (!(error instanceof ChangeImpactError)) throw error
+      // Same reason: the message can name a repository path.
+      return `the ${source} change set names a path this profile cannot classify`
+    }
   }
 
   /**

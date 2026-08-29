@@ -457,20 +457,20 @@ implement
 -> verify-final
 ```
 
-- [ ] **Step 1: Write RED policy-resolution tests** proving all matching `qaPolicy.rules` and `securityPolicy.rules` are accumulated across all impact surfaces rather than first-match-only.
-- [ ] **Step 2: Write RED lifecycle tests** where `objective.risk='low'` plus actual auth surface still produces `review -> qa -> security -> conformance -> verify-final`.
-- [ ] **Step 3: Write RED UI tests** where low objective plus UI produces QA but not Security.
-- [ ] **Step 4: Write RED low-risk docs-only fixture** proving it does not gain QA/Security when no policy requires them, while still retaining review/conformance/final verification.
-- [ ] **Step 5: Refactor the runner into implementation and certification phases.** Planned impact is computed before `implement`; actual impact is computed only after successful delivery and before any certifying review.
-- [ ] **Step 6: Preserve assurance monotonicity.** If planned impact already required Security, actual impact may not remove it even if the final diff no longer matches the sensitive path; the approved/planned requirement remains part of the effective impact for that run.
-- [ ] **Step 7: Run GREEN.**
+- [x] **Step 1: Write RED policy-resolution tests** proving all matching `qaPolicy.rules` and `securityPolicy.rules` are accumulated across all impact surfaces rather than first-match-only.
+- [x] **Step 2: Write RED lifecycle tests** where `objective.risk='low'` plus actual auth surface still produces `review -> qa -> security -> conformance -> verify-final`.
+- [x] **Step 3: Write RED UI tests** where low objective plus UI produces QA but not Security.
+- [x] **Step 4: Write RED low-risk docs-only fixture** proving it does not gain QA/Security when no policy requires them, while still retaining review/conformance/final verification.
+- [x] **Step 5: Refactor the runner into implementation and certification phases.** Planned impact is computed before `implement`; actual impact is computed only after successful delivery and before any certifying review.
+- [x] **Step 6: Preserve assurance monotonicity.** If planned impact already required Security, actual impact may not remove it even if the final diff no longer matches the sensitive path; the approved/planned requirement remains part of the effective impact for that run.
+- [x] **Step 7: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/impact-policy.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts packages/core/engineering-workflow/tests/workflow.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow

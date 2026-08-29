@@ -1550,3 +1550,142 @@ describe('a run that changes a database', () => {
     expect(names).not.toContain('supabase-preview')
   })
 })
+
+describe('splitting a pull-request run at delivery', () => {
+  /** A profile whose paths mean something and whose surfaces cost something. */
+  const IMPACT_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    qaPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', when: Object.freeze({ surface: 'auth' }), use: Object.freeze({ evidence: 'security-review', independentReview: true, risk: 'critical' }) }),
+        Object.freeze({ id: 'ui', when: Object.freeze({ surface: 'ui' }), use: Object.freeze({ evidence: 'visual-regression', independentReview: true, risk: 'medium' }) }),
+      ]),
+    }),
+    securityPolicy: Object.freeze({
+      ...PROFILE.securityPolicy,
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth-flow', when: Object.freeze({ surface: 'auth' }), use: Object.freeze({ review: 'security', independence: 'cross-executor-required', blocking: true }) }),
+      ]),
+    }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', paths: Object.freeze(['src/auth/**']), use: Object.freeze({ surface: 'auth', riskFloor: 'critical' }) }),
+        Object.freeze({ id: 'ui', paths: Object.freeze(['src/ui/**']), use: Object.freeze({ surface: 'ui', riskFloor: 'medium' }) }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  /** A reader that answers with `planned` before the work and `actual` after. */
+  function reader(planned: readonly string[], actual: readonly string[]): {
+    plannedPaths: () => Promise<readonly string[]>
+    actualPaths: () => Promise<readonly string[]>
+  } {
+    return { plannedPaths: async () => planned, actualPaths: async () => actual }
+  }
+
+  /** Run one objective to completion and hand back the roles it ran, in order. */
+  async function rolesFor(
+    changeImpact: ReturnType<typeof reader>,
+    objective: WorkflowObjective = OBJECTIVE,
+  ): Promise<readonly string[]> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective, interpret: interpretAllPass, task: taskFor, changeImpact, ...CONFORMS,
+    })
+    expect(outcome.state).toBe('completed')
+    return outcome.stages.map(stage => stage.role)
+  }
+
+  it('certifies against what was delivered, not against the risk it was opened at', async () => {
+    // A low-risk objective that turned out to touch auth is an auth change. The
+    // caller's own word about its risk is the one thing that cannot settle this.
+    const roles = await rolesFor(reader([], ['src/auth/session.ts']))
+
+    expect(roles).toStrictEqual([
+      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
+    ])
+  })
+
+  it('buys the QA a surface asks for without buying a security reading nobody asked for', async () => {
+    const roles = await rolesFor(reader([], ['src/ui/button.tsx']))
+
+    expect(roles).toStrictEqual(['implement', 'verify', 'delivery', 'review', 'qa', 'conformance', 'verify'])
+  })
+
+  it('still reads and verifies a change no rule spoke about', async () => {
+    const roles = await rolesFor(reader(['docs/readme.md'], ['docs/readme.md']))
+
+    expect(roles).toStrictEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
+  })
+
+  it('keeps what the approved plan already bought when the diff no longer shows it', async () => {
+    // The planned reading is part of the effective impact for the whole run. A
+    // delivery that ended up not touching the auth file it was approved to
+    // touch does not get to hand back the security reading that bought.
+    const roles = await rolesFor(reader(['src/auth/session.ts'], ['src/ui/button.tsx']))
+
+    expect(roles).toContain('security')
+  })
+
+  it('reads the delivered change set only after the branch is published', async () => {
+    const seen: string[] = []
+    const changeImpact = {
+      plannedPaths: async (): Promise<readonly string[]> => { seen.push('planned'); return [] },
+      actualPaths: async (): Promise<readonly string[]> => { seen.push('actual'); return ['src/ui/x.tsx'] },
+    }
+    await rolesFor(changeImpact)
+
+    expect(seen).toStrictEqual(['planned', 'actual'])
+  })
+
+  it('stops rather than certifying a change it could not measure', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: {
+        plannedPaths: async () => [],
+        actualPaths: async () => { throw new Error('git said no') },
+      },
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    // The reader's own text can name a path or a provider payload, and this
+    // summary reaches the journal.
+    expect(outcome.summary).not.toContain('git said no')
+  })
+
+  it('runs the fixed plan when the deployment supplied no reader', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.stages.map(stage => stage.role)).toStrictEqual(planStages(OBJECTIVE).map(stage => stage.role))
+  })
+})
