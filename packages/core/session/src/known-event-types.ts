@@ -37,6 +37,7 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'harness/capability-start',
   'harness/circuit-breaker',
   'harness/conformance',
+  'harness/change-impact',
   'harness/delivery',
   'harness/diagnosis',
   'harness/executor-end',

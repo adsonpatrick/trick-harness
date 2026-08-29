@@ -24,7 +24,12 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import {
   ContractError, RISKS, WORKLOADS, parseApprovedArtifactSet, parseStageRouteOverride,
 } from '@trick-harness/contracts'
-import type { ConformanceStatusSummary, StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
+import type {
+  ChangeImpactStatusSummary,
+  ConformanceStatusSummary,
+  StageRouteOverride,
+  WorkflowObjective,
+} from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 import { ControlError, LOOPBACK_HOSTS } from './types.ts'
 import type {
@@ -175,6 +180,35 @@ function statusOfOutcome(outcome: WorkflowOutcome): ControlWorkflowStatus {
     // derived from a provider's answer, and a spread would render whatever else
     // travelled with it into a status a bridge shows people.
     ...outcome.conformance === undefined ? {} : { conformance: conformanceOf(outcome.conformance) },
+    ...outcome.changeImpact === undefined ? {} : { changeImpact: changeImpactOf(outcome.changeImpact) },
+  })
+}
+
+/**
+ * Reduce a change-impact reading to the fields this surface may say out loud.
+ *
+ * Rebuilt field by field for the same reason conformance is: the reading came
+ * from a reader that ran a Git command, and a spread would render whatever
+ * else travelled back with it — a diff, a stderr line — into a status window.
+ *
+ * @param summary - What the run last resolved the change to be.
+ * @returns The same fields, rebuilt.
+ */
+function changeImpactOf(summary: ChangeImpactStatusSummary): ChangeImpactStatusSummary {
+  return Object.freeze({
+    source: summary.source,
+    effectiveRisk: summary.effectiveRisk,
+    riskFloor: summary.riskFloor,
+    writeVolume: summary.writeVolume,
+    surfaces: Object.freeze([...summary.surfaces]),
+    taskClasses: Object.freeze([...summary.taskClasses]),
+    requiredCapabilities: Object.freeze([...summary.requiredCapabilities]),
+    evidenceProfiles: Object.freeze([...summary.evidenceProfiles]),
+    matchedRuleIds: Object.freeze([...summary.matchedRuleIds]),
+    databaseMutation: summary.databaseMutation,
+    pathCount: summary.pathCount,
+    unplannedPathCount: summary.unplannedPathCount,
+    unplannedPaths: Object.freeze([...summary.unplannedPaths]),
   })
 }
 

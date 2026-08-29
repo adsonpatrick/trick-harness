@@ -640,18 +640,18 @@ journal.changeImpact(facts: ChangeImpactFacts & { readonly effectiveRisk: Risk }
 
 **Bound:** store at most the first 100 normalized `unplannedPaths`; store total `unplannedPathCount` separately so truncation is observable.
 
-- [ ] **Step 1: Write RED journal tests** for one planned and two actual impact facts, restart projection ordering, sorted/deduped scalar arrays and no duplicate file contents/diff payload fields.
-- [ ] **Step 2: Write RED redaction/bounds test** with 150 unplanned paths; projection exposes count=150 and only 100 bounded path strings.
-- [ ] **Step 3: Write RED control-status test** proving status exposes the latest planned/actual impact summary, effective risk, evidence-profile IDs and DB mutation flag without raw diff text.
-- [ ] **Step 4: Implement durable event/projection support** using the existing journal checkpoint semantics; impact fact must be flushed before the mutating/certifying phase whose policy depends on it begins.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 1: Write RED journal tests** for one planned and two actual impact facts, restart projection ordering, sorted/deduped scalar arrays and no duplicate file contents/diff payload fields.
+- [x] **Step 2: Write RED redaction/bounds test** with 150 unplanned paths; projection exposes count=150 and only 100 bounded path strings.
+- [x] **Step 3: Write RED control-status test** proving status exposes the latest planned/actual impact summary, effective risk, evidence-profile IDs and DB mutation flag without raw diff text.
+- [x] **Step 4: Implement durable event/projection support** using the existing journal checkpoint semantics; impact fact must be flushed before the mutating/certifying phase whose policy depends on it begins.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/journal/tests/journal.spec.ts packages/core/control-server/tests/server.spec.ts packages/composition/runtime/tests/harness.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/journal packages/core/control-server packages/composition/runtime/tests/harness.spec.ts

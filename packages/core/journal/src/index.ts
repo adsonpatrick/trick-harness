@@ -11,12 +11,16 @@
  */
 
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { summarizeChangeImpact } from '@trick-harness/contracts'
 import type {
+  ChangeImpactFacts,
+  ChangeImpactStatusSummary,
   ConformanceStatusSummary,
   DiagnosisContract,
   EvidenceRef,
   Finding,
   RouteDecision,
+  Risk,
   Role,
   RoutedPermissionMode,
   WorkflowObjective,
@@ -54,6 +58,7 @@ export const HARNESS_EVENT_TYPES = [
   'harness/delivery',
   'harness/blocker',
   'harness/conformance',
+  'harness/change-impact',
   'harness/circuit-breaker',
   'harness/workflow-end',
 ] as const
@@ -138,6 +143,17 @@ export interface WorkflowProjection {
    * so the standing answer for the branch is the last one written.
    */
   readonly conformance?: ConformanceStatusSummary
+  /**
+   * The latest reading of each kind of what this change turned out to be.
+   *
+   * The latest rather than every one for the same reason conformance is: a
+   * repair publishes a second branch, and the standing fact about the branch a
+   * person would now review is the last one recorded about it.
+   */
+  readonly changeImpact?: {
+    readonly planned?: ChangeImpactStatusSummary
+    readonly actual?: ChangeImpactStatusSummary
+  }
   readonly routes: readonly RouteRecord[]
   readonly findings: readonly Finding[]
   readonly diagnoses: readonly DiagnosisContract[]
@@ -255,6 +271,30 @@ export class WorkflowJournal {
       },
       verdict: summary.verdict,
     })
+  }
+
+  /**
+   * Record what the paths say this change is, durably.
+   *
+   * Flushed for the same reason a dispatch is: the planned reading is what
+   * authorises the first writable tree, and the actual reading is what sets
+   * the bar the branch is certified against. A run that mutated, or certified,
+   * on the strength of a classification the log never kept could not say
+   * afterwards what it believed it was doing.
+   *
+   * Reduced before it is appended, and reduced field by field: the classifier
+   * hands over facts, and nothing it was given — a path list of any length, a
+   * reader's output — travels into the log unbounded.
+   *
+   * @param facts - One reading, with the risk the run resolved to on it.
+   * @throws {JournalError} when the checkpoint did not happen.
+   */
+  async changeImpact(facts: ChangeImpactFacts & { readonly effectiveRisk: Risk }): Promise<void> {
+    this.#session.append('harness/change-impact', {
+      workflowId: this.#workflowId,
+      ...summarizeChangeImpact(facts, facts.effectiveRisk),
+    })
+    await this.#durable()
   }
 
   /**
@@ -616,6 +656,7 @@ function harnessPayload(event: SessionEvent): HarnessPayload | undefined {
 interface Projected {
   objective?: WorkflowProjection['objective']
   conformance?: ConformanceStatusSummary
+  changeImpact?: { planned?: ChangeImpactStatusSummary; actual?: ChangeImpactStatusSummary }
   routes: RouteRecord[]
   findings: Finding[]
   diagnoses: DiagnosisContract[]
@@ -671,6 +712,29 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
         },
         verdict: payload.verdict,
       }
+      return
+    }
+    case 'harness/change-impact': {
+      const payload = data as unknown as ChangeImpactStatusSummary
+      // Rebuilt field by field rather than carried: an event read back from a
+      // log is somebody else's object, and a spread would project whatever
+      // else a future writer put on it into a status a bridge renders.
+      const summary: ChangeImpactStatusSummary = {
+        source: payload.source,
+        effectiveRisk: payload.effectiveRisk,
+        riskFloor: payload.riskFloor,
+        writeVolume: payload.writeVolume,
+        surfaces: Object.freeze([...payload.surfaces]),
+        taskClasses: Object.freeze([...payload.taskClasses]),
+        requiredCapabilities: Object.freeze([...payload.requiredCapabilities]),
+        evidenceProfiles: Object.freeze([...payload.evidenceProfiles]),
+        matchedRuleIds: Object.freeze([...payload.matchedRuleIds]),
+        databaseMutation: payload.databaseMutation,
+        pathCount: payload.pathCount,
+        unplannedPathCount: payload.unplannedPathCount,
+        unplannedPaths: Object.freeze([...payload.unplannedPaths]),
+      }
+      state.changeImpact = { ...state.changeImpact, [payload.source]: Object.freeze(summary) }
       return
     }
     case 'harness/route-decision': {
@@ -818,6 +882,7 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     executorStarts: state.started.length,
     ...state.objective === undefined ? {} : { objective: state.objective },
     ...state.conformance === undefined ? {} : { conformance: state.conformance },
+    ...state.changeImpact === undefined ? {} : { changeImpact: Object.freeze(state.changeImpact) },
     ...state.end === undefined ? {} : { end: state.end },
   })
 }

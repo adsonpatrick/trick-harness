@@ -69,7 +69,7 @@ const diagnosis: DiagnosisContract = {
 }
 
 describe('the harness event vocabulary', () => {
-  it('declares the fifteen events the lifecycle needs, in lifecycle order', () => {
+  it('declares the sixteen events the lifecycle needs, in lifecycle order', () => {
     expect([...HARNESS_EVENT_TYPES]).toStrictEqual([
       'harness/workflow-start',
       'harness/route-decision',
@@ -84,6 +84,7 @@ describe('the harness event vocabulary', () => {
       'harness/delivery',
       'harness/blocker',
       'harness/conformance',
+      'harness/change-impact',
       'harness/circuit-breaker',
       'harness/workflow-end',
     ])
@@ -146,6 +147,20 @@ describe('writing and replaying one workflow', () => {
       expected: { spec: 2, plan: 2, dod: 8 },
       counts: { PASS: 12, MISSING: 0, PARTIAL: 0, FAIL: 0, BLOCKED: 0, INCONCLUSIVE: 0 },
       verdict: 'PASS',
+    })
+    await journal.changeImpact({
+      source: 'actual',
+      pathCount: 2,
+      surfaces: ['ui'],
+      riskFloor: 'medium',
+      writeVolume: 'small',
+      taskClasses: ['ui-change'],
+      requiredCapabilities: [],
+      evidenceProfiles: ['ui-standard'],
+      databaseMutation: false,
+      matchedRuleIds: ['ui'],
+      unplannedPaths: [],
+      effectiveRisk: 'medium',
     })
     journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
     await journal.end('completed', 'PASS', 'delivered')
@@ -584,5 +599,101 @@ describe('what the log remembers about approved artifacts and conformance', () =
     expect(HARNESS_EVENT_TYPES).toContain('harness/conformance')
     expect(KNOWN_SESSION_EVENT_TYPES.has('harness/conformance')).toBe(true)
     expect(isHarnessEventType('harness/conformance')).toBe(true)
+  })
+})
+
+describe('recording what the change turned out to be', () => {
+  let session: Session
+  let flush: Mock<() => Promise<boolean>>
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    flush = vi.fn(async () => Promise.resolve(true))
+    journal = new WorkflowJournal(session, 'wf-1', flush)
+  })
+
+  /** One reading of a change set, as the classifier hands it over. */
+  function reading(
+    source: 'planned' | 'actual',
+    overrides: Record<string, unknown> = {},
+  ): Parameters<WorkflowJournal['changeImpact']>[0] {
+    return {
+      source,
+      pathCount: 2,
+      surfaces: ['ui'],
+      riskFloor: 'medium',
+      writeVolume: 'small',
+      taskClasses: ['ui-change'],
+      requiredCapabilities: [],
+      evidenceProfiles: ['ui-standard'],
+      databaseMutation: false,
+      matchedRuleIds: ['ui'],
+      unplannedPaths: [],
+      effectiveRisk: 'medium',
+      ...overrides,
+    }
+  }
+
+  it('checkpoints the reading before the phase whose policy depends on it', async () => {
+    // The planned reading is what authorises the first writable tree. A run
+    // that mutated on the strength of a classification the log never kept
+    // could not say afterwards what it believed it was doing.
+    await journal.changeImpact(reading('planned'))
+
+    expect(flush).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to report a durability that did not happen', async () => {
+    flush.mockResolvedValueOnce(false)
+
+    await expect(journal.changeImpact(reading('planned'))).rejects.toBeInstanceOf(JournalError)
+  })
+
+  it('keeps the latest reading of each kind, in the order they were written', async () => {
+    await journal.changeImpact(reading('planned'))
+    await journal.changeImpact(reading('actual', { effectiveRisk: 'medium', surfaces: ['ui'] }))
+    await journal.changeImpact(reading('actual', { effectiveRisk: 'critical', surfaces: ['ui', 'auth'] }))
+
+    const projected = projectWorkflow(session.events, 'wf-1').changeImpact
+    expect(projected?.planned?.effectiveRisk).toBe('medium')
+    // The second delivery replaced the first: the standing fact about the
+    // branch a person would review is the last one recorded about it.
+    expect(projected?.actual?.effectiveRisk).toBe('critical')
+    expect(projected?.actual?.surfaces).toStrictEqual(['auth', 'ui'])
+  })
+
+  it('says each surface once, in one order, whatever order it was given them', async () => {
+    await journal.changeImpact(reading('planned', { surfaces: ['ui', 'auth', 'ui'], evidenceProfiles: ['b', 'a'] }))
+
+    const projected = projectWorkflow(session.events, 'wf-1').changeImpact
+    expect(projected?.planned?.surfaces).toStrictEqual(['auth', 'ui'])
+    expect(projected?.planned?.evidenceProfiles).toStrictEqual(['a', 'b'])
+  })
+
+  it('records no field that could carry a diff or the contents of a file', async () => {
+    await journal.changeImpact(reading('actual', { unplannedPaths: ['src/ui/button.tsx'] }))
+
+    const appended = session.events.filter(event => isHarnessEventType(event.type)
+      && event.type === 'harness/change-impact')
+    const payload = appended.at(-1)?.data as unknown as Record<string, unknown>
+    for (const forbidden of ['diff', 'patch', 'contents', 'text', 'output', 'stderr']) {
+      expect(Object.keys(payload)).not.toContain(forbidden)
+    }
+  })
+
+  it('bounds the unplanned paths it keeps and still says how many there were', async () => {
+    const many = Array.from({ length: 150 }, (_, index) => `src/generated/file-${String(index).padStart(3, '0')}.ts`)
+    await journal.changeImpact(reading('actual', { unplannedPaths: many }))
+
+    const projected = projectWorkflow(session.events, 'wf-1').changeImpact
+    // The count is the fact; the list is a sample of it. A projection that kept
+    // only the list would let 150 unapproved files read as 100.
+    expect(projected?.actual?.unplannedPathCount).toBe(150)
+    expect(projected?.actual?.unplannedPaths).toHaveLength(100)
+  })
+
+  it('leaves a workflow that classified nothing with no impact at all', () => {
+    expect(projectWorkflow(session.events, 'wf-1').changeImpact).toBeUndefined()
   })
 })

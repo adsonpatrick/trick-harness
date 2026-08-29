@@ -8,7 +8,12 @@ import type {
   WorkflowObjective,
   WorkflowVerdict,
 } from '@trick-harness/contracts'
-import type { ConformanceManifest, ConformanceObligation, ConformanceStatusSummary } from '@trick-harness/contracts'
+import type {
+  ChangeImpactStatusSummary,
+  ConformanceManifest,
+  ConformanceObligation,
+  ConformanceStatusSummary,
+} from '@trick-harness/contracts'
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { WorkflowEndState } from '@trick-harness/journal'
 import type { RepairEvidence } from './repair.ts'
@@ -77,6 +82,13 @@ export interface WorkflowOutcome {
    * from a reading that found nothing satisfied.
    */
   readonly conformance?: ConformanceStatusSummary
+  /**
+   * What the change turned out to be, as the run last resolved it.
+   *
+   * Absent when the run classified nothing at all, which is a different fact
+   * from a change that classified to nothing.
+   */
+  readonly changeImpact?: ChangeImpactStatusSummary
 }
 
 /** What a restart may conclude about a workflow it finds in a durable log. */

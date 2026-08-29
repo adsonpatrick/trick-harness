@@ -11,16 +11,18 @@
  */
 
 import { ChangeImpactError, classifyChangeImpact, mergeChangeImpact } from '@trick-harness/change-impact'
-import { READ_ONLY_ROLES, parseConformanceContract } from '@trick-harness/contracts'
+import { READ_ONLY_ROLES, parseConformanceContract, summarizeChangeImpact } from '@trick-harness/contracts'
 import type {
   ChangeImpactFacts,
   ChangeImpactSource,
+  ChangeImpactStatusSummary,
   ConformanceManifest,
   ConformanceStatusSummary,
   DiagnosisContract,
   EffectiveChangeImpact,
   EvidenceRef,
   Finding,
+  Risk,
   Role,
   RoutedPermissionMode,
   StageResult,
@@ -361,6 +363,9 @@ export class WorkflowRunner {
    * serves one workflow, so there is nothing here to leak into another.
    */
   #conformance: ConformanceStatusSummary | undefined
+
+  /** The last reading of what this change is, for the outcome to carry out. */
+  #changeImpact: ChangeImpactStatusSummary | undefined
   readonly #options: WorkflowRuntimeOptions
   readonly #now: () => number
   #controller: AbortController | undefined
@@ -487,6 +492,9 @@ export class WorkflowRunner {
       }
       plannedPaths = read.paths
       measurement.impact = mergeChangeImpact({ objectiveRisk: objective.risk, planned: read.facts })
+      // Checkpointed before the loop starts, so the first writable tree this
+      // run hands out is authorised by a classification the log already holds.
+      await this.#record(read.facts, measurement.impact.effectiveRisk)
     }
 
     while (queue.length > 0) {
@@ -622,6 +630,9 @@ export class WorkflowRunner {
             ? resolved
             : retainStrongerImpact(previous, resolved)
           certificationPasses += 1
+          // Checkpointed before the certification half is planned, for the
+          // same reason: the bar those stages are held to is read off this.
+          await this.#record(read.facts, measurement.impact.effectiveRisk)
           // Everything still queued at this point certifies the branch that
           // was just replaced, so it is dropped rather than resumed: the whole
           // certification half is planned again from the reading that describes
@@ -846,6 +857,17 @@ export class WorkflowRunner {
 
     return await this.#end(objective, stages, repairCycles, executorStarts, 'completed', 'PASS',
       `all ${stages.length} stages passed`)
+  }
+
+  /**
+   * Journal one reading of the change, and hold it for the outcome.
+   *
+   * @param facts - the reading, as the classifier produced it.
+   * @param effectiveRisk - the risk the run resolved to on it.
+   */
+  async #record(facts: ChangeImpactFacts, effectiveRisk: Risk): Promise<void> {
+    this.#changeImpact = summarizeChangeImpact(facts, effectiveRisk)
+    await this.#options.journal.changeImpact({ ...facts, effectiveRisk })
   }
 
   /**
@@ -1473,6 +1495,7 @@ export class WorkflowRunner {
       repairCycles,
       executorStarts,
       ...this.#conformance === undefined ? {} : { conformance: this.#conformance },
+      ...this.#changeImpact === undefined ? {} : { changeImpact: this.#changeImpact },
     })
   }
 }

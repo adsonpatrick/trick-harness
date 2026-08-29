@@ -2039,3 +2039,80 @@ describe('recertifying what a repair turned the change into', () => {
     expect(manifests.at(-1)?.unplannedPaths).toStrictEqual([])
   })
 })
+
+describe('when the run writes down what it thinks the change is', () => {
+  /** The harness event types one classified run appended, in order. */
+  async function eventOrder(): Promise<readonly string[]> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => ['src/a.ts'], actualPaths: async () => ['src/a.ts', 'src/b.ts'] },
+      ...CONFORMS,
+    })
+    return session.events.map(event => event.type).filter(type => type.startsWith('harness/'))
+  }
+
+  it('records the planned reading before it hands anything a writable tree', async () => {
+    // The order is the point. A run that started an implementation and then
+    // wrote down what it believed the change was could not say, after a
+    // restart, on what authority that tree was ever written to.
+    const order = await eventOrder()
+
+    expect(order.indexOf('harness/change-impact')).toBeLessThan(order.indexOf('harness/executor-start'))
+  })
+
+  it('records the delivered reading before anything certifies it', async () => {
+    const order = await eventOrder()
+    const lastImpact = order.lastIndexOf('harness/change-impact')
+
+    expect(lastImpact).toBeGreaterThan(order.indexOf('harness/delivery'))
+    expect(order.slice(lastImpact)).toContain('harness/verdict')
+  })
+
+  it('carries what it resolved out with the outcome', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => ['src/a.ts'], actualPaths: async () => ['src/a.ts', 'src/b.ts'] },
+      ...CONFORMS,
+    })
+
+    expect(outcome.changeImpact?.source).toBe('actual')
+    expect(outcome.changeImpact?.unplannedPaths).toStrictEqual(['src/b.ts'])
+  })
+
+  it('leaves a run that classified nothing saying nothing about it', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.changeImpact).toBeUndefined()
+  })
+})

@@ -529,6 +529,42 @@ export interface ChangeImpactFacts {
   readonly unplannedPaths: readonly string[]
 }
 
+/** How many unplanned paths one bounded record keeps, whatever it was given. */
+export const MAX_RECORDED_UNPLANNED_PATHS = 100
+
+/**
+ * One reading of a change, reduced to what a durable record may hold.
+ *
+ * Everything here is a scalar, a boolean, a count, or a bounded list of
+ * repository paths. There is deliberately no field a diff, a file's contents,
+ * a command's output or a model's reasoning could travel in: this record is
+ * read back by a restart and rendered into a status window, and both are
+ * places where a transcript must never turn up.
+ */
+export interface ChangeImpactStatusSummary {
+  readonly source: ChangeImpactSource
+  readonly effectiveRisk: Risk
+  readonly riskFloor: Risk
+  readonly writeVolume: WriteVolume
+  /** Sorted and deduplicated, so two records of one reading compare equal. */
+  readonly surfaces: readonly string[]
+  readonly taskClasses: readonly string[]
+  readonly requiredCapabilities: readonly string[]
+  readonly evidenceProfiles: readonly string[]
+  readonly matchedRuleIds: readonly string[]
+  readonly databaseMutation: boolean
+  readonly pathCount: number
+  /**
+   * How many paths this reading held that the approved Plan never named.
+   *
+   * Kept apart from the list because the list is capped: a record that carried
+   * only the sample would let a delivery of 150 unapproved files read as 100.
+   */
+  readonly unplannedPathCount: number
+  /** At most {@link MAX_RECORDED_UNPLANNED_PATHS} of them, sorted. */
+  readonly unplannedPaths: readonly string[]
+}
+
 /**
  * The two readings resolved into the single policy the run is held to.
  *

@@ -603,3 +603,55 @@ describe('what a status poll may say about conformance', () => {
     expect(rendered).toContain('"verdict":"PASS"')
   })
 })
+
+describe('what a status poll may say about the change itself', () => {
+  const IMPACT = {
+    source: 'actual' as const,
+    effectiveRisk: 'critical' as const,
+    riskFloor: 'critical' as const,
+    writeVolume: 'medium' as const,
+    surfaces: ['auth', 'ui'],
+    taskClasses: ['auth-change'],
+    requiredCapabilities: ['database-verification'],
+    evidenceProfiles: ['auth-standard'],
+    matchedRuleIds: ['auth', 'ui'],
+    databaseMutation: true,
+    pathCount: 4,
+    unplannedPathCount: 1,
+    unplannedPaths: ['src/lib/auth/route-policy.ts'],
+  }
+
+  it('reports the risk the change resolved to, what it owes, and what drifted', async () => {
+    const { base, auth } = await serve({
+      start: starter(['wf-1'], async record => ({
+        ...outcome(record.workflowId, record.objective.id),
+        changeImpact: IMPACT,
+      })),
+    })
+    await post(base, auth, OBJECTIVE)
+    const status = await readStatus(base, auth, 'wf-1')
+
+    expect(status.changeImpact).toEqual(IMPACT)
+  })
+
+  it('says nothing about a change nobody classified', async () => {
+    const { base, auth } = await serve({ start: starter(['wf-1']) })
+    await post(base, auth, OBJECTIVE)
+
+    expect((await readStatus(base, auth, 'wf-1')).changeImpact).toBeUndefined()
+  })
+
+  it('carries no diff text into a status a bridge may render', async () => {
+    const { base, auth } = await serve({
+      start: starter(['wf-1'], async record => ({
+        ...outcome(record.workflowId, record.objective.id),
+        changeImpact: { ...IMPACT, diff: '--- a/src/lib/auth\n+++ b/src/lib/auth', stderr: 'fatal: no such ref' },
+      } as never)),
+    })
+    await post(base, auth, OBJECTIVE)
+    const status = await readStatus(base, auth, 'wf-1')
+
+    expect(Object.keys(status.changeImpact ?? {})).not.toContain('diff')
+    expect(Object.keys(status.changeImpact ?? {})).not.toContain('stderr')
+  })
+})

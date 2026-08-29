@@ -12,6 +12,7 @@
  */
 
 import type {
+  ChangeImpactStatusSummary,
   ConformanceStatusSummary,
   DiagnosisContract,
   EvidenceRef,
@@ -70,6 +71,19 @@ declare module '@deepseek-ai/dsh-session/types' {
      * reading leaves both and the later one is the branch's standing.
      */
     'harness/conformance': { workflowId: string } & ConformanceStatusSummary
+    /**
+     * One reading of what the change turned out to be, bounded.
+     *
+     * Two of these are written per delivery cycle: what the approved Plan
+     * committed to writing, and what the published branch turned out to hold.
+     * Neither carries a diff — what survives is which surfaces were touched,
+     * what that made the run's risk, what evidence it owes, whether it moves
+     * database state, and how far outside the Plan it reached.
+     *
+     * Written once per reading, so a repair that forced a second delivery
+     * leaves both and the later one is the branch's standing.
+     */
+    'harness/change-impact': { workflowId: string } & ChangeImpactStatusSummary
     /**
      * The route one stage was dispatched on, with the reasons that produced it.
      * `reasonCodes` and `policyVersion` are what make the decision explainable

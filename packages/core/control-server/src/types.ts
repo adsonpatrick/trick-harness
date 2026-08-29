@@ -5,6 +5,7 @@
  */
 
 import type {
+  ChangeImpactStatusSummary,
   ConformanceStatusSummary,
   StageRouteOverride,
   WorkflowObjective,
@@ -69,6 +70,15 @@ export interface ControlWorkflowStatus {
    * run's durable record and out of a window somebody is glancing at.
    */
   readonly conformance?: ConformanceStatusSummary
+  /**
+   * What the change turned out to be, as the run last resolved it.
+   *
+   * Absent when the run classified nothing, which a reader must be able to
+   * tell apart from a change that resolved to nothing. Bounded the same way
+   * conformance is: risks, counts, ids and a capped path sample, and no field
+   * a diff could travel in.
+   */
+  readonly changeImpact?: ChangeImpactStatusSummary
 }
 
 /** One workflow the Harness has started and this server now owns. */

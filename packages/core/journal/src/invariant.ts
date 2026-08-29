@@ -34,6 +34,7 @@ const EXPECTED_EVENTS = [
   'harness/delivery',
   'harness/blocker',
   'harness/conformance',
+  'harness/change-impact',
   'harness/circuit-breaker',
   'harness/workflow-end',
 ]

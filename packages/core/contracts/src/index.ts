@@ -18,6 +18,7 @@
 
 import {
   CHANGE_IMPACT_SOURCES,
+  MAX_RECORDED_UNPLANNED_PATHS,
   CONFIDENCE_LEVELS,
   CONFORMANCE_ITEM_STATUSES,
   CONFORMANCE_SOURCES,
@@ -35,12 +36,14 @@ import type {
   ApprovedArtifactRef,
   ApprovedArtifactSet,
   ChangeImpactFacts,
+  ChangeImpactStatusSummary,
   ConformanceContract,
   ConformanceItem,
   DiagnosisContract,
   EffectiveChangeImpact,
   EvidenceRef,
   Finding,
+  Risk,
   RouteDecision,
   StageResult,
   StageRouteOverride,
@@ -520,5 +523,52 @@ export function parseWorkflowObjective(value: unknown, path = 'objective'): Work
     // Absent stays absent. Reading a missing class as `''` would put a label
     // nobody chose into durable facts, and policy would then match on it.
     ...source['taskClass'] === undefined ? {} : { taskClass: label(source, 'taskClass', path) },
+  })
+}
+
+/**
+ * One list, said once and in one order.
+ *
+ * @param values - Whatever produced the list.
+ * @returns The distinct values, sorted.
+ */
+function distinct(values: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(values)].sort())
+}
+
+/**
+ * Reduce one reading of a change to what a durable record may hold.
+ *
+ * The single place this reduction happens, so the fact the journal writes, the
+ * fact a restart reads back and the fact a status window renders are the same
+ * fact. Rebuilt field by field: the reading came from a reader that ran a Git
+ * command, and a spread would carry whatever else travelled back with it —
+ * a diff, a stderr line — into every one of those places at once.
+ *
+ * @param facts - One reading, as the classifier produced it.
+ * @param effectiveRisk - The risk the run resolved to on it.
+ * @returns The bounded summary, frozen.
+ */
+export function summarizeChangeImpact(
+  facts: ChangeImpactFacts,
+  effectiveRisk: Risk,
+): ChangeImpactStatusSummary {
+  const unplanned = distinct(facts.unplannedPaths)
+  return Object.freeze({
+    source: facts.source,
+    effectiveRisk,
+    riskFloor: facts.riskFloor,
+    writeVolume: facts.writeVolume,
+    surfaces: distinct(facts.surfaces),
+    taskClasses: distinct(facts.taskClasses),
+    requiredCapabilities: distinct(facts.requiredCapabilities),
+    evidenceProfiles: distinct(facts.evidenceProfiles),
+    matchedRuleIds: distinct(facts.matchedRuleIds),
+    databaseMutation: facts.databaseMutation,
+    pathCount: facts.pathCount,
+    // The count is taken before the cap, because the cap is a limit on what a
+    // record holds and never a claim about what the delivery did.
+    unplannedPathCount: unplanned.length,
+    unplannedPaths: Object.freeze(unplanned.slice(0, MAX_RECORDED_UNPLANNED_PATHS)),
   })
 }
