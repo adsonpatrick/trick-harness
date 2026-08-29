@@ -385,18 +385,18 @@ git merge-base HEAD origin/<protectedBranch>
 -> normalize/dedupe
 ```
 
-- [ ] **Step 1: Write RED parser tests** for add/modify/rename/copy records, NUL separation, malformed status records and secret-safe bounded errors.
-- [ ] **Step 2: Write RED subprocess tests** proving argv-array/no-shell execution, project cwd only, configured branch only, abort propagation and whole-tree `waitForExit()` before completion.
-- [ ] **Step 3: Write RED config tests** requiring non-empty simple branch names and rejecting refs containing whitespace, `..`, `~`, `^`, `:`, `?`, `*`, `[` or a leading `-`.
-- [ ] **Step 4: Implement the reader.** It may read Git state only; it must not fetch, checkout, reset, merge or modify refs.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 1: Write RED parser tests** for add/modify/rename/copy records, NUL separation, malformed status records and secret-safe bounded errors.
+- [x] **Step 2: Write RED subprocess tests** proving argv-array/no-shell execution, project cwd only, configured branch only, abort propagation and whole-tree `waitForExit()` before completion.
+- [x] **Step 3: Write RED config tests** requiring non-empty simple branch names and rejecting refs containing whitespace, `..`, `~`, `^`, `:`, `?`, `*`, `[` or a leading `-`.
+- [x] **Step 4: Implement the reader.** It may read Git state only; it must not fetch, checkout, reset, merge or modify refs.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add apps/plurora-harness-host

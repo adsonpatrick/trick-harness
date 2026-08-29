@@ -33,6 +33,7 @@ function deploymentFor(tiers: readonly string[]): PluroraDeploymentConfig {
     controlServerUrl: 'http://127.0.0.1:4319',
     environment: 'development',
     database: { strategy: 'shared-cloud-development', projectRef: 'ref' },
+    project: { protectedBranch: 'main' },
     modelRegistry: Object.fromEntries(tiers.map(tier => [tier, `model-for-${tier}`])),
   }
 }

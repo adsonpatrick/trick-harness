@@ -27,6 +27,7 @@ function validConfig(): Record<string, unknown> {
     controlServerUrl: 'http://127.0.0.1:4319',
     environment: 'development',
     database: { strategy: 'shared-cloud-development', projectRef: 'uljaajwwnygopsyvwsre' },
+    project: { protectedBranch: 'main' },
     modelRegistry: Object.fromEntries(PLURORA_SEMANTIC_TIERS.map(tier => [tier, `model-for-${tier}`])),
   }
 }
@@ -46,6 +47,33 @@ describe('parseDeploymentConfig', () => {
     expect(config.database.strategy).toBe('shared-cloud-development')
     expect(config.database.projectRef).toBe('uljaajwwnygopsyvwsre')
     expect(Object.keys(config.modelRegistry).toSorted()).toEqual([...PLURORA_SEMANTIC_TIERS].toSorted())
+  })
+
+  it('reads the branch the change set is measured against', () => {
+    expect(parseDeploymentConfig(validConfig()).project.protectedBranch).toBe('main')
+  })
+
+  it('refuses a deployment that names no protected branch', () => {
+    const { project: _project, ...rest } = validConfig()
+    refuses(rest, 'project')
+    refuses({ ...validConfig(), project: { protectedBranch: '' } }, 'protectedBranch')
+    refuses({ ...validConfig(), project: { protectedBranch: '   ' } }, 'protectedBranch')
+  })
+
+  it('refuses anything but a plain branch name', () => {
+    // The name is pasted into a revision range this host asks Git to resolve.
+    // Every character below means something to Git's revision grammar, so a
+    // name carrying one selects a range nobody configured.
+    for (const branch of [
+      'main branch', 'release..main', 'main~1', 'main^', 'refs:main',
+      'ma?in', 'ma*in', 'ma[in', '-main', 'main@{upstream}', 'main\\x',
+    ]) {
+      refuses({ ...validConfig(), project: { protectedBranch: branch } }, 'protectedBranch')
+    }
+  })
+
+  it('refuses a project block naming a setting the host does not own', () => {
+    refuses({ ...validConfig(), project: { protectedBranch: 'main', remote: 'upstream' } }, 'remote')
   })
 
   it('refuses a document that is not an object', () => {

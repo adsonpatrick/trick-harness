@@ -15,6 +15,7 @@
     "@deepseek-ai/dsh-subagent-codex": "workspace:^",
     "@deepseek-ai/dsh-subprocess": "workspace:^",
     "@opencode-ai/sdk": "1.18.23",
+    "@trick-harness/change-impact": "workspace:^",
     "@trick-harness/composition": "workspace:^",
     "@trick-harness/contracts": "workspace:^",
     "@trick-harness/control-server": "workspace:^",

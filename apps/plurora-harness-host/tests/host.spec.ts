@@ -38,6 +38,7 @@ function deployment(overrides: Record<string, unknown> = {}): Record<string, unk
     controlServerUrl: 'http://127.0.0.1:0',
     environment: 'development',
     database: { strategy: 'shared-cloud-development', projectRef: 'uljaajwwnygopsyvwsre' },
+    project: { protectedBranch: 'main' },
     modelRegistry: Object.fromEntries(PLURORA_SEMANTIC_TIERS.map(tier => [tier, `model-for-${tier}`])),
     ...overrides,
   }

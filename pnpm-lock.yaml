@@ -379,6 +379,9 @@ importers:
       '@opencode-ai/sdk':
         specifier: 1.18.23
         version: 1.18.23
+      '@trick-harness/change-impact':
+        specifier: workspace:^
+        version: link:../../packages/core/change-impact
       '@trick-harness/composition':
         specifier: workspace:^
         version: link:../../packages/composition/runtime

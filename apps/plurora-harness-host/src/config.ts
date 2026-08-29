@@ -66,11 +66,26 @@ const KNOWN_KEYS = new Set([
   'controlServerUrl',
   'environment',
   'database',
+  'project',
   'modelRegistry',
 ])
 
 /** The keys `database` may declare. */
 const KNOWN_DATABASE_KEYS = new Set(['strategy', 'projectRef'])
+
+/** The keys `project` may declare. */
+const KNOWN_PROJECT_KEYS = new Set(['protectedBranch'])
+
+/**
+ * A plain branch name, and nothing Git's revision grammar reads as an operator.
+ *
+ * The name is pasted into a revision range this host asks Git to resolve, so a
+ * name carrying `..`, `~`, `^`, `:`, `@{`, a glob character, whitespace or a
+ * leading `-` selects a range nobody configured — or is read as an option
+ * rather than a ref. Allowing only this shape is narrower than Git's own rules
+ * on purpose: a deployment file names a branch, not an expression.
+ */
+const BRANCH_NAME = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/
 
 /** Raised when the deployment file cannot be read, parsed, or trusted. */
 export class DeploymentConfigError extends Error {
@@ -88,6 +103,9 @@ export interface PluroraDeploymentConfig {
   readonly database: {
     readonly strategy: typeof DATABASE_STRATEGY
     readonly projectRef: string
+  }
+  readonly project: {
+    readonly protectedBranch: string
   }
   readonly modelRegistry: Readonly<Record<string, string>>
 }
@@ -177,6 +195,21 @@ function requireDatabase(source: Record<string, unknown>): PluroraDeploymentConf
   return { strategy, projectRef }
 }
 
+/** Read the project settings the host reads Git under. */
+function requireProject(source: Record<string, unknown>): PluroraDeploymentConfig['project'] {
+  const project = source['project']
+  if (!isRecord(project)) refuse('project must be a JSON object')
+  refuseUnknownKeys(project, KNOWN_PROJECT_KEYS, 'project.')
+  const branch = project['protectedBranch']
+  if (typeof branch !== 'string' || branch.trim() === '') {
+    refuse('project.protectedBranch must be a non-empty string')
+  }
+  if (!BRANCH_NAME.test(branch) || branch.includes('..')) {
+    refuse('project.protectedBranch must be a plain branch name')
+  }
+  return { protectedBranch: branch }
+}
+
 /** Read the tier-to-model table, holding it to exactly the routed tiers. */
 function requireModelRegistry(source: Record<string, unknown>): Readonly<Record<string, string>> {
   const registry = source['modelRegistry']
@@ -220,6 +253,7 @@ export function parseDeploymentConfig(raw: unknown): PluroraDeploymentConfig {
     controlServerUrl: requireLoopbackUrl(raw),
     environment: requireExactly(raw, 'environment', ENVIRONMENT),
     database: requireDatabase(raw),
+    project: requireProject(raw),
     modelRegistry: requireModelRegistry(raw),
   }
 }

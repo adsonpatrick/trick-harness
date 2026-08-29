@@ -22,6 +22,8 @@ import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-sub
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import type { PluroraDeploymentConfig } from './config.ts'
 import { loadDeploymentConfig } from './config.ts'
+import type { ProjectChangeSetReader } from './change-set.ts'
+import { createGitChangeSetReader } from './change-set.ts'
 import type { ModelCatalogReader } from './model-registry.ts'
 import { assertModelsAvailable, buildModelRegistry } from './model-registry.ts'
 import { createProjectDatabaseVerifier } from './project-database.ts'
@@ -98,6 +100,15 @@ export interface PluroraHost {
    * the run saying which one it was held to.
    */
   readonly databaseVerification: DatabaseVerificationCapabilityPort
+  /**
+   * What the published branch actually changed.
+   *
+   * Held on the host rather than inside the composition because it is a
+   * project seam, not harness mechanism: the harness knows a delivered change
+   * has an actual write set, and this deployment knows it is read with Git in
+   * this checkout against the branch the deployment file names.
+   */
+  readonly changeSet: ProjectChangeSetReader
   /** The composed harness: the runtime, the policy and the control server. */
   readonly harness: ComposedHarness
   /** Where the control server actually bound, once it was listening. */
@@ -161,6 +172,13 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       sessionId: options.sessionId ?? `plurora-${randomUUID()}`,
     })
     unwind.push(async () => { await durable.dispose() })
+
+    const changeSet = createGitChangeSetReader({
+      projectRoot: options.projectRoot,
+      protectedBranch: config.project.protectedBranch,
+      disposeGraceMs,
+      spawn: options.spawn,
+    })
 
     const databaseVerification = createProjectDatabaseVerifier({
       projectRoot: options.projectRoot,
@@ -228,6 +246,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       config,
       registry,
       databaseVerification,
+      changeSet,
       harness,
       control,
       session: durable.session,
