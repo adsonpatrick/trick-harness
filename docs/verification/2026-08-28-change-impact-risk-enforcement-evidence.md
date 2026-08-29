@@ -139,4 +139,8 @@ Fixed by two rules in `profiles/plurora/change-impact-policy.ts`: `credential-ma
 
 ## 7. Head SHA
 
-The tree this evidence was produced on is the commit that adds this document. Its parent is `a1a81e726b043f4abdc8752cc5b3d56e17b4b2dc`.
+```text
+195cbbcf080a3037340c885b6824852a3cff781a
+```
+
+Its parent is `a1a81e726b043f4abdc8752cc5b3d56e17b4b2dc`. Sections 1 through 6 were produced on the tree this commit records; the commit adds only this document, the README paragraph and the plan's checkboxes on top of it.
