@@ -439,6 +439,38 @@ export interface ConformanceContract {
   readonly summary: string
 }
 
+/**
+ * A conformance reading reduced to what may leave the run.
+ *
+ * A status poll and a durable log both read this, and both outlive whoever was
+ * watching. So it carries which documents were judged, how many obligations
+ * each of them set, how the answers came out and the verdict — and no free text
+ * a provider wrote. The per-obligation requirement and summary stay in the
+ * stage's own record, where a person reads them deliberately rather than having
+ * them rendered into a chat window by a bridge.
+ */
+export interface ConformanceStatusSummary {
+  /** Repository-relative path of the approved specification. */
+  readonly specPath: string
+  /** SHA-256 of that specification. */
+  readonly specSha256: string
+  /** Repository-relative path of the approved plan. */
+  readonly planPath: string
+  /** SHA-256 of that plan. */
+  readonly planSha256: string
+  /**
+   * How many obligations each source set.
+   *
+   * Carried beside the counts so a reader can tell a complete reading from one
+   * that answered fewer obligations than the documents declare.
+   */
+  readonly expected: Readonly<Record<ConformanceSource, number>>
+  /** How many answers landed on each status. */
+  readonly counts: Readonly<Record<ConformanceItemStatus, number>>
+  /** The reading's overall judgement. */
+  readonly verdict: WorkflowVerdict
+}
+
 /** What a workflow was asked to accomplish, as approved before it started. */
 export interface WorkflowObjective {
   /** Stable workflow id, durable across restarts. */

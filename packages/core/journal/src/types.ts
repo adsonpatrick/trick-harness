@@ -12,6 +12,7 @@
  */
 
 import type {
+  ConformanceStatusSummary,
   DiagnosisContract,
   EvidenceRef,
   Finding,
@@ -48,7 +49,27 @@ declare module '@deepseek-ai/dsh-session/types' {
       requirement: string
       risk: Risk
       workload: Workload
+      /** Repository-relative path of the approved specification. */
+      specPath: string
+      /** SHA-256 of that specification, so a later edit is visible as a different document. */
+      specSha256: string
+      /** Repository-relative path of the approved plan. */
+      planPath: string
+      /** SHA-256 of that plan. */
+      planSha256: string
     }
+    /**
+     * One conformance reading, reduced to hashes, counts and a verdict.
+     *
+     * The reading itself is a model's answer about approved documents, and
+     * neither the documents nor the answer belong in a log that outlives the
+     * run. What survives is which documents were judged, how many obligations
+     * they set, how the answers came out, and what that made the reading.
+     *
+     * Written once per conformance stage, so a repair that forced a second
+     * reading leaves both and the later one is the branch's standing.
+     */
+    'harness/conformance': { workflowId: string } & ConformanceStatusSummary
     /**
      * The route one stage was dispatched on, with the reasons that produced it.
      * `reasonCodes` and `policyVersion` are what make the decision explainable

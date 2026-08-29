@@ -12,6 +12,7 @@
 
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {
+  ConformanceStatusSummary,
   DiagnosisContract,
   EvidenceRef,
   Finding,
@@ -52,6 +53,7 @@ export const HARNESS_EVENT_TYPES = [
   'harness/verdict',
   'harness/delivery',
   'harness/blocker',
+  'harness/conformance',
   'harness/circuit-breaker',
   'harness/workflow-end',
 ] as const
@@ -126,7 +128,16 @@ export interface BlockerRecord {
 export interface WorkflowProjection {
   readonly workflowId: string
   /** Absent when the log holds no start event for this workflow. */
-  readonly objective?: Pick<WorkflowObjective, 'id' | 'cwd' | 'requirement' | 'risk' | 'workload' | 'profileId'>
+  readonly objective?:
+    & Pick<WorkflowObjective, 'id' | 'cwd' | 'requirement' | 'risk' | 'workload' | 'profileId'>
+    & Pick<WorkflowObjective, 'approvedArtifacts'>
+  /**
+   * The latest conformance reading this log holds, bounded.
+   *
+   * The latest rather than every one: a repair after a reading invalidates it,
+   * so the standing answer for the branch is the last one written.
+   */
+  readonly conformance?: ConformanceStatusSummary
   readonly routes: readonly RouteRecord[]
   readonly findings: readonly Finding[]
   readonly diagnoses: readonly DiagnosisContract[]
@@ -210,6 +221,39 @@ export class WorkflowJournal {
       requirement: objective.requirement,
       risk: objective.risk,
       workload: objective.workload,
+      specPath: objective.approvedArtifacts.spec.path,
+      specSha256: objective.approvedArtifacts.spec.sha256,
+      planPath: objective.approvedArtifacts.plan.path,
+      planSha256: objective.approvedArtifacts.plan.sha256,
+    })
+  }
+
+  /**
+   * Record one conformance reading.
+   *
+   * Rebuilt field by field like every other payload, and for the sharpest
+   * version of the usual reason: the caller's summary is derived from a
+   * provider's answer about the approved documents, and a spread would carry
+   * whatever else that answer arrived attached to into a durable log.
+   * @param summary - The bounded reading.
+   */
+  conformance(summary: ConformanceStatusSummary): void {
+    this.#session.append('harness/conformance', {
+      workflowId: this.#workflowId,
+      specPath: summary.specPath,
+      specSha256: summary.specSha256,
+      planPath: summary.planPath,
+      planSha256: summary.planSha256,
+      expected: { spec: summary.expected.spec, plan: summary.expected.plan, dod: summary.expected.dod },
+      counts: {
+        PASS: summary.counts.PASS,
+        MISSING: summary.counts.MISSING,
+        PARTIAL: summary.counts.PARTIAL,
+        FAIL: summary.counts.FAIL,
+        BLOCKED: summary.counts.BLOCKED,
+        INCONCLUSIVE: summary.counts.INCONCLUSIVE,
+      },
+      verdict: summary.verdict,
     })
   }
 
@@ -571,6 +615,7 @@ function harnessPayload(event: SessionEvent): HarnessPayload | undefined {
 /** Mutable accumulator behind {@link projectWorkflow}. */
 interface Projected {
   objective?: WorkflowProjection['objective']
+  conformance?: ConformanceStatusSummary
   routes: RouteRecord[]
   findings: Finding[]
   diagnoses: DiagnosisContract[]
@@ -589,7 +634,7 @@ interface Projected {
 function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): void {
   switch (type) {
     case 'harness/workflow-start': {
-      const payload = data as unknown as { objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload'] }
+      const payload = data as unknown as { objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload']; specPath: string; specSha256: string; planPath: string; planSha256: string }
       state.objective = {
         id: payload.objectiveId,
         cwd: payload.cwd,
@@ -597,6 +642,23 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
         risk: payload.risk,
         workload: payload.workload,
         profileId: payload.profileId,
+        approvedArtifacts: {
+          spec: { path: payload.specPath, sha256: payload.specSha256 },
+          plan: { path: payload.planPath, sha256: payload.planSha256 },
+        },
+      }
+      return
+    }
+    case 'harness/conformance': {
+      const payload = data as unknown as ConformanceStatusSummary
+      state.conformance = {
+        specPath: payload.specPath,
+        specSha256: payload.specSha256,
+        planPath: payload.planPath,
+        planSha256: payload.planSha256,
+        expected: payload.expected,
+        counts: payload.counts,
+        verdict: payload.verdict,
       }
       return
     }
@@ -744,6 +806,7 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     openCapabilities: Object.freeze(openCapabilities),
     executorStarts: state.started.length,
     ...state.objective === undefined ? {} : { objective: state.objective },
+    ...state.conformance === undefined ? {} : { conformance: state.conformance },
     ...state.end === undefined ? {} : { end: state.end },
   })
 }

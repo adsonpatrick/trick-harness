@@ -16,10 +16,15 @@
  */
 
 import type {
+  ApprovedArtifactSet,
   ConformanceContract,
+  ConformanceItemStatus,
   ConformanceManifest,
   ConformanceObligation,
+  ConformanceSource,
+  ConformanceStatusSummary,
 } from '@trick-harness/contracts'
+import { CONFORMANCE_ITEM_STATUSES, CONFORMANCE_SOURCES } from '@trick-harness/contracts'
 
 /** A manifest or a result the gate refuses, named so a caller can tell the refusals apart. */
 export class ConformanceError extends Error {
@@ -181,4 +186,43 @@ export function validateConformanceCoverage(
   }
 
   return result
+}
+
+/**
+ * Reduce a validated reading to what a status poll and a durable log may hold.
+ *
+ * Counting rather than carrying: every field here is a hash, a path, a number
+ * or a verdict, so nothing a provider wrote can reach a log that outlives the
+ * run by travelling inside the summary. The counts are built over the whole
+ * status vocabulary, so a status nothing landed on reads as zero rather than
+ * as absent — a reader can tell "no failures" from "this build did not count
+ * failures".
+ *
+ * @param artifacts - The approved documents, for the paths they were read from.
+ * @param manifest - The obligation set that was judged.
+ * @param result - The validated reading.
+ * @returns The bounded summary.
+ */
+export function summarizeConformance(
+  artifacts: ApprovedArtifactSet,
+  manifest: ConformanceManifest,
+  result: ConformanceContract,
+): ConformanceStatusSummary {
+  const expected = {} as Record<ConformanceSource, number>
+  for (const source of CONFORMANCE_SOURCES) {
+    expected[source] = manifest.obligations.filter(item => item.source === source).length
+  }
+  const counts = {} as Record<ConformanceItemStatus, number>
+  for (const status of CONFORMANCE_ITEM_STATUSES) {
+    counts[status] = result.items.filter(item => item.status === status).length
+  }
+  return Object.freeze({
+    specPath: artifacts.spec.path,
+    specSha256: manifest.specSha256,
+    planPath: artifacts.plan.path,
+    planSha256: manifest.planSha256,
+    expected: Object.freeze(expected),
+    counts: Object.freeze(counts),
+    verdict: result.verdict,
+  })
 }

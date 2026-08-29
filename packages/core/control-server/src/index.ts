@@ -24,7 +24,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import {
   ContractError, RISKS, WORKLOADS, parseApprovedArtifactSet, parseStageRouteOverride,
 } from '@trick-harness/contracts'
-import type { StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
+import type { ConformanceStatusSummary, StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 import { ControlError, LOOPBACK_HOSTS } from './types.ts'
 import type {
@@ -171,6 +171,27 @@ function statusOfOutcome(outcome: WorkflowOutcome): ControlWorkflowStatus {
     repairCycles: outcome.repairCycles,
     executorStarts: outcome.executorStarts,
     requiresWorldVerification: false,
+    // Rebuilt field by field rather than carried: the outcome's summary is
+    // derived from a provider's answer, and a spread would render whatever else
+    // travelled with it into a status a bridge shows people.
+    ...outcome.conformance === undefined ? {} : { conformance: conformanceOf(outcome.conformance) },
+  })
+}
+
+/**
+ * Reduce a conformance reading to the fields this surface may say out loud.
+ * @param summary - The reading the run established.
+ * @returns The same fields, rebuilt.
+ */
+function conformanceOf(summary: ConformanceStatusSummary): ConformanceStatusSummary {
+  return Object.freeze({
+    specPath: summary.specPath,
+    specSha256: summary.specSha256,
+    planPath: summary.planPath,
+    planSha256: summary.planSha256,
+    expected: Object.freeze({ ...summary.expected }),
+    counts: Object.freeze({ ...summary.counts }),
+    verdict: summary.verdict,
   })
 }
 

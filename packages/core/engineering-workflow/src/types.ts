@@ -8,7 +8,7 @@ import type {
   WorkflowObjective,
   WorkflowVerdict,
 } from '@trick-harness/contracts'
-import type { ConformanceManifest } from '@trick-harness/contracts'
+import type { ConformanceManifest, ConformanceStatusSummary } from '@trick-harness/contracts'
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { WorkflowEndState } from '@trick-harness/journal'
 import type { RepairEvidence } from './repair.ts'
@@ -61,6 +61,13 @@ export interface WorkflowOutcome {
   readonly stages: readonly StageFacts[]
   readonly repairCycles: number
   readonly executorStarts: number
+  /**
+   * The latest conformance reading, bounded.
+   *
+   * Absent when nothing established conformance, which is a different fact
+   * from a reading that found nothing satisfied.
+   */
+  readonly conformance?: ConformanceStatusSummary
 }
 
 /** What a restart may conclude about a workflow it finds in a durable log. */

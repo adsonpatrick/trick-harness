@@ -395,17 +395,17 @@ interface ConformanceStatusSummary {
 }
 ```
 
-- [ ] **Step 1: Write RED API/parser tests** proving workflow start accepts approved artifacts, rejects malformed/absolute/traversal paths, and status exposes only bounded hashes/counts/verdict rather than whole document/model output.
-- [ ] **Step 2: Write RED journal tests** proving artifact identity and conformance summary survive replay/restart and no event key stores `specText`, `planText`, `prompt`, `transcript`, `reasoning` or provider output.
-- [ ] **Step 3: Implement control and durable projection changes** in the existing `types.ts`/`index.ts` files using current parser/journal conventions.
-- [ ] **Step 4: Run GREEN.**
+- [x] **Step 1: Write RED API/parser tests** proving workflow start accepts approved artifacts, rejects malformed/absolute/traversal paths, and status exposes only bounded hashes/counts/verdict rather than whole document/model output.
+- [x] **Step 2: Write RED journal tests** proving artifact identity and conformance summary survive replay/restart and no event key stores `specText`, `planText`, `prompt`, `transcript`, `reasoning` or provider output.
+- [x] **Step 3: Implement control and durable projection changes** in the existing `types.ts`/`index.ts` files using current parser/journal conventions.
+- [x] **Step 4: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/control-server packages/core/journal
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add packages/core/control-server packages/core/journal

@@ -13,6 +13,7 @@
 import { READ_ONLY_ROLES, parseConformanceContract } from '@trick-harness/contracts'
 import type {
   ConformanceManifest,
+  ConformanceStatusSummary,
   DiagnosisContract,
   EvidenceRef,
   Finding,
@@ -57,7 +58,12 @@ import {
 } from './repair.ts'
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
 import { planPullRequestStages } from './lifecycle.ts'
-import { ConformanceError, buildConformanceManifest, validateConformanceCoverage } from './conformance.ts'
+import {
+  ConformanceError,
+  buildConformanceManifest,
+  summarizeConformance,
+  validateConformanceCoverage,
+} from './conformance.ts'
 import type { ApprovedArtifactTexts } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
@@ -321,6 +327,16 @@ function blockerKindOfRepairError(error: RepairError): BlockerKind {
  */
 export class WorkflowRunner {
   readonly #workflowId: string
+
+  /**
+   * The latest conformance reading, bounded, once one has been established.
+   *
+   * Held on the runner rather than threaded through every terminal path: a
+   * reading survives whatever the run does afterwards, and a run that failed
+   * after conformance answered still has an answer worth reporting. One runner
+   * serves one workflow, so there is nothing here to leak into another.
+   */
+  #conformance: ConformanceStatusSummary | undefined
   readonly #options: WorkflowRuntimeOptions
   readonly #now: () => number
   #controller: AbortController | undefined
@@ -836,6 +852,8 @@ export class WorkflowRunner {
       const cause = error instanceof ConformanceError ? error.code : 'unreadable'
       return await unestablished(`conformance produced no result that could be held to the approved artifacts: ${cause}`)
     }
+    this.#conformance = summarizeConformance(objective.approvedArtifacts, manifest, contract)
+    await this.#options.journal.conformance(this.#conformance)
     const verdict = weaker(dispatched.facts.verdict, contract.verdict)
     if (verdict === dispatched.facts.verdict) return { facts: dispatched.facts }
     await this.#options.journal.verdict(stage.stageId, stage.role, verdict, contract.summary, [])
@@ -1299,6 +1317,7 @@ export class WorkflowRunner {
       stages: Object.freeze([...stages]),
       repairCycles,
       executorStarts,
+      ...this.#conformance === undefined ? {} : { conformance: this.#conformance },
     })
   }
 }
