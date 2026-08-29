@@ -25,6 +25,7 @@ import type {
   ConformanceStatusSummary,
 } from '@trick-harness/contracts'
 import { CONFORMANCE_ITEM_STATUSES, CONFORMANCE_SOURCES } from '@trick-harness/contracts'
+import { ChangeImpactError, normalizeRepositoryPath } from '@trick-harness/change-impact'
 
 /** A manifest or a result the gate refuses, named so a caller can tell the refusals apart. */
 export class ConformanceError extends Error {
@@ -36,6 +37,7 @@ export class ConformanceError extends Error {
     | 'unanswered-obligation'
     | 'unknown-obligation'
     | 'altered-obligation'
+    | 'unreadable-write-set'
 
   /**
    * @param code - Machine-readable cause.
@@ -106,6 +108,111 @@ function declared(
     }))
   }
   return found
+}
+
+/** The label opening the block a task lists its files under. */
+const FILES_BLOCK = /^\*\*Files:\*\*\s*$/
+
+/** Any other bold label, a heading or a rule, all of which close the block. */
+const BLOCK_END = /^(?:\*\*|#{1,6}\s|---\s*$)/
+
+/** A row inside a Files block, whatever it commits the task to doing. */
+const FILE_ENTRY = /^-\s+(?:Create|Modify|Test|Delete):\s*(.*)$/
+
+/** The repository path inside a file entry, and nothing after it. */
+const QUOTED_PATH = /^`([^`]+)`/
+
+/**
+ * A trailing source-line locator, stripped only once the path is in hand.
+ *
+ * Stripped last on purpose: a path is read up to its closing backtick first,
+ * so a filename that legitimately contains a colon is not cut in half by a
+ * rule that was looking for line numbers.
+ */
+const LINE_LOCATOR = /:\d+(?:-\d+)?$/
+
+/** Glob metacharacters, which an approved plan has no business naming. */
+const GLOB_METACHARACTER = /[*?[\]{}]/
+
+/**
+ * Read the set of files the approved Plan committed to writing.
+ *
+ * This is the planned half of change impact, and it is deliberately read by
+ * plain code from the document a person approved rather than reported by the
+ * stage about to do the work. A stage that could state its own planned set
+ * could widen it after the fact and make every unplanned file look approved.
+ *
+ * Only rows inside a `**Files:**` block belonging to a `### Task N:` section
+ * count. A Files block in the preamble summarises the plan rather than
+ * committing a task to anything, and a `- Modify:` line in prose is prose.
+ *
+ * @param planText - The approved Plan, verbatim.
+ * @returns The unique repository paths, sorted, so two reads of one document
+ * produce one set that can be compared with a delivered one.
+ * @throws {ConformanceError} when a declared entry names something that is not
+ * a concrete repository-relative path.
+ */
+export function extractApprovedPlanWriteSet(planText: string): readonly string[] {
+  const paths = new Set<string>()
+  let inTask = false
+  let inFiles = false
+
+  for (const raw of planText.split(/\r?\n/)) {
+    const line = raw.trimEnd()
+    if (PLAN_TASK.test(line)) {
+      inTask = true
+      inFiles = false
+      continue
+    }
+    if (inTask && FILES_BLOCK.test(line)) {
+      inFiles = true
+      continue
+    }
+    if (inFiles && BLOCK_END.test(line)) {
+      inFiles = false
+      continue
+    }
+    if (!inFiles) continue
+
+    const entry = FILE_ENTRY.exec(line)
+    if (entry === null) continue
+    paths.add(readEntryPath(entry[1] ?? ''))
+  }
+
+  return Object.freeze([...paths].sort())
+}
+
+/**
+ * Read one file entry down to the single path it names.
+ *
+ * A malformed row is refused rather than skipped. Skipping it would drop a
+ * file the plan approved out of the planned set, and the delivered change
+ * would then be reported as reaching past what a person agreed to.
+ *
+ * @param body - Whatever followed the entry's `Create:`/`Modify:` label.
+ * @returns The path in repository-relative POSIX form.
+ * @throws {ConformanceError} when the row names no concrete path.
+ */
+function readEntryPath(body: string): string {
+  const quoted = QUOTED_PATH.exec(body.trim())
+  if (quoted === null || (quoted[1] ?? '').trim().length === 0) {
+    throw new ConformanceError('unreadable-write-set', 'the approved Plan declares a file entry naming no path')
+  }
+  const candidate = (quoted[1] ?? '').trim().replace(LINE_LOCATOR, '')
+  if (GLOB_METACHARACTER.test(candidate)) {
+    throw new ConformanceError('unreadable-write-set', 'the approved Plan declares a pattern where it owes a concrete file')
+  }
+  try {
+    return normalizeRepositoryPath(candidate)
+  }
+  catch (cause) {
+    // The path is never quoted back. These refusals are journalled, and a plan
+    // is a document a person wrote, which is a place a secret reaches.
+    if (cause instanceof ChangeImpactError) {
+      throw new ConformanceError('unreadable-write-set', 'the approved Plan declares a file entry that is not a repository-relative path')
+    }
+    throw cause
+  }
 }
 
 /**

@@ -314,23 +314,23 @@ export function extractApprovedPlanWriteSet(planText: string): readonly string[]
 
 The parser only reads entries inside a `**Files:**` block belonging to a `### Task N:` section. It strips a trailing source-line locator such as `:120-145` only after the closing repository path has been identified. Paths containing glob metacharacters `* ? [ ] { }` are refused: the approved Plan is expected to name concrete write/test files.
 
-- [ ] **Step 1: Write RED tests** using a two-task Superpowers fixture with Create/Modify/Test/Delete rows, duplicate paths, prose outside `**Files:**`, and line-range suffixes.
-- [ ] **Step 2: Write adversarial RED tests** for zero file rows, absolute paths, `../`, glob patterns, Windows drive paths, malformed backticks and a fake `- Modify:` line outside a Files block.
-- [ ] **Step 3: Run RED.**
+- [x] **Step 1: Write RED tests** using a two-task Superpowers fixture with Create/Modify/Test/Delete rows, duplicate paths, prose outside `**Files:**`, and line-range suffixes.
+- [x] **Step 2: Write adversarial RED tests** for zero file rows, absolute paths, `../`, glob patterns, Windows drive paths, malformed backticks and a fake `- Modify:` line outside a Files block.
+- [x] **Step 3: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts
 ```
 
-- [ ] **Step 4: Implement the deterministic parser** by reusing `normalizeRepositoryPath` from `@trick-harness/change-impact`; return sorted first-seen unique paths and no document content beyond the path list.
-- [ ] **Step 5: Run GREEN + typecheck.**
+- [x] **Step 4: Implement the deterministic parser** by reusing `normalizeRepositoryPath` from `@trick-harness/change-impact`; return sorted first-seen unique paths and no document content beyond the path list.
+- [x] **Step 5: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow

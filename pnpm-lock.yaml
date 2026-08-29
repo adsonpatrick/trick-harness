@@ -3878,6 +3878,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: workspace:^
         version: link:../session
+      '@trick-harness/change-impact':
+        specifier: workspace:^
+        version: link:../change-impact
       '@trick-harness/contracts':
         specifier: workspace:^
         version: link:../contracts
