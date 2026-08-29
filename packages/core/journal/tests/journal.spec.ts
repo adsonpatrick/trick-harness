@@ -553,6 +553,33 @@ describe('what the log remembers about approved artifacts and conformance', () =
     }
   })
 
+  it('rebuilds the nested counts on the way back, not only on the way in', () => {
+    // The write path rebuilds every field, so nothing rides in on a summary. A
+    // read path that carried `expected` and `counts` by reference would undo
+    // half of that: a log this process did not write — an older build's, or one
+    // edited on disk — could put free text back into a projection that a status
+    // surface then renders.
+    const session = Session.create(SessionId('s-c5'))
+    new WorkflowJournal(session, 'wf-1', async () => true).start(objective)
+    const events = [...session.events, {
+      ...session.events[0],
+      type: 'harness/conformance',
+      data: {
+        workflowId: 'wf-1',
+        ...summary,
+        expected: { ...summary.expected, transcript: 'what the model said' },
+        counts: { ...summary.counts, reasoning: 'why it said it' },
+      },
+    } as never]
+
+    const read = projectWorkflow(events, 'wf-1').conformance
+
+    expect(read?.expected).toEqual(summary.expected)
+    expect(read?.counts).toEqual(summary.counts)
+    expect(JSON.stringify(read)).not.toContain('transcript')
+    expect(JSON.stringify(read)).not.toContain('reasoning')
+  })
+
   it('names the conformance event in the vocabulary the read path knows', () => {
     expect(HARNESS_EVENT_TYPES).toContain('harness/conformance')
     expect(KNOWN_SESSION_EVENT_TYPES.has('harness/conformance')).toBe(true)

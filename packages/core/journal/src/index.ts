@@ -656,8 +656,19 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
         specSha256: payload.specSha256,
         planPath: payload.planPath,
         planSha256: payload.planSha256,
-        expected: payload.expected,
-        counts: payload.counts,
+        expected: {
+          spec: payload.expected.spec,
+          plan: payload.expected.plan,
+          dod: payload.expected.dod,
+        },
+        counts: {
+          PASS: payload.counts.PASS,
+          MISSING: payload.counts.MISSING,
+          PARTIAL: payload.counts.PARTIAL,
+          FAIL: payload.counts.FAIL,
+          BLOCKED: payload.counts.BLOCKED,
+          INCONCLUSIVE: payload.counts.INCONCLUSIVE,
+        },
         verdict: payload.verdict,
       }
       return
