@@ -429,18 +429,18 @@ git commit -m "feat(trick): expose bounded conformance status"
 
 **Precondition:** Plan E has created `apps/plurora-harness-host` and has added pinned-schema `model/list` wire support. Task 7 extends that concrete implementation; it does not introduce a second model catalogue path.
 
-- [ ] **Step 1: Write RED host tests** proving conformance receives current approved artifact texts only after host-side path containment/hash verification and receives the deterministic manifest including eight Plurora DoD rows.
-- [ ] **Step 2: Add RED catalogue tests** proving configured `codex.balanced` advertises `high` and `codex.frontier` advertises `xhigh`; unsupported requested effort blocks host readiness instead of downgrading.
-- [ ] **Step 3: Extend the Plan E `model/list` reader** to expose each model's advertised effort strings to the host validator. Preserve product-advertised values/order; do not maintain a guessed model-capability table.
-- [ ] **Step 4: Implement the structured conformance interpreter** so provider output is parsed with `parseConformanceContract` and validated against the manifest before stage facts are accepted.
-- [ ] **Step 5: Run GREEN + real authenticated catalogue smoke.**
+- [x] **Step 1: Write RED host tests** proving conformance receives current approved artifact texts only after host-side path containment/hash verification and receives the deterministic manifest including eight Plurora DoD rows.
+- [x] **Step 2: Add RED catalogue tests** proving configured `codex.balanced` advertises `high` and `codex.frontier` advertises `xhigh`; unsupported requested effort blocks host readiness instead of downgrading.
+- [x] **Step 3: Extend the Plan E `model/list` reader** to expose each model's advertised effort strings to the host validator. Preserve product-advertised values/order; do not maintain a guessed model-capability table.
+- [x] **Step 4: Implement the structured conformance interpreter** so provider output is parsed with `parseConformanceContract` and validated against the manifest before stage facts are accepted.
+- [x] **Step 5: Run GREEN + real authenticated catalogue smoke.**
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
 corepack pnpm vitest run packages/subagent/subagent-codex/tests/subagent-codex.spec.ts packages/subagent/subagent-codex/tests/real-product.spec.ts profiles/plurora/tests/routing.spec.ts
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add apps/plurora-harness-host packages/subagent/subagent-codex
@@ -456,7 +456,7 @@ git commit -m "feat(trick): wire conformance through the Plurora host"
 - Create: `docs/verification/2026-08-28-implementation-conformance-dod-evidence.md`
 - Modify: `docs/verification/2026-08-27-neurovia-deployment-enablement-evidence.md`
 
-- [ ] **Step 1: Run deterministic gates.**
+- [x] **Step 1: Run deterministic gates.**
 
 ```bash
 corepack pnpm run constraints
@@ -467,13 +467,13 @@ corepack pnpm run test:trick
 corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
-- [ ] **Step 2: Run a fixture PR lifecycle** whose Spec has two explicit criterion IDs and Plan has two tasks; prove manifest contains exactly 2 Spec + 2 Plan + 8 baseline DoD rows and `PR_READY` is reached only after conformance PASS + verify-final PASS.
-- [ ] **Step 3: Run adversarial fixtures:** omitted Plan task, changed Spec hash, duplicate result item, unknown obligation substitution and high-risk OpenCode implementation with Codex unavailable. Each must fail/block/inconclusive according to the Spec instead of reaching `PR_READY`.
-- [ ] **Step 4: Run real authenticated Codex catalogue evidence** showing concrete models mapped to `codex.balanced` and `codex.frontier` advertise `high` and `xhigh`; record ids but no credentials.
-- [ ] **Step 5: Independently review** role authority, artifact path containment, hash integrity, conformance coverage, fallback independence, journal redaction and PR readiness. Fix confirmed defects and rerun affected gates.
-- [ ] **Step 6: Update Plan E evidence** to label its recorded SHA as intermediate and reference the post-Plan-F evidence file as the installation authority.
-- [ ] **Step 7: Record the final reviewed exact 40-hex SHA.** This post-Plan-F SHA supersedes every intermediate Plan E SHA as the only initial runtime revision Plan C* may pin.
-- [ ] **Step 8: Commit evidence/docs.**
+- [x] **Step 2: Run a fixture PR lifecycle** whose Spec has two explicit criterion IDs and Plan has two tasks; prove manifest contains exactly 2 Spec + 2 Plan + 8 baseline DoD rows and `PR_READY` is reached only after conformance PASS + verify-final PASS.
+- [x] **Step 3: Run adversarial fixtures:** omitted Plan task, changed Spec hash, duplicate result item, unknown obligation substitution and high-risk OpenCode implementation with Codex unavailable. Each must fail/block/inconclusive according to the Spec instead of reaching `PR_READY`.
+- [x] **Step 4: Run real authenticated Codex catalogue evidence** showing concrete models mapped to `codex.balanced` and `codex.frontier` advertise `high` and `xhigh`; record ids but no credentials.
+- [x] **Step 5: Independently review** role authority, artifact path containment, hash integrity, conformance coverage, fallback independence, journal redaction and PR readiness. Fix confirmed defects and rerun affected gates.
+- [x] **Step 6: Update Plan E evidence** to label its recorded SHA as intermediate and reference the post-Plan-F evidence file as the installation authority.
+- [x] **Step 7: Record the final reviewed exact 40-hex SHA.** This post-Plan-F SHA supersedes every intermediate Plan E SHA as the only initial runtime revision Plan C* may pin.
+- [x] **Step 8: Commit evidence/docs.**
 
 ```bash
 git add README.trick-harness.md docs/verification

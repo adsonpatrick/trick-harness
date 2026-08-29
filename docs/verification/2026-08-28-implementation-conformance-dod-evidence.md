@@ -145,8 +145,8 @@ The one initial runtime revision Plan C and its successors may pin:
 ```
 
 That is the commit this file was first written into, and it is the tree every gate and every
-fixture above ran on — the only change after it is the two lines that write the SHA into this
-paragraph, which touch no code. This SHA supersedes every intermediate Plan E SHA.
+fixture above ran on — the only changes after it are this paragraph's own SHA and the
+plan's step checkboxes, neither of which touches code. This SHA supersedes every intermediate Plan E SHA.
 
 Anything not listed as proven above is not proven at this SHA. In particular the NeuroVia
 database canary is still pending Plan C, and the Supabase Preview path is still unproven for
