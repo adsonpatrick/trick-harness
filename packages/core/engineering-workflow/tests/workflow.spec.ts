@@ -1689,3 +1689,68 @@ describe('splitting a pull-request run at delivery', () => {
     expect(outcome.stages.map(stage => stage.role)).toStrictEqual(planStages(OBJECTIVE).map(stage => stage.role))
   })
 })
+
+describe('routing a stage as what the change turned out to be', () => {
+  /** A table with rows only an impact-derived fact can reach. */
+  const IMPACT_POLICY: RoutingPolicy = Object.freeze({
+    ...POLICY,
+    rules: Object.freeze([
+      Object.freeze({ id: 'large-write-implementation', when: Object.freeze({ role: 'implement', writeVolume: 'large' }), use: Object.freeze({ executor: 'workhorse', tier: 'implementation' }) }),
+      Object.freeze({ id: 'auth-implementation', when: Object.freeze({ role: 'implement', taskClass: 'auth-change' }), use: Object.freeze({ executor: 'auditor', tier: 'implementation' }) }),
+      ...POLICY.rules,
+    ]),
+  })
+
+  const ROUTED_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    routingPolicy: Object.freeze({ rules: IMPACT_POLICY.rules, fallbackRules: IMPACT_POLICY.fallbackRules }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', paths: Object.freeze(['src/auth/**']), use: Object.freeze({ surface: 'auth', taskClass: 'auth-change', riskFloor: 'critical' }) }),
+        Object.freeze({ id: 'bulk', paths: Object.freeze(['src/bulk/**']), use: Object.freeze({ surface: 'bulk' }) }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  /** The routes the run recorded, in the order they were taken. */
+  async function routesFor(planned: readonly string[]): Promise<readonly { role: string; executor: string }[]> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: ROUTED_PROFILE, policy: IMPACT_POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    for (const name of ['builder', 'reviewer', 'workhorse', 'auditor']) {
+      executors.register(provider(name, async () => passing(name)))
+    }
+
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => planned, actualPaths: async () => planned },
+      ...CONFORMS,
+    })
+    return projectWorkflow(session.events, 'wf-1').routes.map(route => ({ role: route.role, executor: route.executor }))
+  }
+
+  it('routes the implementation on the class the paths named', async () => {
+    const routes = await routesFor(['src/auth/session.ts'])
+
+    expect(routes.find(route => route.role === 'implement')?.executor).toBe('auditor')
+  })
+
+  it('routes a large write on the volume the change actually has', async () => {
+    const paths = Array.from({ length: 13 }, (_, index) => `src/bulk/file-${index}.ts`)
+    const routes = await routesFor(paths)
+
+    expect(routes.find(route => route.role === 'implement')?.executor).toBe('workhorse')
+  })
+
+  it('leaves a change no rule spoke about on the table it always used', async () => {
+    const routes = await routesFor(['docs/readme.md'])
+
+    expect(routes.find(route => route.role === 'implement')?.executor).toBe('builder')
+  })
+})

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import type { EffectiveChangeImpact, Risk } from '@trick-harness/contracts'
 import type { HarnessProfile } from '@trick-harness/profile'
 import {
+  impactRoutingFacts,
   planPullRequestCertificationStages,
   planPullRequestImplementationStages,
   resolveCertificationRequirements,
@@ -194,5 +195,74 @@ describe('planning the two halves of a pull-request run', () => {
     const stages = planPullRequestCertificationStages(resolveCertificationRequirements(profile, impact(['auth'])))
 
     expect(stages.at(-1)).toMatchObject({ stageId: 'verify-final', role: 'verify' })
+  })
+})
+
+describe('what the measured impact tells the router', () => {
+  const objective = {
+    id: 'obj-1',
+    cwd: '/repo',
+    requirement: 'do the thing',
+    risk: 'low',
+    workload: 'medium',
+    profileId: 'fixture',
+    approvedArtifacts: { spec: { path: 's', sha256: 'a' }, plan: { path: 'p', sha256: 'b' } },
+  } as const
+
+  it('routes on the risk the paths resolved to, not the one the objective was opened at', () => {
+    const facts = impactRoutingFacts(
+      { stageId: 'implement-1', role: 'implement' }, objective, profile, impact(['auth'], 'critical'),
+    )
+
+    expect(facts.risk).toBe('critical')
+    expect(facts.independenceRequirement).toBe('cross-executor-required')
+  })
+
+  it('carries the write volume the change actually has', () => {
+    const large = impact([], 'low', { writeVolume: 'large' })
+
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, objective, profile, large).writeVolume)
+      .toBe('large')
+  })
+
+  it('never lets a small change lower what the role itself writes', () => {
+    // The role-shaped volume is a floor, not a default. An implementation that
+    // happened to touch one file is still an implementation, and routing it as
+    // a smaller write than the role implies is a bar going down.
+    const small = impact([], 'low', { writeVolume: 'small' })
+
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, objective, profile, small).writeVolume)
+      .toBe('medium')
+  })
+
+  it('gives every read-only role no write volume at all', () => {
+    const large = impact([], 'low', { writeVolume: 'large' })
+
+    for (const role of ['review', 'qa', 'security', 'verify', 'conformance', 'debug'] as const) {
+      expect(impactRoutingFacts({ stageId: `${role}-1`, role }, objective, profile, large).writeVolume).toBe('none')
+    }
+  })
+
+  it('prefers the task class the paths named over the one the caller guessed', () => {
+    // Classification is ordered by the profile's own rule order, so the first
+    // class it produced is the one policy speaks about first.
+    const classified = impact(['auth'], 'low', { taskClasses: ['auth-change', 'ui-change'] })
+
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, { ...objective, taskClass: 'chore' }, profile, classified).taskClass)
+      .toBe('auth-change')
+  })
+
+  it('falls back to the caller task class only when the paths named none', () => {
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, { ...objective, taskClass: 'chore' }, profile, impact([])).taskClass)
+      .toBe('chore')
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, objective, profile, impact([])).taskClass)
+      .toBeUndefined()
+  })
+
+  it('carries the capabilities the change requires of the runtime', () => {
+    const database = impact(['database'], 'critical', { requiredCapabilities: ['database-verification'] })
+
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, objective, profile, database).requiredCapabilities)
+      .toStrictEqual(['database-verification'])
   })
 })

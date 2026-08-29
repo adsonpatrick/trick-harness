@@ -64,6 +64,7 @@ import {
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
 import { planPullRequestStages } from './lifecycle.ts'
 import {
+  impactRoutingFacts,
   planPullRequestCertificationStages,
   planPullRequestImplementationStages,
   resolveCertificationRequirements,
@@ -257,6 +258,17 @@ interface AvailabilityState {
    * and a budget that forgot them would let an outage loop for free.
    */
   rerouteStarts: number
+}
+
+/**
+ * What the run's change was measured to be, as it stands.
+ *
+ * A box for the same reason the override is one: the reading is replaced once,
+ * after delivery, and every stage routed after that has to see the replacement
+ * rather than the one taken before any of the work existed.
+ */
+interface ImpactBox {
+  impact?: EffectiveChangeImpact
 }
 
 /**
@@ -457,7 +469,9 @@ export class WorkflowRunner {
     // What the paths say this change is. The planned reading is taken before
     // anything writes, so the run cannot be classified from work it has already
     // done; the actual one after delivery, once there is a branch to read.
-    let impact: EffectiveChangeImpact | undefined
+    // Carried as a box rather than a value: it is re-read after delivery, and
+    // every stage routed afterwards has to see the reading that replaced it.
+    const measurement: ImpactBox = {}
     let plannedPaths: readonly string[] | undefined
     // Set once the certification half has been planned, so a re-delivery after
     // a repair does not queue a second copy of it.
@@ -470,7 +484,7 @@ export class WorkflowRunner {
         return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
       }
       plannedPaths = read.paths
-      impact = mergeChangeImpact({ objectiveRisk: objective.risk, planned: read.facts })
+      measurement.impact = mergeChangeImpact({ objectiveRisk: objective.risk, planned: read.facts })
     }
 
     while (queue.length > 0) {
@@ -586,13 +600,14 @@ export class WorkflowRunner {
           if (typeof read === 'string') {
             return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
           }
-          impact = mergeChangeImpact({
+          const resolved = mergeChangeImpact({
             objectiveRisk: objective.risk,
-            planned: (impact as EffectiveChangeImpact).planned,
+            planned: (measurement.impact as EffectiveChangeImpact).planned,
             actual: read.facts,
           })
+          measurement.impact = resolved
           queue.unshift(...planPullRequestCertificationStages(
-            resolveCertificationRequirements(profile, impact),
+            resolveCertificationRequirements(profile, resolved),
           ))
           certificationPlanned = true
         }
@@ -605,7 +620,7 @@ export class WorkflowRunner {
       try {
         dispatched = await this.#dispatch(
           stage, request, signal, repairCycles, lastMutator, availability,
-          maxExecutorStarts - executorStarts, humanOverride,
+          maxExecutorStarts - executorStarts, humanOverride, measurement,
         )
       } catch (error) {
         // A policy that cannot answer for this stage — a degraded executor no
@@ -972,11 +987,12 @@ export class WorkflowRunner {
     availability: AvailabilityState,
     extraStarts: number,
     humanOverride: OverrideBox,
+    measurement: ImpactBox,
   ): Promise<Dispatched> {
     let spent = 0
     for (;;) {
       const attempt = await this.#attempt(
-        stage, request, signal, priorAttempts, lastMutator, availability, humanOverride,
+        stage, request, signal, priorAttempts, lastMutator, availability, humanOverride, measurement,
       )
       // Only an executor that could not serve the run is retried, and only
       // while the budget the profile set still has room. A wrong answer is not
@@ -1001,10 +1017,11 @@ export class WorkflowRunner {
     lastMutator: string | undefined,
     availability: AvailabilityState,
     humanOverride: OverrideBox,
+    measurement: ImpactBox,
   ): Promise<{ readonly dispatched: Dispatched; readonly reroutable: boolean }> {
     const { journal, executors, policy } = this.#options
     const context = this.#routingContext(
-      stage, request, priorAttempts, lastMutator, availability, humanOverride,
+      stage, request, priorAttempts, lastMutator, availability, humanOverride, measurement,
     )
     const decision = route(context, policy)
     // Spent only once a route actually resolved. An override the router refused
@@ -1210,6 +1227,7 @@ export class WorkflowRunner {
     lastMutator: string | undefined,
     availability: AvailabilityState,
     humanOverride: OverrideBox,
+    measurement: ImpactBox,
   ): RoutingContext {
     const { objective } = request
     const { profile, degradedExecutors = [], executors, policy } = this.#options
@@ -1235,16 +1253,26 @@ export class WorkflowRunner {
     const applies = override !== undefined && !humanOverride.spent && override.role === stage.role
       ? override
       : undefined
+    // What the change was measured to be, when it has been. Before the first
+    // reading — and in a run with no reader at all — the stage presents what
+    // the caller declared, which is the behaviour this harness had all along.
+    const impact = measurement.impact
+    const measured = impact === undefined
+      ? {
+        risk: objective.risk,
+        writeVolume: writeVolumeFor(stage.role),
+        independenceRequirement: profile.independencePolicy[objective.risk],
+        requiredCapabilities: Object.freeze([]) as readonly string[],
+        ...objective.taskClass === undefined ? {} : { taskClass: objective.taskClass },
+      }
+      : impactRoutingFacts(stage, objective, profile, impact)
     return {
       role: stage.role,
       workload: objective.workload,
-      risk: objective.risk,
-      writeVolume: writeVolumeFor(stage.role),
-      independenceRequirement: profile.independencePolicy[objective.risk],
+      ...measured,
       priorAttempts,
       priorRouteFailures: Object.freeze([]),
       degradedExecutors: degraded,
-      requiredCapabilities: Object.freeze([]),
       ...implementer === undefined || !READ_ONLY_ROLES.includes(stage.role)
         ? {}
         : { implementationExecutor: implementer },

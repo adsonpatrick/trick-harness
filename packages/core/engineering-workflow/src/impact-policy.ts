@@ -15,8 +15,15 @@
  * @module @trick-harness/engineering-workflow/impact-policy
  */
 
-import { RISKS } from '@trick-harness/contracts'
-import type { EffectiveChangeImpact, IndependenceRequirement, Risk } from '@trick-harness/contracts'
+import { READ_ONLY_ROLES, RISKS, WRITE_VOLUMES } from '@trick-harness/contracts'
+import type {
+  EffectiveChangeImpact,
+  IndependenceRequirement,
+  Risk,
+  Role,
+  WorkflowObjective,
+  WriteVolume,
+} from '@trick-harness/contracts'
 import type { HarnessProfile, PolicyRuleDefinition } from '@trick-harness/profile'
 import type { StageSpec } from './types.ts'
 
@@ -140,4 +147,69 @@ export function planPullRequestCertificationStages(
   // stage could still change something attests to a tree nobody certified.
   stages.push({ stageId: 'verify-final', role: 'verify' })
   return Object.freeze(stages)
+}
+
+/**
+ * The routing facts a stage presents that come from the change itself.
+ *
+ * Everything here used to be derived from the role and the objective alone —
+ * that is, from what a caller declared before any of the work existed. Read
+ * from the measured impact instead, a run is routed as what it turned out to
+ * be: an objective opened as low-risk housekeeping that delivered an auth
+ * change is routed as an auth change, and the caller's word about it is a floor
+ * rather than a ceiling.
+ */
+export interface ImpactRoutingFacts {
+  readonly risk: Risk
+  readonly writeVolume: WriteVolume
+  readonly independenceRequirement: IndependenceRequirement
+  /** The class the paths named, falling back to the caller's hint. */
+  readonly taskClass?: string
+  readonly requiredCapabilities: readonly string[]
+}
+
+/**
+ * How much of the tree a role is expected to write, before the change is known.
+ *
+ * A floor rather than a default: the impact may raise it, and may not lower it.
+ *
+ * @param role - the role the stage runs as.
+ * @returns the role's own write volume.
+ */
+function roleWriteVolume(role: Role): WriteVolume {
+  if (READ_ONLY_ROLES.includes(role)) return 'none'
+  return role === 'delivery' ? 'small' : 'medium'
+}
+
+/**
+ * Build the impact-derived half of a stage's routing context.
+ *
+ * @param stage - the stage being routed.
+ * @param objective - the approved objective, for the caller's own task class.
+ * @param profile - the project's independence ladder.
+ * @param impact - what the change was measured to be.
+ * @returns the facts, frozen.
+ */
+export function impactRoutingFacts(
+  stage: StageSpec,
+  objective: WorkflowObjective,
+  profile: HarnessProfile,
+  impact: EffectiveChangeImpact,
+): ImpactRoutingFacts {
+  // A reader writes nothing whatever the change turned out to be. This is the
+  // one place the impact is not allowed to raise anything: a review with a
+  // writable tree is not a review.
+  const floor = roleWriteVolume(stage.role)
+  const writeVolume = floor === 'none'
+    ? 'none'
+    : WRITE_VOLUMES[Math.max(WRITE_VOLUMES.indexOf(floor), WRITE_VOLUMES.indexOf(impact.writeVolume))] as WriteVolume
+  const taskClass = impact.taskClasses[0] ?? objective.taskClass
+
+  return Object.freeze({
+    risk: impact.effectiveRisk,
+    writeVolume,
+    independenceRequirement: profile.independencePolicy[impact.effectiveRisk],
+    ...taskClass === undefined ? {} : { taskClass },
+    requiredCapabilities: impact.requiredCapabilities,
+  })
 }

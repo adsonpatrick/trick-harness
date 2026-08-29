@@ -506,19 +506,19 @@ function routingContextFor(stage: StageSpec, impact: EffectiveChangeImpact): Rou
 
 Classifier-produced task classes are ordered by profile rule order and therefore precede the optional objective task class.
 
-- [ ] **Step 1: Write RED tests** proving auth impact feeds `taskClass='auth'`, critical risk and `xhigh` Codex judgement routes where applicable.
-- [ ] **Step 2: Write RED write-volume tests** proving a 13-file implementation/repair routes through existing `large-write-implementation` / `large-write-repair` to `opencode.workhorse`.
-- [ ] **Step 3: Write RED fallback test** proving factual large/heavy implementation still cannot fall through to a non-MiMo route except an explicit human run override permitted by the existing hard-invariant contract.
-- [ ] **Step 4: Write RED capability test** proving database impact puts `database-verification` in `requiredCapabilities` and the durable route reason remains explainable.
-- [ ] **Step 5: Replace role-shaped write-volume construction** with impact-aware construction while preserving `none` for every read-only role.
-- [ ] **Step 6: Run GREEN.**
+- [x] **Step 1: Write RED tests** proving auth impact feeds `taskClass='auth'`, critical risk and `xhigh` Codex judgement routes where applicable.
+- [x] **Step 2: Write RED write-volume tests** proving a 13-file implementation/repair routes through existing `large-write-implementation` / `large-write-repair` to `opencode.workhorse`.
+- [x] **Step 3: Write RED fallback test** proving factual large/heavy implementation still cannot fall through to a non-MiMo route except an explicit human run override permitted by the existing hard-invariant contract.
+- [x] **Step 4: Write RED capability test** proving database impact puts `database-verification` in `requiredCapabilities` and the durable route reason remains explainable.
+- [x] **Step 5: Replace role-shaped write-volume construction** with impact-aware construction while preserving `none` for every read-only role.
+- [x] **Step 6: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts profiles/plurora/tests/routing.spec.ts packages/core/routing/tests/routing.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow packages/core/routing profiles/plurora/tests/routing.spec.ts
