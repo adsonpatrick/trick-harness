@@ -141,8 +141,12 @@ branch against approved artifacts at all.
 The one initial runtime revision Plan C and its successors may pin:
 
 ```text
-PENDING COMMIT
+5061a6861bc7d80617832fc3f144c34dbb85dd44
 ```
+
+That is the commit this file was first written into, and it is the tree every gate and every
+fixture above ran on — the only change after it is the two lines that write the SHA into this
+paragraph, which touch no code. This SHA supersedes every intermediate Plan E SHA.
 
 Anything not listed as proven above is not proven at this SHA. In particular the NeuroVia
 database canary is still pending Plan C, and the Supabase Preview path is still unproven for
