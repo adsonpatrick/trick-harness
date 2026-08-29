@@ -101,6 +101,20 @@ produced against different documents is refused and establishes nothing.
 - What survives into status and replay is paths, hashes, counts and a verdict. Approved
   documents, transcripts and private model reasoning are never journal payloads.
 
+## Change impact decides the bar
+
+A pull-request run is planned in two halves, and what the second half must buy is decided from the change's own repository paths rather than from the risk whoever opened the objective typed.
+
+- The **planned** reading is parsed out of the approved Plan's `**Files:**` rows before the first mutation-capable dispatch, against the Plan's verified SHA-256. The **actual** reading is read from the published branch with `git merge-base` plus `git diff --name-status -z`, after delivery and again after every repair and redelivery. No stage is ever asked what it touched.
+- Resolution is monotonic. `effectiveRisk` is the maximum of the objective's risk, the planned floor, the actual floor and any matched QA row; surfaces, task classes, capabilities and evidence profiles are unioned. A repair that shrinks the diff cannot hand back what the earlier reading bought.
+- Path rules accumulate rather than winning outright, so a signup form under `src/features/auth/` is an auth surface and a UI surface at once. Routing itself stays first-match-wins.
+- A migration in the delivered diff is a database change whether or not the caller declared one, and a run that changes a database with no composed verification capability is `BLOCKED` before the branch is published. There is no caller field that turns the detection off.
+- Read-only roles always route with `writeVolume: 'none'`, whatever the change turned out to be.
+- Paths delivered outside the approved Plan's write set are carried as bounded `unplannedPaths`, with the count taken before the cap.
+- What reaches the journal and status is counts, risks, surfaces, capability names, evidence-profile names, matched rule ids and those bounded paths. File contents, raw diffs, secrets, transcripts and private model reasoning have no field to travel in.
+
+Plurora's path rules, risk floors and evidence profiles live in `profiles/plurora`; the Git reading lives in `apps/plurora-harness-host`. Nothing under `packages/` names a NeuroVia path or a Supabase project ref.
+
 ## Automation authority
 
 - GitHub delivery may commit, push the current feature branch and open/update its PR; it may not force-push, rewrite history, merge, release or deploy.
@@ -152,5 +166,7 @@ No canonical path may use local Docker/Supabase/Postgres, arbitrary remote proje
 Harness-specific deterministic gates passed in the recorded Plan D evidence, and real OpenCode, Codex, GitHub delivery, replay/quiescence and Supabase fail-closed paths were exercised. The built-in positive Supabase Preview path remains unproven because the organization does not currently have Preview Branch entitlement.
 
 The host and shared-development enablement produced its own fresh evidence: deterministic gates, a real authenticated catalogue read against throwaway copies of the credential directories proven byte-identical afterwards, and a host HTTP smoke (health, unauthenticated refusal, start, status, cancel, dispose) ending with no port open and no spawned process alive. The NeuroVia database canary is recorded as pending Plan C rather than simulated. See `docs/verification/2026-08-27-neurovia-deployment-enablement-evidence.md` and `docs/verification/2026-08-27-harness-v2-plan-d-evidence.md`.
+
+Change-impact enforcement produced fresh evidence of its own: deterministic gates, five adversarial measured lifecycles through the real runner, real profile and real host handlers, and a real-product smoke in which the Git change-set reader was driven through the real subprocess service against a disposable Git fixture — never NeuroVia and never a live database — alongside a read-only read of both authenticated model catalogues. That review found and fixed two policy-enforcement gaps: a QA row whose raised risk selected stages but did not reach routing, and two sensitive surfaces (`credentials`, `api`) that the QA and Security tables declared while no path rule could produce them. See `docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md`, which records the credential and API path families as an assumption open to correction, and states what a host boot and an independently-authored review would still add.
 
 Implementation conformance produced fresh evidence of its own: deterministic gates, a fixture pull-request lifecycle proving a twelve-obligation manifest of two Spec criteria, two Plan tasks and eight Definition of Done rows with `PR_READY` reached only after conformance and a later final verification both passed, seven adversarial fixtures none of which reaches `PR_READY`, and a real authenticated Codex `model/list` read confirming that the models serving `codex.balanced` and `codex.frontier` advertise `high` and `xhigh`. See `docs/verification/2026-08-28-implementation-conformance-dod-evidence.md`, which supersedes the Plan E evidence as the installation authority; the SHA recorded there is the only initial runtime revision a deployment may pin.

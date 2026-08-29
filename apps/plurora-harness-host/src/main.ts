@@ -193,7 +193,11 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       registry,
       session: durable.session,
       flush: durable.flush,
-      workflow: createPluroraWorkflowHandlers(),
+      // The change-set reader is handed to the handlers, which is what puts
+      // every run this host serves in its measured form: what the branch is
+      // certified as comes from the approved Plan and this checkout's Git,
+      // rather than from the risk whoever opened the objective typed.
+      workflow: createPluroraWorkflowHandlers({ changeSet }),
       providers: {
         opencode: { adapter: options.opencode },
         codex: { spawn: options.spawn, disposeGraceMs },

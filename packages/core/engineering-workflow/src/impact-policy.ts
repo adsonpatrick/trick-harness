@@ -112,6 +112,35 @@ export function resolveCertificationRequirements(
 }
 
 /**
+ * Hold the resolution to what its own certification requires.
+ *
+ * `resolveCertificationRequirements` reads the QA rows and can land above the
+ * floor the paths established — a database change whose paths said `high` is
+ * critical work by the row that names the surface. Without this the raised risk
+ * only chose which stages ran, while every one of those stages was routed, and
+ * its independence read, off the lower number: a policy row a reviewer reads as
+ * enforced and no run is ever held to.
+ *
+ * Monotonic like everything else here. Nothing is lowered, and the readings
+ * themselves are untouched — this raises what the run is held to, not what the
+ * change was measured as.
+ *
+ * @param impact - the resolution as the two readings produced it.
+ * @param requirements - what that resolution requires of certification.
+ * @returns the resolution, never weaker than the one given.
+ */
+export function applyCertificationRequirements(
+  impact: EffectiveChangeImpact,
+  requirements: CertificationRequirements,
+): EffectiveChangeImpact {
+  return Object.freeze({
+    ...impact,
+    effectiveRisk: higherRisk(impact.effectiveRisk, requirements.effectiveRisk),
+    evidenceProfiles: Object.freeze([...new Set([...impact.evidenceProfiles, ...requirements.evidenceProfiles])]),
+  })
+}
+
+/**
  * The stages that produce and publish the change.
  *
  * Fixed, and deliberately independent of impact: what a change turns out to be

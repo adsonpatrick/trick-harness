@@ -28,6 +28,7 @@ import {
   assessRestart,
 } from '@trick-harness/engineering-workflow'
 import type {
+  ChangeImpactReader,
   DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
@@ -125,6 +126,18 @@ export interface HarnessWorkflowHandlers {
    * preview says the migrations survive.
    */
   readonly databaseChange?: (objective: WorkflowObjective) => WorkflowDatabaseChange | undefined
+  /**
+   * Where the two readings of a change's repository paths come from.
+   *
+   * A project seam rather than harness mechanism: the runtime knows a change
+   * has a planned write set and a delivered one, and a deployment knows the
+   * first is parsed out of the approved Plan in its checkout and the second is
+   * read from its own version control. Composed, the run plans its
+   * certification from what was actually published; absent, it keeps the fixed
+   * risk-driven plan, because a run that cannot read its change set has nothing
+   * to plan that half from.
+   */
+  readonly changeImpact?: ChangeImpactReader
 }
 
 /**
@@ -507,6 +520,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
         : { loadApprovedArtifacts: workflow.loadApprovedArtifacts },
       ...workflow.conformance === undefined ? {} : { conformance: workflow.conformance },
       ...workflow.dodObligations === undefined ? {} : { dodObligations: workflow.dodObligations },
+      ...workflow.changeImpact === undefined ? {} : { changeImpact: workflow.changeImpact },
       ...routeOverride === undefined ? {} : { routeOverride },
       ...change === undefined ? {} : { databaseChange: change },
     })

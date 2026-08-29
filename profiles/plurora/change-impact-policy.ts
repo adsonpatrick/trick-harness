@@ -33,6 +33,16 @@ export const changeImpactPolicy: ChangeImpactPolicyDefinition = {
     { id: 'auth-feature', paths: ['src/features/auth/**', 'src/features/admin-auth/**'], use: { surface: 'auth', riskFloor: 'critical', taskClass: 'auth', evidenceProfile: 'auth-standard' } },
     { id: 'auth-proxy', paths: ['src/proxy.ts'], use: { surface: 'auth', riskFloor: 'critical', taskClass: 'auth', evidenceProfile: 'auth-standard' } },
 
+    // Credentials. Distinct from auth: auth is the code that decides who may
+    // act, and this is the material that proves who is acting. A change to it
+    // is read for secrets whether or not it also touched an auth path.
+    { id: 'credential-material', paths: ['.env', '.env.*', 'src/lib/secrets/**'], use: { surface: 'credentials', riskFloor: 'critical', evidenceProfile: 'secret-scan' } },
+
+    // API. Route handlers live under the app router, so the broad UI rule below
+    // claims them too; stated here so the contract bar is the half that decides
+    // the run rather than the screen-tweak bar that happens to also match.
+    { id: 'api-routes', paths: ['src/app/api/**'], use: { surface: 'api', riskFloor: 'high', taskClass: 'api', evidenceProfile: 'api-standard' } },
+
     // Supply chain and delivery. A workflow file is deliberately claimed twice:
     // it decides which dependencies enter the build and it decides what gets
     // published, and dropping either half would understate the change.

@@ -69,6 +69,7 @@ import {
   impactRoutingFacts,
   planPullRequestCertificationStages,
   planPullRequestImplementationStages,
+  applyCertificationRequirements,
   resolveCertificationRequirements,
   retainStrongerImpact,
 } from './impact-policy.ts'
@@ -626,10 +627,16 @@ export class WorkflowRunner {
             planned: previous.planned,
             actual: read.facts,
           })
-          measurement.impact = certificationPasses === 0
+          const merged = certificationPasses === 0
             ? resolved
             : retainStrongerImpact(previous, resolved)
           certificationPasses += 1
+          // Resolved once and then folded back in, so the risk the certifying
+          // stages are routed at — and the independence their reviewers are
+          // held to — is the one the matched QA rows established rather than
+          // the lower one the paths alone did.
+          const requirements = resolveCertificationRequirements(profile, merged)
+          measurement.impact = applyCertificationRequirements(merged, requirements)
           // Checkpointed before the certification half is planned, for the
           // same reason: the bar those stages are held to is read off this.
           await this.#record(read.facts, measurement.impact.effectiveRisk)
@@ -638,10 +645,7 @@ export class WorkflowRunner {
           // certification half is planned again from the reading that describes
           // what a person would now be asked to review.
           queue.length = 0
-          queue.push(...planPullRequestCertificationStages(
-            resolveCertificationRequirements(profile, measurement.impact),
-            certificationPasses,
-          ))
+          queue.push(...planPullRequestCertificationStages(requirements, certificationPasses))
         }
         continue
       }

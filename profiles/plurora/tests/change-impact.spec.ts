@@ -144,6 +144,34 @@ describe('what those families require of review', () => {
     for (const surface of produced) expect([...covered], surface).toContain(surface)
   })
 
+  it('reads credential material as the credentials surface at its own floor', () => {
+    expect(planned('.env.production').surfaces).toStrictEqual(['credentials'])
+    expect(planned('src/lib/secrets/service-role.ts').surfaces).toStrictEqual(['credentials'])
+    expect(resolvedRisk('low', '.env.production')).toBe('critical')
+    expect(triggersSecurity('credentials')).toBe(true)
+  })
+
+  it('reads route handlers as the api surface without losing the ui one', () => {
+    // An app-router route handler sits under `src/app/`, so the broad UI rule
+    // claims it too. The api half is the one that carries the contract bar,
+    // and a change that dropped it would be certified as a screen tweak.
+    expect(planned('src/app/api/tenants/route.ts').surfaces).toStrictEqual(['api', 'ui'])
+    expect(resolvedRisk('low', 'src/app/api/tenants/route.ts')).toBe('high')
+  })
+
+  it('leaves no QA or security row that no path can ever reach', () => {
+    // The converse of the row above, and the one that actually bites: a
+    // declared credentials or api bar that nothing produces is a policy a
+    // reviewer reads as enforced and a run can never be held to.
+    const produced = new Set(policy.rules.flatMap(entry => entry.use.surface === undefined ? [] : [entry.use.surface]))
+    const declared = new Set([...pluroraProfile.qaPolicy.rules, ...pluroraProfile.securityPolicy.rules]
+      .flatMap((entry) => {
+        const surface = entry.when['surface']
+        return typeof surface === 'string' ? [surface] : []
+      }))
+    for (const surface of declared) expect([...produced], surface).toContain(surface)
+  })
+
   it('requires independent QA wherever a path floor is high or critical', () => {
     const floors = new Map<string, Risk>()
     for (const entry of policy.rules) {

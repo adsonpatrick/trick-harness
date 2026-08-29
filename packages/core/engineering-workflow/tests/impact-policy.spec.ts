@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import type { EffectiveChangeImpact, Risk } from '@trick-harness/contracts'
 import type { HarnessProfile } from '@trick-harness/profile'
 import {
+  applyCertificationRequirements,
   impactRoutingFacts,
   planPullRequestCertificationStages,
   planPullRequestImplementationStages,
@@ -159,6 +160,49 @@ describe('resolving what certification a change has to buy', () => {
 
     expect(Object.isFrozen(resolved)).toBe(true)
     expect(Object.isFrozen(resolved.evidenceProfiles)).toBe(true)
+  })
+})
+
+describe('holding the run to what its certification requires', () => {
+  const objective = {
+    id: 'obj-1',
+    cwd: '/repo',
+    requirement: 'do the thing',
+    risk: 'low',
+    workload: 'medium',
+    profileId: 'fixture',
+    approvedArtifacts: { spec: { path: 's', sha256: 'a' }, plan: { path: 'p', sha256: 'b' } },
+  } as const
+
+  it('raises the resolution to the risk the matched QA rows stated', () => {
+    // The paths put a database change at medium; the QA row says a database
+    // change is critical work. Resolving that and then routing on the lower
+    // number is a policy a reviewer reads as enforced and a run never sees.
+    const measured = impact(['database'], 'medium')
+    const raised = applyCertificationRequirements(measured, resolveCertificationRequirements(profile, measured))
+
+    expect(raised.effectiveRisk).toBe('critical')
+    expect(impactRoutingFacts({ stageId: 'review-1', role: 'review' }, objective, profile, raised).risk)
+      .toBe('critical')
+    expect(impactRoutingFacts({ stageId: 'review-1', role: 'review' }, objective, profile, raised)
+      .independenceRequirement).toBe('cross-executor-required')
+  })
+
+  it('carries the evidence a matched row asked for into what the run is routed on', () => {
+    const measured = impact(['ui'], 'low')
+    const raised = applyCertificationRequirements(measured, resolveCertificationRequirements(profile, measured))
+
+    expect(raised.evidenceProfiles).toContain('visual-regression')
+  })
+
+  it('never lowers anything the resolution already established', () => {
+    const measured = impact(['ui'], 'critical', { evidenceProfiles: ['db-standard'], databaseMutation: true })
+    const raised = applyCertificationRequirements(measured, resolveCertificationRequirements(profile, measured))
+
+    expect(raised.effectiveRisk).toBe('critical')
+    expect(raised.evidenceProfiles).toContain('db-standard')
+    expect(raised.databaseMutation).toBe(true)
+    expect(raised.surfaces).toStrictEqual(['ui'])
   })
 })
 

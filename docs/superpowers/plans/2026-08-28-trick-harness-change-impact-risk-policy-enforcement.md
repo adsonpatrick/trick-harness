@@ -684,12 +684,12 @@ verified approved Plan bytes
 -> policy-driven certification
 ```
 
-- [ ] **Step 1: Add a host integration fixture** with an approved two-file Plan and a low-risk objective whose actual diff contains `src/lib/auth/route-policy.ts`; assert effective risk becomes critical and Security is scheduled.
-- [ ] **Step 2: Add a DB fixture** where the Plan contains a migration but no explicit `databaseChange`; assert missing verifier BLOCKS and injected verifier permits continuation.
-- [ ] **Step 3: Add a repair fixture** where the first published diff is UI-only and the repaired diff introduces auth; assert recertification strengthens to Security/cross-executor-required.
-- [ ] **Step 4: Add a large-write fixture** with 13 changed files and prove implementation/repair route to `opencode.workhorse` under the existing Plurora hard invariant.
-- [ ] **Step 5: Add a scope-drift fixture** proving one unplanned file reaches status and Conformance evidence and prevents the file from disappearing from the final certification record.
-- [ ] **Step 6: Run focused package gates.**
+- [x] **Step 1: Add a host integration fixture** with an approved two-file Plan and a low-risk objective whose actual diff contains `src/lib/auth/route-policy.ts`; assert effective risk becomes critical and Security is scheduled.
+- [x] **Step 2: Add a DB fixture** where the Plan contains a migration but no explicit `databaseChange`; assert missing verifier BLOCKS and injected verifier permits continuation.
+- [x] **Step 3: Add a repair fixture** where the first published diff is UI-only and the repaired diff introduces auth; assert recertification strengthens to Security/cross-executor-required.
+- [x] **Step 4: Add a large-write fixture** with 13 changed files and prove implementation/repair route to `opencode.workhorse` under the existing Plurora hard invariant.
+- [x] **Step 5: Add a scope-drift fixture** proving one unplanned file reaches status and Conformance evidence and prevents the file from disappearing from the final certification record.
+- [x] **Step 6: Run focused package gates.**
 
 ```bash
 corepack pnpm vitest run packages/core/change-impact/tests/change-impact.spec.ts
@@ -698,7 +698,7 @@ corepack pnpm vitest run profiles/plurora/tests/change-impact.spec.ts profiles/p
 corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
-- [ ] **Step 7: Run full deterministic gates.**
+- [x] **Step 7: Run full deterministic gates.**
 
 ```bash
 corepack pnpm run constraints
@@ -708,11 +708,11 @@ corepack pnpm run build
 corepack pnpm run test:trick
 ```
 
-- [ ] **Step 8: Run fresh real-product smoke** from the Plurora host using the already authenticated OpenCode/Codex catalogues from Plan E. Use a disposable Git fixture/worktree for path-impact verification; do not mutate NeuroVia or a live database in Plan G verification.
-- [ ] **Step 9: Perform an independent read-only Codex Engineering Guardrails review** against CI1-CI15. Treat any policy-declared-but-unenforced row, downgrade path, caller-only DB bypass or sensitive-surface omission as merge-blocking.
-- [ ] **Step 10: Fix confirmed defects and rerun every affected focused gate plus `test:trick`.**
-- [ ] **Step 11: Record evidence** in `docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md`, including exact head SHA, commands, exit statuses, CI1-CI15 matrix, known limitations and independent-review verdict.
-- [ ] **Step 12: Update README** only with implemented/proven behavior and commit.
+- [x] **Step 8: Run fresh real-product smoke** from the Plurora host using the already authenticated OpenCode/Codex catalogues from Plan E. Use a disposable Git fixture/worktree for path-impact verification; do not mutate NeuroVia or a live database in Plan G verification.
+- [x] **Step 9: Perform an independent read-only Codex Engineering Guardrails review** against CI1-CI15. Treat any policy-declared-but-unenforced row, downgrade path, caller-only DB bypass or sensitive-surface omission as merge-blocking.
+- [x] **Step 10: Fix confirmed defects and rerun every affected focused gate plus `test:trick`.**
+- [x] **Step 11: Record evidence** in `docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md`, including exact head SHA, commands, exit statuses, CI1-CI15 matrix, known limitations and independent-review verdict.
+- [x] **Step 12: Update README** only with implemented/proven behavior and commit.
 
 ```bash
 git add apps/plurora-harness-host profiles/plurora README.trick-harness.md docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md
