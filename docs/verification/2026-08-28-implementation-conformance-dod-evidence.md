@@ -141,16 +141,23 @@ branch against approved artifacts at all.
 The one initial runtime revision Plan C and its successors may pin:
 
 ```text
-4bf5b31a07d8a9b9414d89dca9f6ab97ea93451c
+d19721089326d8ce9c890813b753c82fca4cb6bd
 ```
 
-`5061a6861bc7d80617832fc3f144c34dbb85dd44`, recorded here first, is superseded: independent
-review after it found that the journal's replay carried a conformance reading's `expected` and
-`counts` objects straight off the payload while the write path rebuilt them field by field.
-That asymmetry is fixed at the SHA above, and section 1's gates were re-run on it — 2170 tests
-now, one more than the row states, the added one being the regression test for exactly this.
-The only change after it is this paragraph, which touches no code. This SHA supersedes every
-intermediate Plan E SHA.
+The tree that was reviewed is `5061a6861bc7d80617832fc3f144c34dbb85dd44`, the commit that
+added everything above. Its review raised one finding: the journal's replay carried a
+conformance reading's `expected` and `counts` objects straight off the payload while the
+write path rebuilt them field by field, so a log this process did not write could put free
+text back into a projection a status surface then renders. It was fixed in `4bf5b31a07`, with
+a regression test pinning it, and the whole branch was merged as the SHA above.
+
+Section 1's gates were rerun on the fixed tree: typecheck, lint and 2170 tests across 94
+files, one more test than that row states, the added one being that regression. Sections 2
+through 4 were produced against the reviewed tree and are unaffected — the fix touches the
+journal's read path only, which no fixture above reaches.
+
+Pinning `5061a686` instead would pin the defect, which is why it is recorded here as reviewed
+rather than as known-good. This SHA supersedes every intermediate Plan E SHA.
 
 Anything not listed as proven above is not proven at this SHA. In particular the NeuroVia
 database canary is still pending Plan C, and the Supabase Preview path is still unproven for
