@@ -77,6 +77,30 @@ control: { host: '127.0.0.1', port: 47831 }
 
 Only `/health` is unauthenticated; workflow start/status/cancel require the process token. Objective ids and execution `workflowId`s are distinct.
 
+## Conformance and the Definition of Done
+
+Before a pull request may reach a human, one read-only `conformance` stage judges the branch
+against the documents a human approved. What it is judged against is decided by deterministic
+code, never by the model being judged: the runtime reads the approved Spec and Plan back from
+the checkout, enumerates every acceptance criterion the Spec declares and every task the Plan
+declares, and adds the eight Definition of Done obligations the profile carries. A reading
+that leaves an obligation unanswered, answers one twice, invents one, restates one, or was
+produced against different documents is refused and establishes nothing.
+
+- Approved artifact identity is repository-relative path plus SHA-256. The hash is computed
+  over what was actually read, and the documents are re-read before anything that writes and
+  again before conformance, so a Plan edited mid-run blocks the run rather than redefining it.
+- `conformance` runs `read-only` and can never receive workspace-write authority.
+- Routine conformance routes to `codex.balanced` at `high`; high and critical risk route to
+  `codex.frontier` at `xhigh`.
+- With Codex unavailable the reading falls back to `opencode.reasoning-fast` with degraded
+  assurance, and it cannot satisfy the cross-executor independence that high and critical work
+  requires when it collapses onto the executor that wrote the implementation.
+- `PR_READY` requires the latest conformance at `PASS` plus a fresh final verification that
+  passed after it.
+- What survives into status and replay is paths, hashes, counts and a verdict. Approved
+  documents, transcripts and private model reasoning are never journal payloads.
+
 ## Automation authority
 
 - GitHub delivery may commit, push the current feature branch and open/update its PR; it may not force-push, rewrite history, merge, release or deploy.
@@ -128,3 +152,5 @@ No canonical path may use local Docker/Supabase/Postgres, arbitrary remote proje
 Harness-specific deterministic gates passed in the recorded Plan D evidence, and real OpenCode, Codex, GitHub delivery, replay/quiescence and Supabase fail-closed paths were exercised. The built-in positive Supabase Preview path remains unproven because the organization does not currently have Preview Branch entitlement.
 
 The host and shared-development enablement produced its own fresh evidence: deterministic gates, a real authenticated catalogue read against throwaway copies of the credential directories proven byte-identical afterwards, and a host HTTP smoke (health, unauthenticated refusal, start, status, cancel, dispose) ending with no port open and no spawned process alive. The NeuroVia database canary is recorded as pending Plan C rather than simulated. See `docs/verification/2026-08-27-neurovia-deployment-enablement-evidence.md` and `docs/verification/2026-08-27-harness-v2-plan-d-evidence.md`.
+
+Implementation conformance produced fresh evidence of its own: deterministic gates, a fixture pull-request lifecycle proving a twelve-obligation manifest of two Spec criteria, two Plan tasks and eight Definition of Done rows with `PR_READY` reached only after conformance and a later final verification both passed, seven adversarial fixtures none of which reaches `PR_READY`, and a real authenticated Codex `model/list` read confirming that the models serving `codex.balanced` and `codex.frontier` advertise `high` and `xhigh`. See `docs/verification/2026-08-28-implementation-conformance-dod-evidence.md`, which supersedes the Plan E evidence as the installation authority; the SHA recorded there is the only initial runtime revision a deployment may pin.
