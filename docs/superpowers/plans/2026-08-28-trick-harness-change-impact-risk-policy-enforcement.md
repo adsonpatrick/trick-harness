@@ -600,19 +600,19 @@ confirmed repair
 -> rerun required review/QA/Security/conformance/final verify
 ```
 
-- [ ] **Step 1: Write RED adversarial test** starting from a medium UI change where repair unexpectedly adds `src/lib/auth/access-decision.ts`; the second certification pass must become critical and include Security.
-- [ ] **Step 2: Write RED scope-drift test** where the approved Plan write set contains two files and actual diff contains a third; the actual impact must retain the normalized third path in `unplannedPaths`.
-- [ ] **Step 3: Write RED non-downgrade test** where a repair removes the sensitive file from the final diff; certification must still retain the stronger planned/previous requirement for that workflow rather than downgrade.
-- [ ] **Step 4: Wire `unplannedPaths` into the Plan F conformance input/evidence** as deterministic scope evidence. Conformance remains responsible for deciding whether the mismatch fails a Plan obligation; the classifier does not invent a product finding.
-- [ ] **Step 5: Implement recomputation after every successful redelivery** before the next certifying stage is planned.
-- [ ] **Step 6: Run GREEN.**
+- [x] **Step 1: Write RED adversarial test** starting from a medium UI change where repair unexpectedly adds `src/lib/auth/access-decision.ts`; the second certification pass must become critical and include Security.
+- [x] **Step 2: Write RED scope-drift test** where the approved Plan write set contains two files and actual diff contains a third; the actual impact must retain the normalized third path in `unplannedPaths`.
+- [x] **Step 3: Write RED non-downgrade test** where a repair removes the sensitive file from the final diff; certification must still retain the stronger planned/previous requirement for that workflow rather than downgrade.
+- [x] **Step 4: Wire `unplannedPaths` into the Plan F conformance input/evidence** as deterministic scope evidence. Conformance remains responsible for deciding whether the mismatch fails a Plan obligation; the classifier does not invent a product finding.
+- [x] **Step 5: Implement recomputation after every successful redelivery** before the next certifying stage is planned.
+- [x] **Step 6: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/repair.spec.ts packages/core/engineering-workflow/tests/conformance.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow

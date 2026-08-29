@@ -399,6 +399,16 @@ export interface ConformanceManifest {
   readonly planSha256: string
   /** Every obligation this run must answer. */
   readonly obligations: readonly ConformanceObligation[]
+  /**
+   * Delivered paths the approved Plan never committed to writing.
+   *
+   * Deterministic scope evidence, read from the published branch by plain code
+   * rather than reported by the stage that wrote it. It is handed over as a
+   * fact and not as a finding: whether a file the Plan did not name breaks a
+   * Plan obligation is conformance's judgement, and a classifier that decided
+   * it would be inventing a product defect out of a path.
+   */
+  readonly unplannedPaths: readonly string[]
 }
 
 /** One obligation's answer, with what supports it. */

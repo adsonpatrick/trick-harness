@@ -68,6 +68,7 @@ import {
   planPullRequestCertificationStages,
   planPullRequestImplementationStages,
   resolveCertificationRequirements,
+  retainStrongerImpact,
 } from './impact-policy.ts'
 import {
   ConformanceError,
@@ -473,9 +474,10 @@ export class WorkflowRunner {
     // every stage routed afterwards has to see the reading that replaced it.
     const measurement: ImpactBox = {}
     let plannedPaths: readonly string[] | undefined
-    // Set once the certification half has been planned, so a re-delivery after
-    // a repair does not queue a second copy of it.
-    let certificationPlanned = false
+    // How many times the certification half has been planned. A repair is
+    // followed by a fresh delivery, and the branch that delivery published is
+    // classified again, so the half that certifies it is planned again too.
+    let certificationPasses = 0
     if (measured) {
       const read = await this.#classify(
         'planned', request, reader => reader.plannedPaths(objective, signal),
@@ -595,27 +597,40 @@ export class WorkflowRunner {
             published.facts.summary)
         }
         delivered = true
-        if (measured && !certificationPlanned) {
+        if (measured) {
           // Only now: what the branch turned out to touch is a fact about a
           // branch, and before delivery there is none. The planned reading
           // stays part of the resolution, so a delivery that touched less than
           // it was approved to touch cannot hand back what that already bought.
+          // Re-read after every delivery, not only the first: a repair
+          // publishes a second branch, and certifying that one against the
+          // classification of the branch it replaced certifies a diff nobody
+          // will look at.
           const read = await this.#classify(
             'actual', request, reader => reader.actualPaths(objective, signal), plannedPaths,
           )
           if (typeof read === 'string') {
             return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
           }
+          const previous = measurement.impact as EffectiveChangeImpact
           const resolved = mergeChangeImpact({
             objectiveRisk: objective.risk,
-            planned: (measurement.impact as EffectiveChangeImpact).planned,
+            planned: previous.planned,
             actual: read.facts,
           })
-          measurement.impact = resolved
-          queue.unshift(...planPullRequestCertificationStages(
-            resolveCertificationRequirements(profile, resolved),
+          measurement.impact = certificationPasses === 0
+            ? resolved
+            : retainStrongerImpact(previous, resolved)
+          certificationPasses += 1
+          // Everything still queued at this point certifies the branch that
+          // was just replaced, so it is dropped rather than resumed: the whole
+          // certification half is planned again from the reading that describes
+          // what a person would now be asked to review.
+          queue.length = 0
+          queue.push(...planPullRequestCertificationStages(
+            resolveCertificationRequirements(profile, measurement.impact),
+            certificationPasses,
           ))
-          certificationPlanned = true
         }
         continue
       }
@@ -665,6 +680,7 @@ export class WorkflowRunner {
       if (stage.role === 'conformance') {
         const folded = await this.#readConformance(
           stage, request, approved, dispatched, objective, stages, repairCycles, executorStarts,
+          measurement,
         )
         if ('outcome' in folded) return folded.outcome
         // The contract is what the stage established; the executor's own
@@ -931,6 +947,7 @@ export class WorkflowRunner {
     stages: readonly StageFacts[],
     repairCycles: number,
     executorStarts: number,
+    measurement: ImpactBox,
   ): Promise<{ facts: StageFacts } | { outcome: WorkflowOutcome }> {
     /**
      * End the run without establishing conformance.
@@ -953,7 +970,14 @@ export class WorkflowRunner {
       // The Definition of Done is deterministic profile policy and joins the
       // manifest with it. A run that supplies none is judged against the Spec
       // and the Plan alone, which is a weaker bar and never a silently wider one.
-      manifest = buildConformanceManifest({ ...approved, dod: request.dodObligations ?? [] })
+      manifest = buildConformanceManifest({
+        ...approved,
+        dod: request.dodObligations ?? [],
+        // What the delivered branch touched that the approved Plan never named.
+        // Handed over as evidence, not as a verdict: conformance decides what a
+        // widened write set means for the obligations it is scoring.
+        unplannedPaths: measurement.impact?.actual?.unplannedPaths ?? [],
+      })
     } catch (error) {
       if (!(error instanceof ConformanceError)) throw error
       return await unestablished(`the approved artifacts state no obligation set: ${error.message}`)

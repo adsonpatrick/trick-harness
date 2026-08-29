@@ -62,6 +62,8 @@ export interface ConformanceArtifactInput {
   readonly planSha256: string
   /** Definition of Done obligations, supplied by deterministic profile policy. */
   readonly dod: readonly ConformanceObligation[]
+  /** Delivered paths the Plan never approved, or none when nothing drifted. */
+  readonly unplannedPaths?: readonly string[]
 }
 
 /**
@@ -247,6 +249,7 @@ export function buildConformanceManifest(input: ConformanceArtifactInput): Confo
     specSha256: input.specSha256,
     planSha256: input.planSha256,
     obligations: Object.freeze(obligations),
+    unplannedPaths: Object.freeze([...input.unplannedPaths ?? []]),
   })
 }
 

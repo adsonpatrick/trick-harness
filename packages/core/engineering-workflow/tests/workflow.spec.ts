@@ -1912,3 +1912,130 @@ describe('what evidence a certifying stage is told to produce', () => {
     expect(Object.isFrozen(specs.get('qa')?.requiredEvidenceProfiles)).toBe(true)
   })
 })
+
+describe('recertifying what a repair turned the change into', () => {
+  const DRIFT_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    qaPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', when: Object.freeze({ surface: 'auth' }), use: Object.freeze({ evidence: 'security-review', independentReview: true, risk: 'critical' }) }),
+        Object.freeze({ id: 'ui', when: Object.freeze({ surface: 'ui' }), use: Object.freeze({ evidence: 'visual-regression', independentReview: true, risk: 'medium' }) }),
+      ]),
+    }),
+    securityPolicy: Object.freeze({
+      ...PROFILE.securityPolicy,
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth-flow', when: Object.freeze({ surface: 'auth' }), use: Object.freeze({ review: 'security', independence: 'cross-executor-required', blocking: true }) }),
+      ]),
+    }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', paths: Object.freeze(['src/lib/auth/**']), use: Object.freeze({ surface: 'auth', riskFloor: 'critical' }) }),
+        Object.freeze({ id: 'ui', paths: Object.freeze(['src/ui/**']), use: Object.freeze({ surface: 'ui', riskFloor: 'medium' }) }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  const UI = 'src/ui/cart-total.tsx'
+  const AUTH = 'src/lib/auth/access-decision.ts'
+
+  /** A reader whose actual answer changes between deliveries. */
+  function drifting(planned: readonly string[], ...actual: readonly (readonly string[])[]): {
+    plannedPaths: () => Promise<readonly string[]>
+    actualPaths: () => Promise<readonly string[]>
+  } {
+    let call = 0
+    return {
+      plannedPaths: async () => planned,
+      actualPaths: async () => {
+        const answer = actual[Math.min(call, actual.length - 1)] as readonly string[]
+        call += 1
+        return answer
+      },
+    }
+  }
+
+  /**
+   * Run one objective whose QA fails exactly once, and report what ran.
+   *
+   * @param changeImpact - the reader the run classifies itself from.
+   * @param manifests - collects the manifest each conformance reading was given.
+   * @returns the outcome, so a test can read the stages off it.
+   */
+  async function runWithOneQaDefect(
+    changeImpact: ReturnType<typeof drifting>,
+    manifests: ConformanceManifest[] = [],
+  ): Promise<WorkflowOutcome> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: DRIFT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    let qaRuns = 0
+
+    return await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => {
+        if (stage.role !== 'qa') return interpretAllPass(stage, executor)
+        qaRuns += 1
+        return qaRuns > 1
+          ? interpretAllPass(stage, executor)
+          : { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug('f-1')], evidence: [] }
+      },
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      changeImpact,
+      loadApprovedArtifacts: CONFORMS.loadApprovedArtifacts,
+      conformance: (stage, executor, result, manifest) => {
+        manifests.push(manifest)
+        return CONFORMS.conformance(stage, executor, result, manifest)
+      },
+    })
+  }
+
+  it('recertifies a repair that quietly widened the change into auth', async () => {
+    // The first pass was a medium UI change and bought QA. The repair reached
+    // into an access decision, and the branch a person would now review is a
+    // critical auth change — so the second pass has to buy what that costs,
+    // rather than finishing the plan the smaller change had been given.
+    const outcome = await runWithOneQaDefect(drifting([UI], [UI], [UI, AUTH]))
+
+    expect(outcome.state).toBe('completed')
+    const after = outcome.stages.map(stage => stage.role).slice(outcome.stages.findLastIndex(s => s.role === 'delivery'))
+    expect(after).toContain('security')
+    expect(after).toContain('review')
+    expect(after).toContain('conformance')
+  })
+
+  it('never buys less on the second pass than the first pass already bought', async () => {
+    // The repair took the access decision back out. What the branch touched at
+    // any point in this run is still what a person is being asked to trust, and
+    // a security reading that was owed is not unowed by a later, smaller diff.
+    const outcome = await runWithOneQaDefect(drifting([UI], [UI, AUTH], [UI]))
+
+    expect(outcome.state).toBe('completed')
+    const after = outcome.stages.map(stage => stage.role).slice(outcome.stages.findLastIndex(s => s.role === 'delivery'))
+    expect(after).toContain('security')
+  })
+
+  it('hands conformance the paths the delivery touched that the Plan never approved', async () => {
+    const manifests: ConformanceManifest[] = []
+    await runWithOneQaDefect(drifting([UI], [UI, AUTH]), manifests)
+
+    // Normalized, relative, and reported rather than judged: whether a third
+    // file breaks a Plan obligation is conformance's call, not the classifier's.
+    expect(manifests.at(-1)?.unplannedPaths).toStrictEqual([AUTH])
+  })
+
+  it('tells conformance nothing drifted when the delivery stayed inside the Plan', async () => {
+    const manifests: ConformanceManifest[] = []
+    await runWithOneQaDefect(drifting([UI], [UI]), manifests)
+
+    expect(manifests.at(-1)?.unplannedPaths).toStrictEqual([])
+  })
+})

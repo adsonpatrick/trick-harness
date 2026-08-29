@@ -134,24 +134,27 @@ export function planPullRequestImplementationStages(): readonly StageSpec[] {
  * is set by what was delivered rather than by what was intended.
  *
  * @param requirements - what the measured impact requires.
+ * @param pass - which certification pass this is, so a re-certification after
+ * a repair names stages the journal can tell apart from the first pass's.
  * @returns the certification half, always closing on a final verification.
  */
 export function planPullRequestCertificationStages(
   requirements: CertificationRequirements,
+  pass = 1,
 ): readonly StageSpec[] {
   // Every certifying stage carries the same resolved list, and carries the
   // same frozen array: a stage that could edit its own evidence requirement
   // could certify itself against a bar it lowered.
   const evidence = requirements.evidenceProfiles
-  const stages: StageSpec[] = [{ stageId: 'review-1', role: 'review', requiredEvidenceProfiles: evidence }]
-  if (requirements.qaRequired) stages.push({ stageId: 'qa-1', role: 'qa', requiredEvidenceProfiles: evidence })
+  const stages: StageSpec[] = [{ stageId: `review-${String(pass)}`, role: 'review', requiredEvidenceProfiles: evidence }]
+  if (requirements.qaRequired) stages.push({ stageId: `qa-${String(pass)}`, role: 'qa', requiredEvidenceProfiles: evidence })
   if (requirements.securityRequired) {
-    stages.push({ stageId: 'security-1', role: 'security', requiredEvidenceProfiles: evidence })
+    stages.push({ stageId: `security-${String(pass)}`, role: 'security', requiredEvidenceProfiles: evidence })
   }
-  stages.push({ stageId: 'conformance-1', role: 'conformance', requiredEvidenceProfiles: evidence })
+  stages.push({ stageId: `conformance-${String(pass)}`, role: 'conformance', requiredEvidenceProfiles: evidence })
   // Last, and after every certifying reading: a verification that ran before a
   // stage could still change something attests to a tree nobody certified.
-  stages.push({ stageId: 'verify-final', role: 'verify' })
+  stages.push({ stageId: `verify-final${pass === 1 ? '' : `-${String(pass)}`}`, role: 'verify' })
   return Object.freeze(stages)
 }
 
@@ -165,6 +168,42 @@ export function planPullRequestCertificationStages(
  * change is routed as an auth change, and the caller's word about it is a floor
  * rather than a ceiling.
  */
+/**
+ * Keep whatever the run has already established about its own change.
+ *
+ * A repair produces a second published branch, and that branch is classified
+ * again. Taking the new reading on its own would let a repair that removed a
+ * sensitive file un-owe the security reading the earlier diff bought — a bar
+ * going down because the work got smaller, which is exactly the move the
+ * monotonicity rule exists to refuse. The readings themselves are the new
+ * ones, because they describe the branch as it now stands; everything resolved
+ * from them is the stronger of the two.
+ *
+ * @param previous - what the run had resolved before this delivery.
+ * @param next - what the branch as delivered resolves to on its own.
+ * @returns the resolution, never weaker than either input.
+ */
+export function retainStrongerImpact(
+  previous: EffectiveChangeImpact,
+  next: EffectiveChangeImpact,
+): EffectiveChangeImpact {
+  const union = (left: readonly string[], right: readonly string[]): readonly string[] =>
+    Object.freeze([...new Set([...left, ...right])])
+
+  return Object.freeze({
+    ...next,
+    effectiveRisk: higherRisk(previous.effectiveRisk, next.effectiveRisk),
+    writeVolume: WRITE_VOLUMES[Math.max(
+      WRITE_VOLUMES.indexOf(previous.writeVolume), WRITE_VOLUMES.indexOf(next.writeVolume),
+    )] as WriteVolume,
+    surfaces: union(previous.surfaces, next.surfaces),
+    taskClasses: union(previous.taskClasses, next.taskClasses),
+    requiredCapabilities: union(previous.requiredCapabilities, next.requiredCapabilities),
+    evidenceProfiles: union(previous.evidenceProfiles, next.evidenceProfiles),
+    databaseMutation: previous.databaseMutation || next.databaseMutation,
+  })
+}
+
 export interface ImpactRoutingFacts {
   readonly risk: Risk
   readonly writeVolume: WriteVolume
