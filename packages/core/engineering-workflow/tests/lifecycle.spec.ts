@@ -10,7 +10,7 @@ import type {
 import { WorkflowJournal } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { RoutingPolicy } from '@trick-harness/routing'
-import type { DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
+import type { ConformanceManifest, DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import { WorkflowRunner, assessPullRequest, planPullRequestStages } from '../src/index.ts'
 import type { DeliveryCapabilityPort, PullRequestOutcome, StageSpec } from '../src/index.ts'
 
@@ -29,6 +29,7 @@ const POLICY: RoutingPolicy = Object.freeze({
     Object.freeze({ id: 'debug', when: Object.freeze({ role: 'debug' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'qa', when: Object.freeze({ role: 'qa' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'security', when: Object.freeze({ role: 'security' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
+    Object.freeze({ id: 'conformance', when: Object.freeze({ role: 'conformance' }), use: Object.freeze({ executor: 'reviewer', tier: 'reasoning' }) }),
     Object.freeze({ id: 'default', when: Object.freeze({}), use: Object.freeze({ executor: 'builder', tier: 'implementation' }) }),
   ]),
   fallbackRules: Object.freeze([
@@ -62,7 +63,47 @@ const OBJECTIVE: WorkflowObjective = Object.freeze({
   risk: 'low',
   workload: 'heavy',
   profileId: 'test',
+  approvedArtifacts: {
+    spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+  },
 })
+
+/**
+ * The approved documents as they stand, hashing to the identity the objective
+ * was opened against. One criterion and one task is enough for a manifest.
+ */
+const ARTIFACTS = Object.freeze({
+  specText: '- **ND1:** the work satisfies the approved specification',
+  planText: '### Task 1: do the approved work',
+  specSha256: 'a'.repeat(64),
+  planSha256: 'b'.repeat(64),
+})
+
+/** A conformance reading that answers every obligation the manifest states. */
+const CONFORMS = {
+  loadApprovedArtifacts: async (): Promise<typeof ARTIFACTS> => ARTIFACTS,
+  conformance: (
+    _stage: StageSpec,
+    _executor: string,
+    _result: unknown,
+    manifest: ConformanceManifest,
+  ): unknown => ({
+    specSha256: manifest.specSha256,
+    planSha256: manifest.planSha256,
+    items: manifest.obligations.map(obligation => ({
+      id: obligation.id,
+      source: obligation.source,
+      requirement: obligation.requirement,
+      status: 'PASS',
+      implementationEvidence: [],
+      verificationEvidence: [],
+      summary: 'satisfied',
+    })),
+    verdict: 'PASS',
+    summary: 'the branch satisfies the approved artifacts',
+  }),
+}
 
 const DIAGNOSIS: DiagnosisContract = Object.freeze({
   symptom: 'rounding is off by a cent on the last item',
@@ -205,17 +246,39 @@ function roleOf(request: ExecutorStartRequest): string {
  * @param objective - the objective to run.
  * @returns the pull-request outcome.
  */
-async function runLifecycle(objective: WorkflowObjective = OBJECTIVE): Promise<PullRequestOutcome> {
+async function runLifecycle(
+  objective: WorkflowObjective = OBJECTIVE,
+  overrides: { [K in keyof typeof CONFORMS]?: (typeof CONFORMS)[K] | undefined } = {},
+): Promise<PullRequestOutcome> {
+  // An override of `undefined` means "run without this handler at all", which
+  // is a different request from one that passes the key holding nothing.
+  const handlers = Object.fromEntries(
+    Object.entries({ ...CONFORMS, ...overrides }).filter(([, value]) => value !== undefined),
+  ) as Partial<typeof CONFORMS>
   const outcome = await runner.run({
     objective,
     plan: planPullRequestStages,
     interpret,
     task: taskFor,
+    ...handlers,
     diagnose: () => DIAGNOSIS,
     repairEvidence: () => REPAIRED,
   })
   return assessPullRequest(outcome)
 }
+
+/** One stage that passed, for an outcome assembled by hand rather than run. */
+const PASSING = Object.freeze({
+  stageId: 'verify-1',
+  role: 'verify' as const,
+  executor: 'reviewer',
+  permissionMode: 'read-only' as const,
+  verdict: 'PASS' as const,
+  summary: 'verify ran',
+  findings: Object.freeze([]),
+  evidence: Object.freeze([]),
+  durationMs: 1,
+})
 
 /** A delivery capability that publishes without touching a remote. */
 function deliveryStub(stageIds?: string[]): DeliveryCapabilityPort {
@@ -249,12 +312,12 @@ describe('the pull request lifecycle plan', () => {
     const roles = planPullRequestStages(OBJECTIVE).map(stage => stage.role)
 
     expect(roles.indexOf('delivery')).toBeLessThan(roles.indexOf('review'))
-    expect(roles).toEqual(['implement', 'verify', 'delivery', 'review', 'verify'])
+    expect(roles).toEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
   })
 
   it('adds QA and security as risk rises, and always ends on a fresh verification', () => {
     expect(planPullRequestStages({ ...OBJECTIVE, risk: 'critical' }).map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'verify',
+      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
     ])
     expect(planPullRequestStages({ ...OBJECTIVE, risk: 'critical' }).at(-1)?.stageId).toBe('verify-final')
   })
@@ -342,7 +405,7 @@ describe('two confirmed bugs and one improvement', () => {
     expect(roles).toEqual([
       'implement-1', 'verify-1', 'delivery-1', 'review-1',
       'debug-1', 'repair-1', 'verify-2', 'delivery-2', 'review-2',
-      'verify-final',
+      'conformance-1', 'verify-final',
     ])
   })
 
@@ -398,5 +461,153 @@ describe('the repair ceiling', () => {
     expect(result.state).toBe('BLOCKED')
     expect(result.outcome.repairCycles).toBe(PROFILE.workflowPolicy.maxRepairCycles)
     expect(result.openDefects.map(finding => finding.id)).toContain('bug-forever')
+  })
+})
+
+
+describe('conformance standing between a green run and a ready pull request', () => {
+  it('reads conformance last, after every stage that could still open a repair', () => {
+    // Last on purpose: conformance answers about the branch as it stands, and
+    // a reading taken before a review that has yet to find anything would be
+    // an answer about a tree the pull request may not end up holding.
+    const roles = planPullRequestStages({ ...OBJECTIVE, risk: 'critical' }).map(stage => stage.role)
+
+    expect(roles.at(-2)).toBe('conformance')
+    expect(roles.at(-1)).toBe('verify')
+    expect(roles.indexOf('conformance')).toBeGreaterThan(roles.indexOf('security'))
+  })
+
+  it('establishes nothing, and is not ready, when the run cannot read a conformance result', async () => {
+    const result = await runLifecycle(OBJECTIVE, { conformance: undefined })
+
+    expect(result.state).not.toBe('PR_READY')
+    expect(result.state).toBe('INCONCLUSIVE')
+    expect(result.outcome.verdict).toBe('INCONCLUSIVE')
+  })
+
+  it('is not ready when the result does not answer every approved obligation', async () => {
+    // A model that answered some of the obligations has said nothing about the
+    // rest, and a gate that took that for a pass would be scoring the work
+    // against a set the model picked.
+    const result = await runLifecycle(OBJECTIVE, {
+      conformance: (_stage, _executor, _result, manifest) => ({
+        specSha256: manifest.specSha256,
+        planSha256: manifest.planSha256,
+        items: [],
+        verdict: 'PASS',
+        summary: 'nothing was checked',
+      }),
+    })
+
+    expect(result.state).toBe('INCONCLUSIVE')
+    expect(result.outcome.stages.map(stage => stage.stageId)).not.toContain('verify-final')
+  })
+
+  it('is not ready when the result says the branch does not satisfy what was approved', async () => {
+    const result = await runLifecycle(OBJECTIVE, {
+      conformance: (_stage, _executor, _result, manifest) => ({
+        specSha256: manifest.specSha256,
+        planSha256: manifest.planSha256,
+        items: manifest.obligations.map(obligation => ({
+          id: obligation.id,
+          source: obligation.source,
+          requirement: obligation.requirement,
+          status: 'MISSING',
+          implementationEvidence: [],
+          verificationEvidence: [],
+          summary: 'nothing addressed this',
+        })),
+        verdict: 'FAIL',
+        summary: 'the approved obligations are not met',
+      }),
+    })
+
+    expect(result.state).not.toBe('PR_READY')
+    // The stage claimed a pass and the contract did not. The run believes the
+    // weaker of the two, because the contract is what the stage established.
+    expect(result.outcome.stages.findLast(stage => stage.role === 'conformance')?.verdict).toBe('FAIL')
+  })
+
+  it('stops before it writes anything when the approved Spec is not the approved Spec any more', async () => {
+    // Checked before the stage rather than after: an implementation guided by
+    // a Plan somebody edited mid-run is work against obligations nobody
+    // approved, and by the time it has written, that work exists.
+    const result = await runLifecycle(OBJECTIVE, {
+      loadApprovedArtifacts: async () => ({ ...ARTIFACTS, specSha256: 'c'.repeat(64) }),
+    })
+
+    expect(result.state).toBe('BLOCKED')
+    expect(result.outcome.stages).toEqual([])
+    expect(started).toEqual([])
+  })
+
+  it('reads the approved documents again before conformance, not once at the start', async () => {
+    let reads = 0
+    const result = await runLifecycle(OBJECTIVE, {
+      loadApprovedArtifacts: async () => {
+        reads += 1
+        // Two reads gate the two stages that write — the implementation and
+        // the delivery. The Plan changes after both, so only a run that reads
+        // it again for conformance can notice.
+        return reads <= 2 ? ARTIFACTS : { ...ARTIFACTS, planSha256: 'c'.repeat(64) }
+      },
+    })
+    const roles = result.outcome.stages.map(stage => stage.role)
+
+    expect(result.state).toBe('BLOCKED')
+    // Past everything that writes, and stopped before conformance scored the
+    // work against a Plan that is no longer the approved one.
+    expect(roles).toContain('review')
+    expect(roles).not.toContain('conformance')
+  })
+
+  it('reads conformance again after a repair, so the answer describes the branch as it now stands', async () => {
+    // The defect is found by the last verification, which runs after
+    // conformance has already answered once. The fix invalidates that answer.
+    scripted.set('verify-final', [bug('bug-late', 'verify')])
+
+    const result = await runLifecycle()
+    const roles = result.outcome.stages.map(stage => stage.role)
+
+    expect(roles.filter(role => role === 'conformance')).toHaveLength(2)
+    expect(roles.lastIndexOf('conformance')).toBeGreaterThan(roles.lastIndexOf('repair'))
+    expect(result.state).toBe('PR_READY')
+  })
+
+  it('is not ready when something changed the branch after conformance answered', () => {
+    // Stated against a synthesized run rather than a real one, because the
+    // runner is not the only thing that can produce an outcome: a projection
+    // rebuilt from a journal is read by this same function.
+    const result = assessPullRequest({
+      workflowId: 'wf-1',
+      objectiveId: 'obj-1',
+      state: 'completed',
+      verdict: 'PASS',
+      summary: 'all stages passed',
+      stages: [
+        { ...PASSING, stageId: 'conformance-1', role: 'conformance' },
+        { ...PASSING, stageId: 'delivery-2', role: 'delivery' },
+      ],
+      repairCycles: 1,
+      executorStarts: 2,
+    })
+
+    expect(result.state).toBe('INCONCLUSIVE')
+    expect(result.summary).toContain('conformance does not stand for the branch as it is now')
+  })
+
+  it('is not ready when nothing established conformance at all', () => {
+    const result = assessPullRequest({
+      workflowId: 'wf-1',
+      objectiveId: 'obj-1',
+      state: 'completed',
+      verdict: 'PASS',
+      summary: 'all stages passed',
+      stages: [PASSING],
+      repairCycles: 0,
+      executorStarts: 1,
+    })
+
+    expect(result.state).toBe('INCONCLUSIVE')
   })
 })

@@ -25,6 +25,10 @@ const objective: WorkflowObjective = {
   risk: 'high',
   workload: 'medium',
   profileId: 'plurora',
+  approvedArtifacts: {
+    spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+  },
 }
 
 const decision: RouteDecision = {
@@ -65,7 +69,7 @@ const diagnosis: DiagnosisContract = {
 }
 
 describe('the harness event vocabulary', () => {
-  it('declares the fourteen events the lifecycle needs, in lifecycle order', () => {
+  it('declares the fifteen events the lifecycle needs, in lifecycle order', () => {
     expect([...HARNESS_EVENT_TYPES]).toStrictEqual([
       'harness/workflow-start',
       'harness/route-decision',
@@ -79,6 +83,7 @@ describe('the harness event vocabulary', () => {
       'harness/verdict',
       'harness/delivery',
       'harness/blocker',
+      'harness/conformance',
       'harness/circuit-breaker',
       'harness/workflow-end',
     ])
@@ -133,6 +138,15 @@ describe('writing and replaying one workflow', () => {
     await journal.verdict('verify-1', 'verify', 'PASS', 'focused suite green', evidence)
     await journal.delivery({ action: 'push', branch: 'feat/x', commitSha: 'abc123' })
     await journal.blocker({ stageId: 'refine-1', kind: 'product-decision', summary: 'which branch is protected', evidence })
+    journal.conformance({
+      specPath: 'docs/spec.md',
+      specSha256: 'a'.repeat(64),
+      planPath: 'docs/plan.md',
+      planSha256: 'b'.repeat(64),
+      expected: { spec: 2, plan: 2, dod: 8 },
+      counts: { PASS: 12, MISSING: 0, PARTIAL: 0, FAIL: 0, BLOCKED: 0, INCONCLUSIVE: 0 },
+      verdict: 'PASS',
+    })
     journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
     await journal.end('completed', 'PASS', 'delivered')
 
@@ -156,6 +170,7 @@ describe('writing and replaying one workflow', () => {
       risk: 'high',
       workload: 'medium',
       profileId: 'plurora',
+      approvedArtifacts: objective.approvedArtifacts,
     })
     expect(state.routes).toStrictEqual([{
       stageId: 'impl-1',
@@ -467,5 +482,107 @@ describe('the deterministic capability window', () => {
       .rejects.toThrow(expect.objectContaining({ code: 'flush-failed' }))
     await expect(journal.endCapability('deliver-1', 'github-delivery', 'completed', 1))
       .rejects.toThrow(JournalError)
+  })
+})
+
+describe('what the log remembers about approved artifacts and conformance', () => {
+  const summary = {
+    specPath: 'docs/spec.md',
+    specSha256: 'a'.repeat(64),
+    planPath: 'docs/plan.md',
+    planSha256: 'b'.repeat(64),
+    expected: { spec: 2, plan: 2, dod: 8 },
+    counts: { PASS: 11, MISSING: 1, PARTIAL: 0, FAIL: 0, BLOCKED: 0, INCONCLUSIVE: 0 },
+    verdict: 'PARTIAL' as const,
+  }
+
+  it('records which documents a workflow was approved against', () => {
+    // Without this the log can say a run passed conformance but not what it was
+    // conformant to, and a Spec edited afterwards leaves no trace of the change.
+    const session = Session.create(SessionId('s-c1'))
+    new WorkflowJournal(session, 'wf-1', async () => true).start(objective)
+    const [event] = session.events
+    expect(event?.data).toMatchObject({
+      specPath: 'docs/spec.md',
+      specSha256: 'a'.repeat(64),
+      planPath: 'docs/plan.md',
+      planSha256: 'b'.repeat(64),
+    })
+  })
+
+  it('carries the artifact identity and the conformance reading through a replay', () => {
+    const session = Session.create(SessionId('s-c2'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(objective)
+    journal.conformance(summary)
+
+    const projection = projectWorkflow([...session.events], 'wf-1')
+    expect(projection.objective?.approvedArtifacts).toEqual(objective.approvedArtifacts)
+    expect(projection.conformance).toEqual(summary)
+  })
+
+  it('keeps the last conformance reading, since a repair invalidates the earlier one', () => {
+    const session = Session.create(SessionId('s-c3'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(objective)
+    journal.conformance({ ...summary, verdict: 'FAIL' })
+    journal.conformance(summary)
+    expect(projectWorkflow([...session.events], 'wf-1').conformance?.verdict).toBe('PARTIAL')
+  })
+
+  it('writes counts and hashes rather than the documents or the model output', () => {
+    // The conformance payload is the one place a whole Spec, a prompt or a
+    // provider transcript could reach a durable log by being handed over with
+    // the summary. The event is rebuilt field by field so it cannot.
+    const session = Session.create(SessionId('s-c4'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(objective)
+    journal.conformance({
+      ...summary,
+      specText: '# the whole approved spec',
+      planText: '# the whole approved plan',
+      prompt: 'the instruction the model was given',
+      transcript: 'what the model said',
+      reasoning: 'why it said it',
+      items: [{ id: 'ND1', summary: 'free text off a provider' }],
+    } as never)
+
+    const written = JSON.stringify(session.events)
+    for (const key of ['specText', 'planText', 'prompt', 'transcript', 'reasoning', 'items']) {
+      expect(written, key).not.toContain(key)
+    }
+  })
+
+  it('rebuilds the nested counts on the way back, not only on the way in', () => {
+    // The write path rebuilds every field, so nothing rides in on a summary. A
+    // read path that carried `expected` and `counts` by reference would undo
+    // half of that: a log this process did not write — an older build's, or one
+    // edited on disk — could put free text back into a projection that a status
+    // surface then renders.
+    const session = Session.create(SessionId('s-c5'))
+    new WorkflowJournal(session, 'wf-1', async () => true).start(objective)
+    const events = [...session.events, {
+      ...session.events[0],
+      type: 'harness/conformance',
+      data: {
+        workflowId: 'wf-1',
+        ...summary,
+        expected: { ...summary.expected, transcript: 'what the model said' },
+        counts: { ...summary.counts, reasoning: 'why it said it' },
+      },
+    } as never]
+
+    const read = projectWorkflow(events, 'wf-1').conformance
+
+    expect(read?.expected).toEqual(summary.expected)
+    expect(read?.counts).toEqual(summary.counts)
+    expect(JSON.stringify(read)).not.toContain('transcript')
+    expect(JSON.stringify(read)).not.toContain('reasoning')
+  })
+
+  it('names the conformance event in the vocabulary the read path knows', () => {
+    expect(HARNESS_EVENT_TYPES).toContain('harness/conformance')
+    expect(KNOWN_SESSION_EVENT_TYPES.has('harness/conformance')).toBe(true)
+    expect(isHarnessEventType('harness/conformance')).toBe(true)
   })
 })

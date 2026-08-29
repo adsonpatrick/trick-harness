@@ -55,22 +55,22 @@ export interface WorkflowObjective {
 }
 ```
 
-- [ ] **Step 1: Write RED contract tests** proving `ROLES` contains `conformance`, `READ_ONLY_ROLES` contains `conformance`, `parseWorkflowObjective` requires `approvedArtifacts`, hashes must match lowercase 64-hex SHA-256, and artifact paths must be non-empty repository-relative strings.
-- [ ] **Step 2: Run RED.**
+- [x] **Step 1: Write RED contract tests** proving `ROLES` contains `conformance`, `READ_ONLY_ROLES` contains `conformance`, `parseWorkflowObjective` requires `approvedArtifacts`, hashes must match lowercase 64-hex SHA-256, and artifact paths must be non-empty repository-relative strings.
+- [x] **Step 2: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts packages/core/contracts/tests/invariant.spec.ts
 ```
 
-- [ ] **Step 3: Implement vocabulary/types/parser** in `types.ts` and `index.ts`. Reject absolute paths, `..` traversal segments, missing hashes and malformed hashes without echoing offending values into errors.
-- [ ] **Step 4: Run GREEN.**
+- [x] **Step 3: Implement vocabulary/types/parser** in `types.ts` and `index.ts`. Reject absolute paths, `..` traversal segments, missing hashes and malformed hashes without echoing offending values into errors.
+- [x] **Step 4: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts packages/core/contracts/tests/invariant.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add packages/core/contracts
@@ -129,16 +129,16 @@ export interface ConformanceContract {
 }
 ```
 
-- [ ] **Step 1: Write RED parser tests** for valid contract, unknown source/status, duplicate/missing fields, undeclared transcript/reasoning fields, malformed hashes and secret-safe errors.
-- [ ] **Step 2: Implement `parseConformanceContract(value, path='conformance')`** using existing bounded parser helpers and immutable outputs.
-- [ ] **Step 3: Run GREEN + typecheck.**
+- [x] **Step 1: Write RED parser tests** for valid contract, unknown source/status, duplicate/missing fields, undeclared transcript/reasoning fields, malformed hashes and secret-safe errors.
+- [x] **Step 2: Implement `parseConformanceContract(value, path='conformance')`** using existing bounded parser helpers and immutable outputs.
+- [x] **Step 3: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add packages/core/contracts
@@ -187,23 +187,23 @@ DoD obligations:
   supplied by deterministic profile policy; duplicate ids rejected
 ```
 
-- [ ] **Step 1: Write RED tests** for ND/CF/R-style Spec criteria, Superpowers task headings, duplicate IDs, zero Spec criteria, zero Plan tasks, deterministic ordering and immutable output.
-- [ ] **Step 2: Write RED coverage tests** proving omitted expected IDs, duplicate returned IDs, source/requirement mismatch, unknown substitution and hash mismatch cannot validate as PASS.
-- [ ] **Step 3: Run RED.**
+- [x] **Step 1: Write RED tests** for ND/CF/R-style Spec criteria, Superpowers task headings, duplicate IDs, zero Spec criteria, zero Plan tasks, deterministic ordering and immutable output.
+- [x] **Step 2: Write RED coverage tests** proving omitted expected IDs, duplicate returned IDs, source/requirement mismatch, unknown substitution and hash mismatch cannot validate as PASS.
+- [x] **Step 3: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts
 ```
 
-- [ ] **Step 4: Implement extraction and validation** with no model/LLM dependency and no filesystem access in this module.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 4: Implement extraction and validation** with no model/LLM dependency and no filesystem access in this module.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
@@ -253,19 +253,19 @@ export interface WorkflowRunRequest {
 }
 ```
 
-- [ ] **Step 1: Write RED tests** proving approved artifact hashes are verified before first mutation-capable implementation dispatch and reverified before `conformance`; a changed/missing artifact returns `BLOCKED` before the affected stage.
-- [ ] **Step 2: Write RED lifecycle tests** expecting `implement -> verify -> delivery -> review -> applicable qa -> applicable security -> conformance -> verify-final`.
-- [ ] **Step 3: Write RED PR-readiness tests** proving no conformance stage, conformance `PARTIAL/FAIL/BLOCKED/INCONCLUSIVE`, or a later mutation without fresh conformance prevents `PR_READY`.
-- [ ] **Step 4: Implement workflow integration.** Parse and coverage-validate conformance output before it becomes stage facts. PR lifecycle requests always require the `conformance` callback; a callback that cannot produce a valid contract yields `INCONCLUSIVE`.
-- [ ] **Step 5: Ensure repair invalidation.** Any repair/delivery after a conformance reading requires review/applicable QA/security/conformance to run again before `verify-final` may certify the final branch.
-- [ ] **Step 6: Run GREEN.**
+- [x] **Step 1: Write RED tests** proving approved artifact hashes are verified before first mutation-capable implementation dispatch and reverified before `conformance`; a changed/missing artifact returns `BLOCKED` before the affected stage.
+- [x] **Step 2: Write RED lifecycle tests** expecting `implement -> verify -> delivery -> review -> applicable qa -> applicable security -> conformance -> verify-final`.
+- [x] **Step 3: Write RED PR-readiness tests** proving no conformance stage, conformance `PARTIAL/FAIL/BLOCKED/INCONCLUSIVE`, or a later mutation without fresh conformance prevents `PR_READY`.
+- [x] **Step 4: Implement workflow integration.** Parse and coverage-validate conformance output before it becomes stage facts. PR lifecycle requests always require the `conformance` callback; a callback that cannot produce a valid contract yields `INCONCLUSIVE`.
+- [x] **Step 5: Ensure repair invalidation.** Any repair/delivery after a conformance reading requires review/applicable QA/security/conformance to run again before `verify-final` may certify the final branch.
+- [x] **Step 6: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
@@ -349,11 +349,11 @@ export const pluroraDodObligations: readonly ConformanceObligation[] = [
 { id: 'codex-unavailable-conformance', when: { unavailable: 'codex', role: 'conformance' }, use: { executor: 'opencode', tier: 'opencode.reasoning-fast' } }
 ```
 
-- [ ] **Step 1: Write RED routing tests** for all four risk levels and Codex-unavailable fallback.
-- [ ] **Step 2: Write RED independence tests** proving high/critical conformance cannot certify when implementation executor is OpenCode and fallback also resolves to OpenCode under `cross-executor-required`.
-- [ ] **Step 3: Add the eight baseline DoD rows exactly as above** and reference them from the Plurora profile without embedding NeuroVia file paths, database refs or native model ids.
-- [ ] **Step 4: Implement routing rows before generic review/default rows** so conformance-specific routes win deterministically.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 1: Write RED routing tests** for all four risk levels and Codex-unavailable fallback.
+- [x] **Step 2: Write RED independence tests** proving high/critical conformance cannot certify when implementation executor is OpenCode and fallback also resolves to OpenCode under `cross-executor-required`.
+- [x] **Step 3: Add the eight baseline DoD rows exactly as above** and reference them from the Plurora profile without embedding NeuroVia file paths, database refs or native model ids.
+- [x] **Step 4: Implement routing rows before generic review/default rows** so conformance-specific routes win deterministically.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run profiles/plurora/tests/routing.spec.ts profiles/plurora/tests/profile.spec.ts profiles/plurora/tests/composition.spec.ts
@@ -361,7 +361,7 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add profiles/plurora
@@ -395,17 +395,17 @@ interface ConformanceStatusSummary {
 }
 ```
 
-- [ ] **Step 1: Write RED API/parser tests** proving workflow start accepts approved artifacts, rejects malformed/absolute/traversal paths, and status exposes only bounded hashes/counts/verdict rather than whole document/model output.
-- [ ] **Step 2: Write RED journal tests** proving artifact identity and conformance summary survive replay/restart and no event key stores `specText`, `planText`, `prompt`, `transcript`, `reasoning` or provider output.
-- [ ] **Step 3: Implement control and durable projection changes** in the existing `types.ts`/`index.ts` files using current parser/journal conventions.
-- [ ] **Step 4: Run GREEN.**
+- [x] **Step 1: Write RED API/parser tests** proving workflow start accepts approved artifacts, rejects malformed/absolute/traversal paths, and status exposes only bounded hashes/counts/verdict rather than whole document/model output.
+- [x] **Step 2: Write RED journal tests** proving artifact identity and conformance summary survive replay/restart and no event key stores `specText`, `planText`, `prompt`, `transcript`, `reasoning` or provider output.
+- [x] **Step 3: Implement control and durable projection changes** in the existing `types.ts`/`index.ts` files using current parser/journal conventions.
+- [x] **Step 4: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/control-server packages/core/journal
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add packages/core/control-server packages/core/journal
@@ -429,18 +429,18 @@ git commit -m "feat(trick): expose bounded conformance status"
 
 **Precondition:** Plan E has created `apps/plurora-harness-host` and has added pinned-schema `model/list` wire support. Task 7 extends that concrete implementation; it does not introduce a second model catalogue path.
 
-- [ ] **Step 1: Write RED host tests** proving conformance receives current approved artifact texts only after host-side path containment/hash verification and receives the deterministic manifest including eight Plurora DoD rows.
-- [ ] **Step 2: Add RED catalogue tests** proving configured `codex.balanced` advertises `high` and `codex.frontier` advertises `xhigh`; unsupported requested effort blocks host readiness instead of downgrading.
-- [ ] **Step 3: Extend the Plan E `model/list` reader** to expose each model's advertised effort strings to the host validator. Preserve product-advertised values/order; do not maintain a guessed model-capability table.
-- [ ] **Step 4: Implement the structured conformance interpreter** so provider output is parsed with `parseConformanceContract` and validated against the manifest before stage facts are accepted.
-- [ ] **Step 5: Run GREEN + real authenticated catalogue smoke.**
+- [x] **Step 1: Write RED host tests** proving conformance receives current approved artifact texts only after host-side path containment/hash verification and receives the deterministic manifest including eight Plurora DoD rows.
+- [x] **Step 2: Add RED catalogue tests** proving configured `codex.balanced` advertises `high` and `codex.frontier` advertises `xhigh`; unsupported requested effort blocks host readiness instead of downgrading.
+- [x] **Step 3: Extend the Plan E `model/list` reader** to expose each model's advertised effort strings to the host validator. Preserve product-advertised values/order; do not maintain a guessed model-capability table.
+- [x] **Step 4: Implement the structured conformance interpreter** so provider output is parsed with `parseConformanceContract` and validated against the manifest before stage facts are accepted.
+- [x] **Step 5: Run GREEN + real authenticated catalogue smoke.**
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
 corepack pnpm vitest run packages/subagent/subagent-codex/tests/subagent-codex.spec.ts packages/subagent/subagent-codex/tests/real-product.spec.ts profiles/plurora/tests/routing.spec.ts
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add apps/plurora-harness-host packages/subagent/subagent-codex
@@ -456,7 +456,7 @@ git commit -m "feat(trick): wire conformance through the Plurora host"
 - Create: `docs/verification/2026-08-28-implementation-conformance-dod-evidence.md`
 - Modify: `docs/verification/2026-08-27-neurovia-deployment-enablement-evidence.md`
 
-- [ ] **Step 1: Run deterministic gates.**
+- [x] **Step 1: Run deterministic gates.**
 
 ```bash
 corepack pnpm run constraints
@@ -467,13 +467,13 @@ corepack pnpm run test:trick
 corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
-- [ ] **Step 2: Run a fixture PR lifecycle** whose Spec has two explicit criterion IDs and Plan has two tasks; prove manifest contains exactly 2 Spec + 2 Plan + 8 baseline DoD rows and `PR_READY` is reached only after conformance PASS + verify-final PASS.
-- [ ] **Step 3: Run adversarial fixtures:** omitted Plan task, changed Spec hash, duplicate result item, unknown obligation substitution and high-risk OpenCode implementation with Codex unavailable. Each must fail/block/inconclusive according to the Spec instead of reaching `PR_READY`.
-- [ ] **Step 4: Run real authenticated Codex catalogue evidence** showing concrete models mapped to `codex.balanced` and `codex.frontier` advertise `high` and `xhigh`; record ids but no credentials.
-- [ ] **Step 5: Independently review** role authority, artifact path containment, hash integrity, conformance coverage, fallback independence, journal redaction and PR readiness. Fix confirmed defects and rerun affected gates.
-- [ ] **Step 6: Update Plan E evidence** to label its recorded SHA as intermediate and reference the post-Plan-F evidence file as the installation authority.
-- [ ] **Step 7: Record the final reviewed exact 40-hex SHA.** This post-Plan-F SHA supersedes every intermediate Plan E SHA as the only initial runtime revision Plan C* may pin.
-- [ ] **Step 8: Commit evidence/docs.**
+- [x] **Step 2: Run a fixture PR lifecycle** whose Spec has two explicit criterion IDs and Plan has two tasks; prove manifest contains exactly 2 Spec + 2 Plan + 8 baseline DoD rows and `PR_READY` is reached only after conformance PASS + verify-final PASS.
+- [x] **Step 3: Run adversarial fixtures:** omitted Plan task, changed Spec hash, duplicate result item, unknown obligation substitution and high-risk OpenCode implementation with Codex unavailable. Each must fail/block/inconclusive according to the Spec instead of reaching `PR_READY`.
+- [x] **Step 4: Run real authenticated Codex catalogue evidence** showing concrete models mapped to `codex.balanced` and `codex.frontier` advertise `high` and `xhigh`; record ids but no credentials.
+- [x] **Step 5: Independently review** role authority, artifact path containment, hash integrity, conformance coverage, fallback independence, journal redaction and PR readiness. Fix confirmed defects and rerun affected gates.
+- [x] **Step 6: Update Plan E evidence** to label its recorded SHA as intermediate and reference the post-Plan-F evidence file as the installation authority.
+- [x] **Step 7: Record the final reviewed exact 40-hex SHA.** This post-Plan-F SHA supersedes every intermediate Plan E SHA as the only initial runtime revision Plan C* may pin.
+- [x] **Step 8: Commit evidence/docs.**
 
 ```bash
 git add README.trick-harness.md docs/verification

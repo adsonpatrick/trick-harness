@@ -4,7 +4,12 @@
  * @module @trick-harness/control-server
  */
 
-import type { StageRouteOverride, WorkflowObjective, WorkflowVerdict } from '@trick-harness/contracts'
+import type {
+  ConformanceStatusSummary,
+  StageRouteOverride,
+  WorkflowObjective,
+  WorkflowVerdict,
+} from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 
 /** The address family the server is permitted to bind. */
@@ -55,6 +60,15 @@ export interface ControlWorkflowStatus {
    * was in flight, or a mutation was recorded, when the process stopped.
    */
   readonly requiresWorldVerification: boolean
+  /**
+   * The latest conformance reading, as hashes, counts and a verdict.
+   *
+   * Absent when nothing established conformance — which a reader must be able
+   * to tell apart from a reading that found nothing satisfied. Bounded like
+   * everything else here: the per-obligation text a provider wrote stays in the
+   * run's durable record and out of a window somebody is glancing at.
+   */
+  readonly conformance?: ConformanceStatusSummary
 }
 
 /** One workflow the Harness has started and this server now owns. */

@@ -22,6 +22,7 @@ export const ROLES = [
   'review',
   'security',
   'qa',
+  'conformance',
   'delivery',
 ] as const
 
@@ -35,7 +36,9 @@ export type Role = typeof ROLES[number]
  * edit would blur diagnosis into repair, and a reviewer that could edit would
  * be reviewing its own work. Repair is a separate stage with its own run.
  */
-export const READ_ONLY_ROLES: readonly Role[] = ['refine', 'plan', 'debug', 'verify', 'review', 'security', 'qa']
+export const READ_ONLY_ROLES: readonly Role[] = [
+  'refine', 'plan', 'debug', 'verify', 'review', 'security', 'qa', 'conformance',
+]
 
 /** How much work a task represents, independent of how risky it is. */
 export const WORKLOADS = ['light', 'medium', 'heavy'] as const
@@ -313,6 +316,161 @@ export interface RouteDecision {
   readonly fallbackFrom?: string
 }
 
+/**
+ * One approved document, named by where it lives and what it said.
+ *
+ * The hash is the identity, not the path: a plan that was approved and then
+ * edited is a different plan, and a conformance judgement against the edited
+ * text would be answering a question nobody approved. The document itself is
+ * never carried here — it is read from the workspace at the path, and the hash
+ * is what says the text read back is the text that was approved.
+ */
+export interface ApprovedArtifactRef {
+  /** Repository-relative path; never absolute and never traversing upward. */
+  readonly path: string
+  /** Lowercase 64-hex SHA-256 of the approved document's bytes. */
+  readonly sha256: string
+}
+
+/** The documents a human approved before the work was allowed to start. */
+export interface ApprovedArtifactSet {
+  /** The approved specification. */
+  readonly spec: ApprovedArtifactRef
+  /** The approved implementation plan. */
+  readonly plan: ApprovedArtifactRef
+}
+
+/**
+ * Where one conformance obligation came from.
+ *
+ * Three sources rather than a free-text field: an obligation is traceable to
+ * the approved specification, to the approved plan, or to the profile's
+ * definition of done, and one that cites none of those is one nobody approved.
+ */
+export const CONFORMANCE_SOURCES = ['spec', 'plan', 'dod'] as const
+
+/** One conformance obligation source. */
+export type ConformanceSource = typeof CONFORMANCE_SOURCES[number]
+
+/**
+ * How one obligation came out.
+ *
+ * `MISSING` is why this is not the verdict vocabulary: an obligation nothing
+ * addressed is not one that was attempted and failed, and reading the two
+ * alike would let unimplemented work look like work that went wrong.
+ */
+export const CONFORMANCE_ITEM_STATUSES = [
+  'PASS', 'MISSING', 'PARTIAL', 'FAIL', 'BLOCKED', 'INCONCLUSIVE',
+] as const
+
+/** One conformance item status. */
+export type ConformanceItemStatus = typeof CONFORMANCE_ITEM_STATUSES[number]
+
+/**
+ * One thing the approved documents require of this implementation.
+ *
+ * `required` is `true` and has no other value it can hold. The obligation set
+ * is built by deterministic code before the stage runs, and a model that could
+ * mark an obligation optional could excuse itself from the one it did not do.
+ */
+export interface ConformanceObligation {
+  /** Stable id, unique within the manifest. */
+  readonly id: string
+  /** Which approved document this obligation comes from. */
+  readonly source: ConformanceSource
+  /** What the document requires, in the words that will be judged. */
+  readonly requirement: string
+  /** Always true; an obligation the run may skip is not an obligation. */
+  readonly required: true
+}
+
+/**
+ * The obligations one run must answer, and the documents they were read from.
+ *
+ * Built before the stage is dispatched, so the expected set is not something
+ * model output can shorten. The hashes bind the manifest to exact documents:
+ * a manifest built from one plan and answered against another is two questions
+ * with one answer.
+ */
+export interface ConformanceManifest {
+  /** SHA-256 of the approved specification the obligations were read from. */
+  readonly specSha256: string
+  /** SHA-256 of the approved plan the obligations were read from. */
+  readonly planSha256: string
+  /** Every obligation this run must answer. */
+  readonly obligations: readonly ConformanceObligation[]
+}
+
+/** One obligation's answer, with what supports it. */
+export interface ConformanceItem {
+  /** The obligation being answered. */
+  readonly id: string
+  /** Which approved document it came from. */
+  readonly source: ConformanceSource
+  /** What was required. */
+  readonly requirement: string
+  /** How it came out. */
+  readonly status: ConformanceItemStatus
+  /** Where the implementation satisfying it lives. */
+  readonly implementationEvidence: readonly EvidenceRef[]
+  /** What proves it works, as distinct from what claims it does. */
+  readonly verificationEvidence: readonly EvidenceRef[]
+  /** The bounded reason for the status. */
+  readonly summary: string
+}
+
+/**
+ * What a conformance stage concluded.
+ *
+ * The hashes are carried rather than assumed, because this record outlives the
+ * run: a `PASS` that did not name the documents it measured could be read
+ * later as a pass against whatever the plan says by then.
+ */
+export interface ConformanceContract {
+  /** SHA-256 of the specification this judged against. */
+  readonly specSha256: string
+  /** SHA-256 of the plan this judged against. */
+  readonly planSha256: string
+  /** One answer per obligation. */
+  readonly items: readonly ConformanceItem[]
+  /** The stage's overall judgement. */
+  readonly verdict: WorkflowVerdict
+  /** The bounded reason for that judgement. */
+  readonly summary: string
+}
+
+/**
+ * A conformance reading reduced to what may leave the run.
+ *
+ * A status poll and a durable log both read this, and both outlive whoever was
+ * watching. So it carries which documents were judged, how many obligations
+ * each of them set, how the answers came out and the verdict — and no free text
+ * a provider wrote. The per-obligation requirement and summary stay in the
+ * stage's own record, where a person reads them deliberately rather than having
+ * them rendered into a chat window by a bridge.
+ */
+export interface ConformanceStatusSummary {
+  /** Repository-relative path of the approved specification. */
+  readonly specPath: string
+  /** SHA-256 of that specification. */
+  readonly specSha256: string
+  /** Repository-relative path of the approved plan. */
+  readonly planPath: string
+  /** SHA-256 of that plan. */
+  readonly planSha256: string
+  /**
+   * How many obligations each source set.
+   *
+   * Carried beside the counts so a reader can tell a complete reading from one
+   * that answered fewer obligations than the documents declare.
+   */
+  readonly expected: Readonly<Record<ConformanceSource, number>>
+  /** How many answers landed on each status. */
+  readonly counts: Readonly<Record<ConformanceItemStatus, number>>
+  /** The reading's overall judgement. */
+  readonly verdict: WorkflowVerdict
+}
+
 /** What a workflow was asked to accomplish, as approved before it started. */
 export interface WorkflowObjective {
   /** Stable workflow id, durable across restarts. */
@@ -327,6 +485,8 @@ export interface WorkflowObjective {
   readonly workload: Workload
   /** Profile whose policy governs this workflow. */
   readonly profileId: string
+  /** The approved documents conformance later judges the implementation against. */
+  readonly approvedArtifacts: ApprovedArtifactSet
 }
 
 /**

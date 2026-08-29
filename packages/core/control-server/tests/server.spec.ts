@@ -16,6 +16,10 @@ const OBJECTIVE = {
   risk: 'low',
   workload: 'light',
   profileId: 'test',
+  approvedArtifacts: {
+    spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+  },
 }
 
 /**
@@ -168,6 +172,26 @@ describe('an objective the server will not run', () => {
     expect(unknownRisk.code).toBe(400)
     expect(notJson.status).toBe(400)
     expect((missing.status as unknown as { error: string }).error).toBe('invalid-objective')
+  })
+
+  it('refuses an objective that named no approved Spec and Plan', async () => {
+    // Conformance judges the implementation against approved documents. An
+    // objective without them would reach that stage with nothing to judge it
+    // by, so the refusal belongs here, before a workflow id exists.
+    const { base, auth } = await serve({ start: starter(['wf-1']) })
+    const { approvedArtifacts: _dropped, ...bare } = OBJECTIVE
+
+    const missing = await post(base, auth, bare)
+    const malformed = await post(base, auth, {
+      ...OBJECTIVE,
+      approvedArtifacts: { spec: { path: '/etc/passwd', sha256: 'nope' }, plan: OBJECTIVE.approvedArtifacts.plan },
+    })
+
+    expect(missing.code).toBe(400)
+    expect(malformed.code).toBe(400)
+    expect((malformed.status as unknown as { error: string }).error).toBe('invalid-objective')
+    // The rejection is logged, and a path is a place a secret can hide.
+    expect(JSON.stringify(malformed.status)).not.toContain('/etc/passwd')
   })
 
   it('starts nothing when the objective is refused', async () => {
@@ -494,5 +518,88 @@ describe('a start request that carries a human route override', () => {
 
     await started(seen)
     expect(seen.map(record => record.routeOverride)).toEqual([undefined])
+  })
+})
+
+/**
+ * Read one workflow's status back.
+ * @param base - the server's base URL.
+ * @param auth - the bearer header.
+ * @param workflowId - the execution to read.
+ * @returns the status the server rendered.
+ */
+async function readStatus(
+  base: string,
+  auth: Record<string, string>,
+  workflowId: string,
+): Promise<ControlWorkflowStatus> {
+  const read = await fetch(base + '/workflows/' + workflowId, { headers: auth })
+  return (await read.json()) as ControlWorkflowStatus
+}
+
+describe('what a status poll may say about conformance', () => {
+  const CONFORMANCE = {
+    specPath: 'docs/spec.md',
+    specSha256: 'a'.repeat(64),
+    planPath: 'docs/plan.md',
+    planSha256: 'b'.repeat(64),
+    expected: { spec: 2, plan: 2, dod: 8 },
+    counts: { PASS: 12, MISSING: 0, PARTIAL: 0, FAIL: 0, BLOCKED: 0, INCONCLUSIVE: 0 },
+    verdict: 'PASS' as const,
+  }
+
+  it('refuses a Spec path that climbs out of the repository', async () => {
+    // An approved artifact is read back from disk mid-run. A path that escapes
+    // the working tree would have the gate reading a document nobody approved,
+    // and the refusal has to happen before a workflow id exists.
+    const { base, auth } = await serve({ start: starter(['wf-1']) })
+    for (const path of ['../../etc/shadow', 'docs/../../secrets.md', 'C:\keys\id_rsa']) {
+      const refused = await post(base, auth, {
+        ...OBJECTIVE,
+        approvedArtifacts: { spec: { path, sha256: 'a'.repeat(64) }, plan: OBJECTIVE.approvedArtifacts.plan },
+      })
+      expect(refused.code, path).toBe(400)
+      expect(JSON.stringify(refused.status), path).not.toContain(path)
+    }
+  })
+
+  it('reports hashes, expected counts and a verdict, and nothing the model wrote', async () => {
+    const { base, auth } = await serve({
+      start: starter(['wf-1'], async record => ({
+        ...outcome(record.workflowId, record.objective.id),
+        conformance: CONFORMANCE,
+      })),
+    })
+    await post(base, auth, OBJECTIVE)
+    const status = await readStatus(base, auth, 'wf-1')
+
+    expect(status.conformance).toEqual(CONFORMANCE)
+  })
+
+  it('says nothing about conformance for a run that never established it', async () => {
+    // Absent rather than a zeroed summary: a reader must be able to tell a run
+    // that has not been judged from one judged and found to satisfy nothing.
+    const { base, auth } = await serve({ start: starter(['wf-1']) })
+    await post(base, auth, OBJECTIVE)
+    expect((await readStatus(base, auth, 'wf-1')).conformance).toBeUndefined()
+  })
+
+  it('carries no per-obligation text into a status a bridge may render', async () => {
+    const { base, auth } = await serve({
+      start: starter(['wf-1'], async record => ({
+        ...outcome(record.workflowId, record.objective.id),
+        conformance: {
+          ...CONFORMANCE,
+          items: [{ id: 'ND1', requirement: 'the free text a provider returned', summary: 'and its narration' }],
+          transcript: 'what the model said',
+        },
+      } as never)),
+    })
+    await post(base, auth, OBJECTIVE)
+    const rendered = JSON.stringify(await readStatus(base, auth, 'wf-1'))
+
+    expect(rendered).not.toContain('narration')
+    expect(rendered).not.toContain('transcript')
+    expect(rendered).toContain('"verdict":"PASS"')
   })
 })

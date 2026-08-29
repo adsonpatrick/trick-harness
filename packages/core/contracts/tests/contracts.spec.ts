@@ -16,6 +16,7 @@ import {
   parseRouteDecision,
   parseStageResult,
   parseStageRouteOverride,
+  parseConformanceContract,
   parseWorkflowObjective,
 } from '../src/index.ts'
 import type {
@@ -82,6 +83,10 @@ const objective: WorkflowObjective = {
   risk: 'high',
   workload: 'medium',
   profileId: 'plurora',
+  approvedArtifacts: {
+    spec: { path: 'docs/superpowers/specs/2026-08-28-thing.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/superpowers/plans/2026-08-28-thing.md', sha256: 'b'.repeat(64) },
+  },
 }
 
 /** Serialize and re-read, which is what the durable boundary actually does. */
@@ -118,13 +123,14 @@ describe('the shared vocabulary', () => {
       'review',
       'security',
       'qa',
+      'conformance',
       'delivery',
     ])
   })
 
   it('keeps every judging role read-only and every writing role out of that set', () => {
     expect(READ_ONLY_ROLES.every(role => ROLES.includes(role))).toBe(true)
-    for (const role of ['debug', 'review', 'security', 'qa', 'verify'] as const) {
+    for (const role of ['debug', 'review', 'security', 'qa', 'verify', 'conformance'] as const) {
       expect(READ_ONLY_ROLES).toContain(role)
     }
     for (const role of ['implement', 'repair', 'delivery'] as const) {
@@ -312,6 +318,209 @@ describe('reading a serialized objective back', () => {
       const { [field]: _dropped, ...rest } = objective
       expect(() => parseWorkflowObjective(rest)).toThrow(new RegExp(`objective\\.${field}`))
     }
+  })
+})
+
+describe('reading the approved artifacts an objective was opened against', () => {
+  it('requires the artifacts the work is later judged against', () => {
+    // Conformance asks whether the implementation satisfies the Spec and Plan a
+    // human approved. An objective that never named them makes that question
+    // unanswerable, and a run reaching conformance without them would have to
+    // invent its own expectation — which is the whole thing being prevented.
+    const { approvedArtifacts: _dropped, ...rest } = objective
+    expect(() => parseWorkflowObjective(rest)).toThrow(/objective\.approvedArtifacts/)
+    for (const artifact of ['spec', 'plan'] as const) {
+      const { [artifact]: _gone, ...partial } = objective.approvedArtifacts
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts: partial }))
+        .toThrow(new RegExp(`objective\.approvedArtifacts\.${artifact}`))
+    }
+  })
+
+  it('requires each hash to be a lowercase 64-hex digest, which is the whole identity', () => {
+    for (const sha256 of ['A'.repeat(64), 'a'.repeat(63), `${'a'.repeat(63)}z`, '', `sha256:${'a'.repeat(64)}`]) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, spec: { path: 'docs/s.md', sha256 } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.spec\.sha256/)
+    }
+  })
+
+  it('requires a repository-relative path, since an absolute one names another machine', () => {
+    for (const path of ['/etc/passwd', 'C:\\docs\\spec.md', '../outside/spec.md', 'docs/../../spec.md', './']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.plan\.path/)
+    }
+  })
+
+  it('rejects every way a path can name a root, not only the ways POSIX writes one', () => {
+    // A backslash root and a UNC share are absolute on Windows, which is a
+    // platform this harness runs on. Checking only for a leading `/` and a
+    // drive letter would let both name a document outside the tree under review.
+    for (const path of ['\\\\server\\share\\spec.md', '\\etc\\passwd', 'docs\\..\\..\\spec.md']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, spec: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.spec\.path/)
+    }
+  })
+
+  it('rejects a segment a filesystem resolves to a different name than the one written', () => {
+    // Windows strips a trailing dot from a name, so `docs./spec.md` opens
+    // `docs/spec.md`; and everything after a colon is an NTFS alternate data
+    // stream, so `docs/spec.md:hidden` opens a second stream of the approved
+    // file whose bytes the hash never covered. Both are one file under a name
+    // the journal would record as another.
+    for (const path of ['docs./spec.md', 'docs/spec.md.', 'docs/spec.md:hidden', 'docs:alt/spec.md']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, spec: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.spec\.path/)
+    }
+  })
+
+  it('rejects a path that is not Unicode-normalized, which is one file under two byte strings', () => {
+    // A decomposed `e` plus a combining acute names the same file on macOS as
+    // the composed one, and the two are different strings. Whichever spelling
+    // arrives, only one can be the approved identity, so the parser takes the
+    // composed one and refuses the other rather than normalizing silently.
+    const decomposed = 'docs/refere\u0301ncia.md'
+    expect(decomposed).not.toBe(decomposed.normalize('NFC'))
+    const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path: decomposed, sha256: 'c'.repeat(64) } }
+    expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+      .toThrow(/objective\.approvedArtifacts\.plan\.path/)
+  })
+
+  it('rejects a path carrying a NUL or a control character, which no document name holds', () => {
+    for (const path of ['docs/spec.md\0../../etc/passwd', 'docs/\nspec.md']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.plan\.path/)
+    }
+  })
+
+  it('requires a canonical path, since two spellings of one file are two identities', () => {
+    // `docs/./spec.md` and `docs//spec.md` name the same document as
+    // `docs/spec.md` and hash the same bytes. Accepting all three would mean
+    // the path that is journalled is not the path that was approved.
+    for (const path of ['docs/./spec.md', 'docs//spec.md', ' docs/spec.md']) {
+      const approvedArtifacts = { ...objective.approvedArtifacts, plan: { path, sha256: 'c'.repeat(64) } }
+      expect(() => parseWorkflowObjective({ ...objective, approvedArtifacts }))
+        .toThrow(/objective\.approvedArtifacts\.plan\.path/)
+    }
+  })
+
+  it('quotes neither the path nor the hash it rejected, since the rejection is logged', () => {
+    const approvedArtifacts = { ...objective.approvedArtifacts, spec: { path: '/secret/place.md', sha256: 'nope' } }
+    let failure = ''
+    try {
+      parseWorkflowObjective({ ...objective, approvedArtifacts })
+    }
+    catch (error: unknown) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
+    expect(failure).not.toBe('')
+    expect(failure).not.toContain('/secret/place.md')
+    expect(failure).not.toContain('nope')
+  })
+
+  it('keeps no field the artifacts did not declare', () => {
+    const approvedArtifacts = {
+      spec: { ...objective.approvedArtifacts.spec, transcript: 'what the model was thinking' },
+      plan: objective.approvedArtifacts.plan,
+    }
+    const parsed = parseWorkflowObjective({ ...objective, approvedArtifacts })
+    expect(Object.hasOwn(parsed.approvedArtifacts.spec, 'transcript')).toBe(false)
+  })
+})
+
+describe('reading a conformance result back', () => {
+  const item = {
+    id: 'PLAN-3',
+    source: 'plan',
+    requirement: 'the delivery branch is derived, not chosen by a model',
+    status: 'PASS',
+    implementationEvidence: [{ kind: 'diff', locator: 'src/handlers.ts', summary: 'the derivation' }],
+    verificationEvidence: [{ kind: 'test', locator: 'tests/handlers.spec.ts', summary: 'pins it' }],
+    summary: 'derived from the objective id',
+  }
+
+  const contract = {
+    specSha256: 'a'.repeat(64),
+    planSha256: 'b'.repeat(64),
+    items: [item],
+    verdict: 'PASS',
+    summary: 'every obligation is satisfied',
+  }
+
+  it('survives a JSON round trip unchanged', () => {
+    expect(parseConformanceContract(roundTrip(contract))).toStrictEqual(contract)
+  })
+
+  it('binds the result to the documents it judged, since a verdict alone names nothing', () => {
+    // A conformance PASS that does not say which Spec and Plan it was measured
+    // against can be replayed against a later, different plan.
+    for (const field of ['specSha256', 'planSha256'] as const) {
+      const { [field]: _dropped, ...rest } = contract
+      expect(() => parseConformanceContract(rest)).toThrow(new RegExp(`conformance\\.${field}`))
+      expect(() => parseConformanceContract({ ...contract, [field]: 'not-a-digest' }))
+        .toThrow(new RegExp(`conformance\\.${field}`))
+    }
+  })
+
+  it('refuses a source or a status nobody defined', () => {
+    expect(() => parseConformanceContract({ ...contract, items: [{ ...item, source: 'vibes' }] }))
+      .toThrow(/conformance\.items\[0\]\.source/)
+    expect(() => parseConformanceContract({ ...contract, items: [{ ...item, status: 'PROBABLY' }] }))
+      .toThrow(/conformance\.items\[0\]\.status/)
+    expect(() => parseConformanceContract({ ...contract, verdict: 'GREAT' })).toThrow(/conformance\.verdict/)
+  })
+
+  it('accepts MISSING, which is the status a verdict vocabulary has no word for', () => {
+    // An obligation nothing addressed is not a failed obligation; conflating
+    // the two would let an unimplemented requirement read as an attempted one.
+    const missing = { ...item, status: 'MISSING', implementationEvidence: [], verificationEvidence: [] }
+    expect(parseConformanceContract({ ...contract, items: [missing], verdict: 'FAIL' }).items[0]?.status)
+      .toBe('MISSING')
+  })
+
+  it('requires every field of an item, so a partial answer is not a quiet PASS', () => {
+    for (const field of ['id', 'source', 'requirement', 'status', 'summary'] as const) {
+      const { [field]: _dropped, ...partial } = item
+      expect(() => parseConformanceContract({ ...contract, items: [partial] }))
+        .toThrow(new RegExp(`conformance\\.items\\[0\\]\\.${field}`))
+    }
+    for (const field of ['implementationEvidence', 'verificationEvidence'] as const) {
+      const { [field]: _dropped, ...partial } = item
+      expect(() => parseConformanceContract({ ...contract, items: [partial] }))
+        .toThrow(new RegExp(`conformance\\.items\\[0\\]\\.${field}`))
+    }
+  })
+
+  it('refuses two answers about one obligation', () => {
+    // Deterministic code decides the obligation set; a result that answered an
+    // id twice would leave which answer counts up to whoever read it last.
+    expect(() => parseConformanceContract({ ...contract, items: [item, { ...item, status: 'FAIL' }] }))
+      .toThrow(/conformance\.items/)
+  })
+
+  it('keeps no field the contract did not declare', () => {
+    const parsed = parseConformanceContract({
+      ...contract,
+      reasoning: 'here is how I thought about it',
+      items: [{ ...item, transcript: 'the whole session' }],
+    })
+    expect(Object.hasOwn(parsed, 'reasoning')).toBe(false)
+    expect(Object.hasOwn(parsed.items[0] ?? {}, 'transcript')).toBe(false)
+  })
+
+  it('quotes nothing it rejected, since a requirement can hold whatever was pasted into it', () => {
+    let failure = ''
+    try {
+      parseConformanceContract({ ...contract, items: [{ ...item, status: 'postgresql://u:hunter2@db/x' }] })
+    }
+    catch (error: unknown) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
+    expect(failure).toContain('conformance.items[0].status')
+    expect(failure).not.toContain('hunter2')
   })
 })
 

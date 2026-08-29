@@ -128,8 +128,15 @@ Every gate in section 1 was rerun on the fixed tree: lint, typecheck, 113 host t
 in sections 2 and 3 was produced against the reviewed tree and is unaffected by the six
 fixes, none of which touch a catalogue read, the listener or disposal ordering.
 
-Plan C and its successors may pin exactly one initial SHA, and it is the merged head — the
-reviewed tree plus the fixes its review required:
+**Superseded.** `c9f9cc168b` was the known-good head of Plan E and is now an *intermediate*
+revision, not an installation authority. It predates the conformance role, the Definition of
+Done and the reasoning-effort boot gate, so a deployment pinned to it installs a runtime that
+cannot certify a branch against approved artifacts. The SHA Plan C and its successors may pin
+is recorded in `docs/verification/2026-08-28-implementation-conformance-dod-evidence.md`,
+which is the installation authority.
+
+What this section still stands for is what it was reviewed for: the merged head of Plan E was
+the intermediate revision below, and everything sections 1 to 5 prove was proven on it.
 
 ```text
 c9f9cc168b

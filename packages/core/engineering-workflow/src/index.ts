@@ -10,8 +10,10 @@
  * @packageDocumentation
  */
 
-import { READ_ONLY_ROLES } from '@trick-harness/contracts'
+import { READ_ONLY_ROLES, parseConformanceContract } from '@trick-harness/contracts'
 import type {
+  ConformanceManifest,
+  ConformanceStatusSummary,
   DiagnosisContract,
   EvidenceRef,
   Finding,
@@ -45,6 +47,7 @@ export type * from './types.ts'
 export * from './repair.ts'
 export * from './triage.ts'
 export * from './lifecycle.ts'
+export * from './conformance.ts'
 
 import {
   assessRepairCompletion,
@@ -55,6 +58,13 @@ import {
 } from './repair.ts'
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
 import { planPullRequestStages } from './lifecycle.ts'
+import {
+  ConformanceError,
+  buildConformanceManifest,
+  summarizeConformance,
+  validateConformanceCoverage,
+} from './conformance.ts'
+import type { ApprovedArtifactTexts } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type {
@@ -317,6 +327,16 @@ function blockerKindOfRepairError(error: RepairError): BlockerKind {
  */
 export class WorkflowRunner {
   readonly #workflowId: string
+
+  /**
+   * The latest conformance reading, bounded, once one has been established.
+   *
+   * Held on the runner rather than threaded through every terminal path: a
+   * reading survives whatever the run does afterwards, and a run that failed
+   * after conformance answered still has an answer worth reporting. One runner
+   * serves one workflow, so there is nothing here to leak into another.
+   */
+  #conformance: ConformanceStatusSummary | undefined
   readonly #options: WorkflowRuntimeOptions
   readonly #now: () => number
   #controller: AbortController | undefined
@@ -408,8 +428,15 @@ export class WorkflowRunner {
     // Whether the isolated preview has already passed for this run. A repair
     // and a fresh delivery do not re-verify a schema nothing touched again.
     let schemaVerified = false
+    // Whether conformance has already been read once. After it has, a repair is
+    // followed by a fresh reading, because the answer it gave was about the
+    // branch as it stood before the fix.
+    let conformanceRead = false
     const availability = availabilityState()
     const humanOverride: OverrideBox = { override: request.routeOverride, spent: false }
+    // The approved documents as they last read, held so the conformance stage
+    // scores against the same bytes the implementation was gated on.
+    let approved: ApprovedArtifactTexts | undefined
 
     while (queue.length > 0) {
       const stage = queue.shift() as StageSpec
@@ -418,6 +445,19 @@ export class WorkflowRunner {
           objective, stages, repairCycles, executorStarts, 'budget-exhausted',
           `the run reached its ${maxExecutorStarts} executor-start budget before ${stage.role} could run`,
         )
+      }
+
+      // The approved documents are re-read before anything that writes and
+      // before conformance, not once at the start: they can change under a run,
+      // and an implementation guided by an edited Plan — or a conformance
+      // reading taken against one — is work against obligations nobody
+      // approved. The run stops before the stage rather than after it.
+      if (permissionModeFor(stage.role) === 'workspace-write' || stage.role === 'conformance') {
+        const read = await this.#readApprovedArtifacts(request, objective, signal)
+        if (typeof read === 'string') {
+          return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
+        }
+        approved = read
       }
 
       if (stage.role === 'repair') {
@@ -543,6 +583,18 @@ export class WorkflowRunner {
       if (dispatched.failed) {
         return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'FAIL',
           dispatched.facts.summary)
+      }
+
+      if (stage.role === 'conformance') {
+        const folded = await this.#readConformance(
+          stage, request, approved, dispatched, objective, stages, repairCycles, executorStarts,
+        )
+        if ('outcome' in folded) return folded.outcome
+        // The contract is what the stage established; the executor's own
+        // verdict is a claim about it, and the weaker of the two stands.
+        dispatched = { ...dispatched, facts: folded.facts }
+        stages[stages.length - 1] = folded.facts
+        conformanceRead = true
       }
 
       // Triage has the last word on a stage's verdict. A stage may report what it
@@ -679,6 +731,12 @@ export class WorkflowRunner {
           // that ran against the pre-repair diff would be certifying a state
           // the pull request no longer holds.
           ...delivered ? [{ stageId: `delivery-${repairCycles + 1}`, role: 'delivery' as const }] : [],
+          // A conformance reading taken before this repair describes a branch
+          // that no longer exists, so it is taken again before the stage that
+          // found the defect re-runs and before anything certifies the result.
+          ...conformanceRead && stage.role !== 'conformance'
+            ? [{ stageId: `conformance-${repairCycles + 1}`, role: 'conformance' as const }]
+            : [],
           { stageId: `${stage.role}-${retry}`, role: stage.role },
         )
         continue
@@ -695,6 +753,116 @@ export class WorkflowRunner {
 
     return await this.#end(objective, stages, repairCycles, executorStarts, 'completed', 'PASS',
       `all ${stages.length} stages passed`)
+  }
+
+  /**
+   * Re-read the approved documents and check they are still the approved ones.
+   *
+   * @param request - The run request, which supplies the reader.
+   * @param objective - The objective, which carries the approved identity.
+   * @param signal - The run's abort signal.
+   * @returns The documents, or the refusal to state as a blocker.
+   */
+  async #readApprovedArtifacts(
+    request: WorkflowRunRequest,
+    objective: WorkflowObjective,
+    signal: AbortSignal,
+  ): Promise<ApprovedArtifactTexts | string> {
+    const read = request.loadApprovedArtifacts
+    if (read === undefined) {
+      return 'this run has no way to read the approved Spec and Plan back, so nothing can be gated on them'
+    }
+    let loaded: ApprovedArtifactTexts
+    try {
+      loaded = await read(objective, signal)
+    } catch {
+      // The reader's own error text is not repeated: it can name a path, a
+      // provider payload or anything else a caller put in it, and this summary
+      // reaches the journal.
+      return 'the approved Spec and Plan could not be read back'
+    }
+    const { spec, plan } = objective.approvedArtifacts
+    if (loaded.specSha256 !== spec.sha256) {
+      return 'the approved Spec is not the document this objective was approved against'
+    }
+    if (loaded.planSha256 !== plan.sha256) {
+      return 'the approved Plan is not the document this objective was approved against'
+    }
+    return loaded
+  }
+
+  /**
+   * Read a conformance stage's result back and hold it to the approved artifacts.
+   *
+   * @param stage - The conformance stage that ran.
+   * @param request - The run request, which supplies the reader.
+   * @param approved - The documents this run was gated on.
+   * @param dispatched - What the stage produced.
+   * @param objective - The objective, for the terminal event.
+   * @param stages - The facts so far, for the terminal event.
+   * @param repairCycles - Repair cycles so far, for the terminal event.
+   * @param executorStarts - Executor starts so far, for the terminal event.
+   * @returns The stage's folded facts, or the outcome the run ends on.
+   */
+  async #readConformance(
+    stage: StageSpec,
+    request: WorkflowRunRequest,
+    approved: ApprovedArtifactTexts | undefined,
+    dispatched: Dispatched,
+    objective: WorkflowObjective,
+    stages: readonly StageFacts[],
+    repairCycles: number,
+    executorStarts: number,
+  ): Promise<{ facts: StageFacts } | { outcome: WorkflowOutcome }> {
+    /**
+     * End the run without establishing conformance.
+     *
+     * @param summary - Why nothing was established.
+     * @returns The outcome to return.
+     */
+    const unestablished = async (summary: string): Promise<{ outcome: WorkflowOutcome }> => ({
+      outcome: await this.#end(
+        objective, stages, repairCycles, executorStarts, 'failed', 'INCONCLUSIVE', summary,
+      ),
+    })
+
+    const read = request.conformance
+    if (read === undefined || approved === undefined) {
+      return await unestablished('this run has no way to read a conformance result, so none was established')
+    }
+    let manifest: ConformanceManifest
+    try {
+      // The Definition of Done is deterministic profile policy and joins the
+      // manifest with it. A run that supplies none is judged against the Spec
+      // and the Plan alone, which is a weaker bar and never a silently wider one.
+      manifest = buildConformanceManifest({ ...approved, dod: request.dodObligations ?? [] })
+    } catch (error) {
+      if (!(error instanceof ConformanceError)) throw error
+      return await unestablished(`the approved artifacts state no obligation set: ${error.message}`)
+    }
+    let contract
+    try {
+      contract = validateConformanceCoverage(
+        manifest,
+        parseConformanceContract(read(stage, dispatched.facts.executor, dispatched.result as ExecutorResult, manifest)),
+      )
+    } catch (error) {
+      if (!(error instanceof ConformanceError) && !(error instanceof Error)) throw error
+      // The refusal names the rule, never the payload it was refused over.
+      const cause = error instanceof ConformanceError ? error.code : 'unreadable'
+      return await unestablished(`conformance produced no result that could be held to the approved artifacts: ${cause}`)
+    }
+    this.#conformance = summarizeConformance(objective.approvedArtifacts, manifest, contract)
+    this.#options.journal.conformance(this.#conformance)
+    const verdict = weaker(dispatched.facts.verdict, contract.verdict)
+    if (verdict === dispatched.facts.verdict) return { facts: dispatched.facts }
+    await this.#options.journal.verdict(stage.stageId, stage.role, verdict, contract.summary, [])
+    return {
+      facts: facts(
+        stage, dispatched.facts.executor, dispatched.facts.permissionMode, verdict, contract.summary,
+        dispatched.facts.findings, dispatched.facts.evidence, dispatched.facts.durationMs,
+      ),
+    }
   }
 
   /** Route, start, and reduce one stage to facts. */
@@ -1149,8 +1317,28 @@ export class WorkflowRunner {
       stages: Object.freeze([...stages]),
       repairCycles,
       executorStarts,
+      ...this.#conformance === undefined ? {} : { conformance: this.#conformance },
     })
   }
+}
+
+/**
+ * Verdicts from the least assurance to the most, so two can be compared.
+ *
+ * A conformance stage that passed and a contract that did not are two claims
+ * about one reading, and the run believes the weaker one.
+ */
+const ASSURANCE: readonly WorkflowVerdict[] = ['BLOCKED', 'FAIL', 'INCONCLUSIVE', 'PARTIAL', 'PASS']
+
+/**
+ * The weaker of two verdicts.
+ *
+ * @param left - One verdict.
+ * @param right - The other.
+ * @returns Whichever claims less.
+ */
+function weaker(left: WorkflowVerdict, right: WorkflowVerdict): WorkflowVerdict {
+  return ASSURANCE.indexOf(left) <= ASSURANCE.indexOf(right) ? left : right
 }
 
 /** Build one stage's facts, field by field, so nothing else can ride along. */

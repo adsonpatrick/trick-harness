@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import type { StageResult, WorkflowObjective } from '@trick-harness/contracts'
+import type { ConformanceManifest, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import type { ControlWorkflowStatus } from '@trick-harness/control-server'
 import { planPullRequestStages } from '@trick-harness/engineering-workflow'
-import type { DatabaseVerificationCapabilityPort } from '@trick-harness/engineering-workflow'
+import type { DatabaseVerificationCapabilityPort, StageSpec } from '@trick-harness/engineering-workflow'
 import type { ExecutorProvider, ExecutorStartRequest } from '@trick-harness/executor'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
@@ -18,6 +18,43 @@ import {
   composeHarness,
 } from '../src/index.ts'
 import type { ComposedHarness, HarnessCompositionOptions } from '../src/index.ts'
+/**
+ * The approved documents as they stand, hashing to the identity the objective
+ * was opened against. One criterion and one task is enough for a manifest.
+ */
+const ARTIFACTS = Object.freeze({
+  specText: '- **ND1:** the work satisfies the approved specification',
+  planText: '### Task 1: do the approved work',
+  specSha256: 'a'.repeat(64),
+  planSha256: 'b'.repeat(64),
+})
+
+/** A conformance reading that answers every obligation the manifest states. */
+const CONFORMS = {
+  loadApprovedArtifacts: async (): Promise<typeof ARTIFACTS> => ARTIFACTS,
+  conformance: (
+    _stage: StageSpec,
+    _executor: string,
+    _result: unknown,
+    manifest: ConformanceManifest,
+  ): unknown => ({
+    specSha256: manifest.specSha256,
+    planSha256: manifest.planSha256,
+    items: manifest.obligations.map(obligation => ({
+      id: obligation.id,
+      source: obligation.source,
+      requirement: obligation.requirement,
+      status: 'PASS',
+      implementationEvidence: [],
+      verificationEvidence: [],
+      summary: 'satisfied',
+    })),
+    verdict: 'PASS',
+    summary: 'the branch satisfies the approved artifacts',
+  }),
+}
+
+
 
 const RULES = Object.freeze([
   Object.freeze({ id: 'implement', when: Object.freeze({ role: 'implement' }), use: Object.freeze({ executor: 'builder', tier: 'implementation' }) }),
@@ -64,6 +101,10 @@ const OBJECTIVE: WorkflowObjective = Object.freeze({
   risk: 'low',
   workload: 'heavy',
   profileId: 'plurora-test',
+  approvedArtifacts: {
+    spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+    plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+  },
 })
 
 /**
@@ -188,6 +229,7 @@ function baseOptions(profile: HarnessProfile, started: ExecutorStartRequest[]): 
     workflow: {
       interpret,
       task: stage => `${stage.role}: do the work`,
+      ...CONFORMS,
       plan: planPullRequestStages,
       describeDelivery: (input): Omit<DeliveryRequest, 'signal'> => ({
         branch: 'feature',
@@ -376,12 +418,42 @@ describe('a workflow through the real control-server entry path', () => {
     expect(status.state).toBe('completed')
     expect(status.verdict).toBe('PASS')
     expect(status.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'delivery', 'review', 'verify',
+      'implement', 'verify', 'delivery', 'review', 'conformance', 'verify',
     ])
-    // Four starts for five stages: delivery is the one nothing was asked about.
+    // Five starts for six stages: delivery is the one nothing was asked about.
     expect(started.map(request => request.route.model)).toEqual([
-      'mimo-v2.5', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash',
+      'mimo-v2.5', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash',
     ])
+  })
+
+  it('holds the run to the deployment’s Definition of Done as well as its documents', async () => {
+    // The Spec and the Plan are written per objective; the Definition of Done is
+    // the standing bar. A composition that dropped it would score every run
+    // against obligations the objective itself supplied, which is the objective
+    // choosing what it is held to.
+    const seen: ConformanceManifest[] = []
+    const dodObligations = [
+      { id: 'DOD-GATES', source: 'dod', requirement: 'every deterministic gate passes', required: true },
+    ] as const
+    const started: ExecutorStartRequest[] = []
+    const options = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
+    const harness = compose({
+      ...options,
+      workflow: {
+        ...options.workflow,
+        dodObligations,
+        conformance: (stage, executor, result, manifest) => {
+          seen.push(manifest)
+          return CONFORMS.conformance(stage, executor, result, manifest)
+        },
+      },
+    })
+
+    const outcome = await harness.run(OBJECTIVE)
+
+    expect(seen[0]?.obligations.filter(item => item.source === 'dod')).toEqual(dodObligations)
+    expect(outcome.conformance?.expected.dod).toBe(1)
+    expect(outcome.verdict).toBe('PASS')
   })
 
   it('routes around a degraded executor through the profile fallback table', async () => {
@@ -441,6 +513,7 @@ describe('a workflow through the real control-server entry path', () => {
       workflow: {
         interpret: base.workflow.interpret,
         task: base.workflow.task,
+        ...CONFORMS,
         ...base.workflow.describeDelivery === undefined ? {} : { describeDelivery: base.workflow.describeDelivery },
       },
     })
@@ -724,6 +797,7 @@ describe('publishing from a composed deployment', () => {
       workflow: {
         interpret: base.workflow.interpret,
         task: base.workflow.task,
+        ...CONFORMS,
         ...base.workflow.plan === undefined ? {} : { plan: base.workflow.plan },
       },
     })

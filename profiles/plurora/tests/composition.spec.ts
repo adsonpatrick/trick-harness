@@ -19,7 +19,7 @@ import {
 } from '@trick-harness/composition'
 import type { ComposedHarness } from '@trick-harness/composition'
 import type {
-  DiagnosisContract, EvidenceRef, Finding, StageResult, WorkflowObjective,
+  ConformanceManifest, DiagnosisContract, EvidenceRef, Finding, StageResult, WorkflowObjective,
 } from '@trick-harness/contracts'
 import { dispatchableRoute, type ReasoningEffort } from '@trick-harness/executor'
 import type { ExecutorProvider, ExecutorResult } from '@trick-harness/executor'
@@ -28,6 +28,43 @@ import { DEFAULT_MODEL_REGISTRY } from '@trick-harness/routing'
 import type { OpencodeAdapter } from '@trick-harness/provider-opencode'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { pluroraProfile } from '../profile.ts'
+/**
+ * The approved documents as they stand, hashing to the identity the objective
+ * was opened against. One criterion and one task is enough for a manifest.
+ */
+const ARTIFACTS = Object.freeze({
+  specText: '- **ND1:** the work satisfies the approved specification',
+  planText: '### Task 1: do the approved work',
+  specSha256: 'a'.repeat(64),
+  planSha256: 'b'.repeat(64),
+})
+
+/** A conformance reading that answers every obligation the manifest states. */
+const CONFORMS = {
+  loadApprovedArtifacts: async (): Promise<typeof ARTIFACTS> => ARTIFACTS,
+  conformance: (
+    _stage: unknown,
+    _executor: string,
+    _result: unknown,
+    manifest: ConformanceManifest,
+  ): unknown => ({
+    specSha256: manifest.specSha256,
+    planSha256: manifest.planSha256,
+    items: manifest.obligations.map(obligation => ({
+      id: obligation.id,
+      source: obligation.source,
+      requirement: obligation.requirement,
+      status: 'PASS',
+      implementationEvidence: [],
+      verificationEvidence: [],
+      summary: 'satisfied',
+    })),
+    verdict: 'PASS',
+    summary: 'the branch satisfies the approved artifacts',
+  }),
+}
+
+
 
 /** Product entry points recorded so the test can prove none of them is reached. */
 function productSeams() {
@@ -219,6 +256,10 @@ const LIVE_OBJECTIVE: WorkflowObjective = Object.freeze({
   risk: 'low',
   workload: 'medium',
   profileId: 'plurora',
+  approvedArtifacts: {
+    spec: { path: 'docs/spec.md', sha256: ARTIFACTS.specSha256 },
+    plan: { path: 'docs/plan.md', sha256: ARTIFACTS.planSha256 },
+  },
 })
 
 /** One start, as the scripted providers record it. */
@@ -274,6 +315,7 @@ describe('Plurora policy driving a live run', () => {
           evidence: [],
         })),
         task: stage => `${stage.role}: do the work`,
+        ...CONFORMS,
         describeDelivery: input => ({
           branch: 'feature',
           files: ['src/thing.ts'],
@@ -577,7 +619,7 @@ describe('Plurora policy driving a live run', () => {
       expect(ids).toEqual([
         'implement-1', 'verify-1', 'delivery-1', 'review-1',
         'debug-1', 'repair-1', 'verify-2', 'delivery-2', 'review-2',
-        'qa-1', 'verify-final',
+        'qa-1', 'conformance-1', 'verify-final',
       ])
       noMutationAuthorityInPrompts(seen)
     })
@@ -590,7 +632,7 @@ describe('Plurora policy driving a live run', () => {
 
       expect(outcome.state).toBe('completed')
       expect(outcome.stages.map(stage => stage.role)).toEqual([
-        'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'verify',
+        'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
       ])
       expect(outcome.stages.at(-1)?.stageId).toBe('verify-final')
       noMutationAuthorityInPrompts(seen)
@@ -625,6 +667,7 @@ describe('the capabilities this project actually turns on', () => {
           evidence: [],
         }),
         task: stage => `${stage.role}: do the work`,
+        ...CONFORMS,
       },
       providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
       integrations: {
@@ -684,6 +727,7 @@ describe('the capabilities this project actually turns on', () => {
           evidence: [],
         }),
         task: stage => `${stage.role}: do the work`,
+        ...CONFORMS,
       },
       providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
       integrations: {
@@ -731,6 +775,7 @@ describe('the capabilities this project actually turns on', () => {
           evidence: [],
         }),
         task: stage => `${stage.role}: do the work`,
+        ...CONFORMS,
       },
       providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
       integrations: {

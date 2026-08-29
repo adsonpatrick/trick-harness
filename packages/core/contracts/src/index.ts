@@ -18,6 +18,8 @@
 
 import {
   CONFIDENCE_LEVELS,
+  CONFORMANCE_ITEM_STATUSES,
+  CONFORMANCE_SOURCES,
   EVIDENCE_KINDS,
   FINDING_CLASSES,
   RISKS,
@@ -28,6 +30,10 @@ import {
   WORKLOADS,
 } from './types.ts'
 import type {
+  ApprovedArtifactRef,
+  ApprovedArtifactSet,
+  ConformanceContract,
+  ConformanceItem,
   DiagnosisContract,
   EvidenceRef,
   Finding,
@@ -260,6 +266,151 @@ export function parseStageRouteOverride(value: unknown, path = 'routeOverride'):
   })
 }
 
+/** A lowercase 64-hex SHA-256 digest and nothing else. */
+const SHA256 = /^[0-9a-f]{64}$/
+
+/** Read a required field that must be a SHA-256 digest. */
+function digest(source: Record<string, unknown>, key: string, path: string): string {
+  const value = text(source, key, path)
+  if (!SHA256.test(value)) {
+    throw new ContractError(`${path}.${key}`, 'must be a lowercase 64-character hexadecimal SHA-256')
+  }
+  return value
+}
+
+/** A Windows drive designator, which makes whatever follows it absolute. */
+const DRIVE_LETTER = /^[a-zA-Z]:/
+
+/**
+ * Whether `value` holds a character no document name does.
+ *
+ * By code point rather than by a control-character class: a NUL truncates the
+ * path for whoever opens it, and the rest are unprintable in the journal a
+ * person later reads.
+ *
+ * @param value - one path segment.
+ * @returns whether it holds a control character.
+ */
+function hasControlCharacter(value: string): boolean {
+  // By code unit rather than by code point: every character being looked for
+  // is ASCII, and a surrogate half is not one of them.
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 0x20 || code === 0x7F) return true
+  }
+  return false
+}
+
+/**
+ * Read one approved artifact reference back.
+ *
+ * The path is held to repository-relative because this value decides what the
+ * host opens and hashes: an absolute path names a document on the machine
+ * rather than in the tree under review, and a traversal segment names one
+ * outside it. Neither the path nor the hash is quoted in a rejection, because
+ * a rejection is logged and a path is a place a secret can hide.
+ *
+ * @param value - The serialized reference.
+ * @param path - Field path to report a rejection under.
+ * @returns The reference, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing, malformed, or escapes the repository.
+ */
+export function parseApprovedArtifactRef(value: unknown, path = 'artifact'): ApprovedArtifactRef {
+  const source = asRecord(value, path)
+  const location = text(source, 'path', path)
+  // Stated as what a segment may be rather than as a list of what it may not.
+  // A check that enumerated `/` and a drive letter would still admit
+  // `\\server\share` and `\etc`, both roots on a platform this harness runs
+  // on; and one that only refused `..` would admit `docs/./spec.md` — the same
+  // bytes under a second spelling, so the path journalled would not be the
+  // path approved.
+  //
+  // A trailing dot and a colon are refused for the same reason, and not as
+  // Windows trivia: Windows drops the dot and reads everything after the colon
+  // as an alternate data stream, so either names a file other than the one
+  // spelled. The path is required to be in NFC rather than normalized into it,
+  // because normalizing would accept two byte strings as one approved identity.
+  const segments = location.split(/[/\\]/)
+  const named = segments.every(segment =>
+    segment !== '' && segment !== '.' && segment !== '..'
+    && segment === segment.trim()
+    && !segment.endsWith('.')
+    && !segment.includes(':')
+    && !hasControlCharacter(segment))
+  if (!named || DRIVE_LETTER.test(location) || location !== location.normalize('NFC')) {
+    throw new ContractError(`${path}.path`, 'must be a repository-relative path of ordinary name segments')
+  }
+  return Object.freeze({ path: location, sha256: digest(source, 'sha256', path) })
+}
+
+/**
+ * Read the approved artifact set back.
+ *
+ * @param value - The serialized set.
+ * @param path - Field path to report a rejection under.
+ * @returns The set, rebuilt from declared fields only.
+ * @throws {ContractError} when either document is missing or malformed.
+ */
+export function parseApprovedArtifactSet(value: unknown, path = 'approvedArtifacts'): ApprovedArtifactSet {
+  const source = asRecord(value, path)
+  return Object.freeze({
+    spec: parseApprovedArtifactRef(source['spec'], `${path}.spec`),
+    plan: parseApprovedArtifactRef(source['plan'], `${path}.plan`),
+  })
+}
+
+/**
+ * Read one conformance item back.
+ *
+ * @param value - The serialized item.
+ * @param path - Field path to report a rejection under.
+ * @returns The item, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing or outside its vocabulary.
+ */
+function parseConformanceItem(value: unknown, path: string): ConformanceItem {
+  const source = asRecord(value, path)
+  return Object.freeze({
+    id: text(source, 'id', path),
+    source: member(source, 'source', CONFORMANCE_SOURCES, path),
+    requirement: text(source, 'requirement', path),
+    status: member(source, 'status', CONFORMANCE_ITEM_STATUSES, path),
+    implementationEvidence: list(source, 'implementationEvidence', path, parseEvidenceRef),
+    verificationEvidence: list(source, 'verificationEvidence', path, parseEvidenceRef),
+    summary: text(source, 'summary', path),
+  })
+}
+
+/**
+ * Read one conformance result back.
+ *
+ * The two hashes are required because this record outlives the run that wrote
+ * it: a `PASS` that did not name the documents it measured reads, later, as a
+ * pass against whatever the plan says by then. And an obligation may be
+ * answered once — two answers for one id leave which one counts to whoever
+ * happens to read the list last.
+ *
+ * @param value - The serialized result.
+ * @param path - Field path to report a rejection under.
+ * @returns The result, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing, outside its vocabulary, or
+ *   answers one obligation twice.
+ */
+export function parseConformanceContract(value: unknown, path = 'conformance'): ConformanceContract {
+  const source = asRecord(value, path)
+  const items = list(source, 'items', path, parseConformanceItem)
+  const answered = new Set(items.map(item => item.id))
+  if (answered.size !== items.length) {
+    throw new ContractError(`${path}.items`, 'must answer each obligation exactly once')
+  }
+  return Object.freeze({
+    specSha256: digest(source, 'specSha256', path),
+    planSha256: digest(source, 'planSha256', path),
+    items,
+    verdict: member(source, 'verdict', WORKFLOW_VERDICTS, path),
+    summary: text(source, 'summary', path),
+  })
+}
+
 /**
  * Read one workflow objective back.
  * @param value - The serialized objective.
@@ -276,5 +427,6 @@ export function parseWorkflowObjective(value: unknown, path = 'objective'): Work
     risk: member(source, 'risk', RISKS, path),
     workload: member(source, 'workload', WORKLOADS, path),
     profileId: text(source, 'profileId', path),
+    approvedArtifacts: parseApprovedArtifactSet(source['approvedArtifacts'], `${path}.approvedArtifacts`),
   })
 }

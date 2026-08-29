@@ -110,6 +110,25 @@ export const routingPolicy: RoutingPolicyDefinition = {
       when: { role: 'security' },
       use: { executor: 'codex', tier: 'codex.frontier', effort: 'xhigh' },
     },
+    // Conformance is the reading that decides whether a green branch may reach
+    // a human, so it is priced like the review it stands beside rather than
+    // like the implementation it judges — and it is stated above the generic
+    // review and default rows so no broader row can quietly claim it.
+    {
+      id: 'critical-conformance',
+      when: { role: 'conformance', risk: 'critical' },
+      use: { executor: 'codex', tier: 'codex.frontier', effort: 'xhigh' },
+    },
+    {
+      id: 'high-conformance',
+      when: { role: 'conformance', risk: 'high' },
+      use: { executor: 'codex', tier: 'codex.frontier', effort: 'xhigh' },
+    },
+    {
+      id: 'routine-conformance',
+      when: { role: 'conformance' },
+      use: { executor: 'codex', tier: 'codex.balanced', effort: 'high' },
+    },
     {
       id: 'critical-risk-review',
       when: { role: 'review', risk: 'critical' },
@@ -204,6 +223,15 @@ export const routingPolicy: RoutingPolicyDefinition = {
     {
       id: 'codex-unavailable-verify',
       when: { unavailable: 'codex', role: 'verify' },
+      use: { executor: 'opencode', tier: 'opencode.reasoning-fast' },
+    },
+    // Conformance answered on the workhorse would be volume work standing in
+    // for the last judgement before a human sees the branch; when it is also
+    // where the implementation ran, the route carries `independence:unsatisfied`
+    // and the reading cannot certify high or critical work.
+    {
+      id: 'codex-unavailable-conformance',
+      when: { unavailable: 'codex', role: 'conformance' },
       use: { executor: 'opencode', tier: 'opencode.reasoning-fast' },
     },
     {

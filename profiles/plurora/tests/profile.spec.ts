@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { RoutingContext } from '@trick-harness/contracts'
 import { createProfileRegistry, validateProfile } from '@trick-harness/profile'
 import { DEFAULT_MODEL_REGISTRY, RoutingError, route } from '@trick-harness/routing'
-import { pluroraProfile } from '../profile.ts'
+import { pluroraDodObligations, pluroraProfile } from '../profile.ts'
 
 /** Find one rule by id in a list, failing the test rather than returning undefined. */
 function rule(rules: readonly { id: string }[], id: string): Record<string, unknown> {
@@ -373,5 +373,49 @@ describe('the database fallbacks this project does not have', () => {
     // `neurovia-dev` is the database everyone else is using. A migration
     // validated against it is not validated, it is the incident.
     expect(serialized).not.toContain('neurovia-dev')
+  })
+})
+
+describe('the Plurora Definition of Done', () => {
+  it('states the eight obligations every certified branch carries', () => {
+    // Held as data in the profile rather than asked of the model: a Definition
+    // of Done the run could negotiate is not a definition of done.
+    expect(pluroraDodObligations.map(item => item.id)).toEqual([
+      'DOD-APPROVED-ARTIFACTS',
+      'DOD-DIFF-COHERENCE',
+      'DOD-FRESH-EVIDENCE',
+      'DOD-NO-MATERIAL-DEFECT',
+      'DOD-APPLICABLE-QA',
+      'DOD-APPLICABLE-SECURITY',
+      'DOD-DELIVERY-WORLD',
+      'DOD-FINAL-VERIFY-READY',
+    ])
+  })
+
+  it('makes every obligation required and sourced from the Definition of Done', () => {
+    // An optional obligation is one a result may answer with anything, which
+    // for a readiness gate is the same as not having stated it.
+    for (const item of pluroraDodObligations) {
+      expect(item.source, item.id).toBe('dod')
+      expect(item.required, item.id).toBe(true)
+      expect(item.requirement.length, item.id).toBeGreaterThan(20)
+    }
+  })
+
+  it('states obligations in terms of the harness, naming no project file, database or model', () => {
+    // This profile is Plurora's policy, and the obligations travel into the
+    // journal. A NeuroVia path, a database reference or a native model id
+    // written here would make a generic gate depend on one deployment.
+    const text = pluroraDodObligations.map(item => `${item.id} ${item.requirement}`).join('\n')
+    expect(text).not.toMatch(/neurovia|supabase|postgres|\.ts\b|\.md\b|gpt-|mimo|deepseek|claude/i)
+  })
+
+  it('collides with no obligation an approved Spec or Plan can declare', () => {
+    // Spec ids and `PLAN-TASK-n` are the other two halves of the manifest, and
+    // a shared id would silently drop one of the two obligations under it.
+    for (const item of pluroraDodObligations) {
+      expect(item.id.startsWith('DOD-'), item.id).toBe(true)
+    }
+    expect(new Set(pluroraDodObligations.map(item => item.id)).size).toBe(pluroraDodObligations.length)
   })
 })

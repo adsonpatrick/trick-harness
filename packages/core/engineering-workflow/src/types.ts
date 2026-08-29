@@ -8,6 +8,7 @@ import type {
   WorkflowObjective,
   WorkflowVerdict,
 } from '@trick-harness/contracts'
+import type { ConformanceManifest, ConformanceObligation, ConformanceStatusSummary } from '@trick-harness/contracts'
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { WorkflowEndState } from '@trick-harness/journal'
 import type { RepairEvidence } from './repair.ts'
@@ -60,6 +61,13 @@ export interface WorkflowOutcome {
   readonly stages: readonly StageFacts[]
   readonly repairCycles: number
   readonly executorStarts: number
+  /**
+   * The latest conformance reading, bounded.
+   *
+   * Absent when nothing established conformance, which is a different fact
+   * from a reading that found nothing satisfied.
+   */
+  readonly conformance?: ConformanceStatusSummary
 }
 
 /** What a restart may conclude about a workflow it finds in a durable log. */
@@ -138,6 +146,54 @@ export interface WorkflowRunRequest {
    * database with nothing having read it back.
    */
   readonly databaseChange?: WorkflowDatabaseChange
+  /**
+   * Reads the approved Spec and Plan back, with the hashes they carry now.
+   *
+   * The runtime never opens a file. A caller that knows where the checkout is
+   * supplies this, and the runtime compares what comes back with the identity
+   * the objective was approved under. It is called again before conformance
+   * rather than once at the start, because the documents can change under a
+   * run and a conformance reading taken against an edited Plan is a reading of
+   * obligations nobody approved.
+   */
+  readonly loadApprovedArtifacts?: (
+    objective: WorkflowObjective,
+    signal: AbortSignal,
+  ) => Promise<ApprovedArtifactTexts>
+  /**
+   * Reads the conformance stage's result back as a contract.
+   *
+   * The manifest is handed in so the caller can put the obligations in front of
+   * the model; what comes back is parsed and held to that manifest before it
+   * becomes stage facts. Returning something that is not a valid contract is
+   * not a pass — the run ends INCONCLUSIVE, because nothing established
+   * whether the implementation satisfies what was approved.
+   */
+  readonly conformance?: (
+    stage: StageSpec,
+    executor: string,
+    result: ExecutorResult,
+    manifest: ConformanceManifest,
+  ) => unknown
+  /**
+   * The Definition of Done these obligations are judged against, on top of the
+   * approved Spec and Plan.
+   *
+   * Supplied by the caller because it is profile policy: it is the standing bar
+   * a project holds every objective to, and reading it out of the same
+   * documents an objective is judged against would let one pull request lower
+   * the bar it is being measured by. Absent means the obligations are the
+   * Spec's and the Plan's alone.
+   */
+  readonly dodObligations?: readonly ConformanceObligation[]
+}
+
+/** The approved documents as they stand right now, with the identity they carry. */
+export interface ApprovedArtifactTexts {
+  readonly specText: string
+  readonly planText: string
+  readonly specSha256: string
+  readonly planSha256: string
 }
 
 /**

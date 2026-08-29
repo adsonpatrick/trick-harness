@@ -21,8 +21,10 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { ContractError, RISKS, WORKLOADS, parseStageRouteOverride } from '@trick-harness/contracts'
-import type { StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
+import {
+  ContractError, RISKS, WORKLOADS, parseApprovedArtifactSet, parseStageRouteOverride,
+} from '@trick-harness/contracts'
+import type { ConformanceStatusSummary, StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import type { RestartAssessment, WorkflowOutcome } from '@trick-harness/engineering-workflow'
 import { ControlError, LOOPBACK_HOSTS } from './types.ts'
 import type {
@@ -121,7 +123,33 @@ export function readObjective(payload: unknown): WorkflowObjective {
     risk: risk as WorkflowObjective['risk'],
     workload: workload as WorkflowObjective['workload'],
     profileId: requiredString(body, 'profileId'),
+    approvedArtifacts: readApprovedArtifacts(body['approvedArtifacts']),
   })
+}
+
+/**
+ * Read the approved Spec and Plan the objective is opened against.
+ *
+ * Refused here rather than at the conformance stage: a run that started
+ * without them would reach the stage that judges the implementation against
+ * approved documents with no documents to judge it by, having already spent
+ * every mutation the earlier stages performed.
+ *
+ * @param value - The `approvedArtifacts` field as posted.
+ * @returns The approved artifact set.
+ * @throws {ControlError} when the field is missing or malformed, naming the
+ *   field path and quoting neither a path nor a hash.
+ */
+function readApprovedArtifacts(value: unknown): WorkflowObjective['approvedArtifacts'] {
+  try {
+    return parseApprovedArtifactSet(value, 'approvedArtifacts')
+  }
+  catch (error: unknown) {
+    if (error instanceof ContractError) {
+      throw new ControlError('invalid-objective', 400, `the objective's ${error.path} is not one this workflow can run`)
+    }
+    throw error
+  }
 }
 
 /** Project a finished workflow onto the bounded status schema. */
@@ -143,6 +171,27 @@ function statusOfOutcome(outcome: WorkflowOutcome): ControlWorkflowStatus {
     repairCycles: outcome.repairCycles,
     executorStarts: outcome.executorStarts,
     requiresWorldVerification: false,
+    // Rebuilt field by field rather than carried: the outcome's summary is
+    // derived from a provider's answer, and a spread would render whatever else
+    // travelled with it into a status a bridge shows people.
+    ...outcome.conformance === undefined ? {} : { conformance: conformanceOf(outcome.conformance) },
+  })
+}
+
+/**
+ * Reduce a conformance reading to the fields this surface may say out loud.
+ * @param summary - The reading the run established.
+ * @returns The same fields, rebuilt.
+ */
+function conformanceOf(summary: ConformanceStatusSummary): ConformanceStatusSummary {
+  return Object.freeze({
+    specPath: summary.specPath,
+    specSha256: summary.specSha256,
+    planPath: summary.planPath,
+    planSha256: summary.planSha256,
+    expected: Object.freeze({ ...summary.expected }),
+    counts: Object.freeze({ ...summary.counts }),
+    verdict: summary.verdict,
   })
 }
 

@@ -19,11 +19,15 @@
  * @module apps/plurora-harness-host/workflow-handlers
  */
 
+import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { isAbsolute, relative, resolve } from 'node:path'
 import type { HarnessWorkflowHandlers } from '@trick-harness/composition'
 import type {
-  DiagnosisContract, EvidenceRef, StageResult, WorkflowObjective,
+  ApprovedArtifactRef, DiagnosisContract, EvidenceRef, StageResult, WorkflowObjective,
 } from '@trick-harness/contracts'
-import { parseDiagnosisContract, parseStageResult } from '@trick-harness/contracts'
+import { parseConformanceContract, parseDiagnosisContract, parseStageResult } from '@trick-harness/contracts'
+import { pluroraDodObligations } from '../../../profiles/plurora/profile.ts'
 import type { StageSpec } from '@trick-harness/engineering-workflow'
 import type { ExecutorResult } from '@trick-harness/executor'
 import { looksLikeSecret } from './redaction.ts'
@@ -220,8 +224,104 @@ function safeEvidence(evidence: readonly EvidenceRef[]): readonly EvidenceRef[] 
   return evidence.filter(item => !looksLikeSecret(item.locator) && !looksLikeSecret(item.summary))
 }
 
+/** Raised when an approved document cannot be read the way this host will read one. */
+export class ApprovedArtifactError extends Error {
+  override readonly name = 'ApprovedArtifactError'
+}
+
+/**
+ * Resolve one approved document inside the checkout, or refuse to read it.
+ *
+ * The path is data on an objective, and an objective can be opened over the
+ * control server. Without this, a path that walked out of the checkout would
+ * hand a stage the text of any file this host process can read under the name
+ * of an approved Spec — and the hash check downstream would not notice, because
+ * the hash is computed over whatever was read.
+ *
+ * Backslashes are folded first so one path is one path: a POSIX host treats
+ * `docs\..\..\x` as a single strange filename and would let it through, while
+ * the same string on Windows is a traversal.
+ *
+ * @param root - the checkout the run is working in.
+ * @param artifact - the approved document's repository-relative path.
+ * @returns the absolute path, once it is inside the checkout.
+ * @throws {ApprovedArtifactError} when it is not, naming no path.
+ */
+function containedPath(root: string, artifact: ApprovedArtifactRef): string {
+  const resolved = resolve(root, artifact.path.replaceAll('\\', '/'))
+  const inside = relative(root, resolved)
+  // Empty means the path resolved to the checkout itself, which is a directory
+  // and not a document; `..` and an absolute remainder both mean it left.
+  if (inside === '' || inside.startsWith('..') || isAbsolute(inside)) {
+    // The refusal names neither the path nor the checkout: it reaches a journal,
+    // and the path is attacker-supplied text a secret can be written into.
+    throw new ApprovedArtifactError('an approved document is named by a path outside the checkout, so nothing was read')
+  }
+  return resolved
+}
+
+/**
+ * Read one approved document and say what it hashes to now.
+ *
+ * @param root - the checkout the run is working in.
+ * @param artifact - the approved document's path and approved hash.
+ * @returns the text and the hash of what was actually read.
+ * @throws {ApprovedArtifactError} when it is outside the checkout or unreadable.
+ */
+async function readApproved(root: string, artifact: ApprovedArtifactRef): Promise<{ text: string; sha256: string }> {
+  const path = containedPath(root, artifact)
+  let text: string
+  try {
+    text = await readFile(path, 'utf8')
+  }
+  catch {
+    // The cause is dropped: a filesystem error carries the absolute path.
+    throw new ApprovedArtifactError('an approved document could not be read from the checkout')
+  }
+  // Hashed over what was read rather than copied off the objective. Copying it
+  // would make every re-read agree with the approval by construction, which is
+  // the one thing reading the documents again exists to check.
+  return { text, sha256: createHash('sha256').update(text, 'utf8').digest('hex') }
+}
+
+/**
+ * Prompt text for the stage that scores the branch against what was approved.
+ *
+ * It names the documents rather than quoting them: the obligations are read out
+ * of those documents by deterministic code, and a prompt that carried a copy
+ * would be one more version of them for an answer to be produced against. What
+ * the stage is told is where they are, that it may not touch the tree it is
+ * judging, and the shape of the answer it owes back.
+ *
+ * @param stage - the conformance stage.
+ * @param objective - the objective, which names the approved documents.
+ * @returns the prompt.
+ */
+function conformanceTask(stage: StageSpec, objective: WorkflowObjective): string {
+  const { spec, plan } = objective.approvedArtifacts
+  return [
+    `You are the conformance stage (${stage.stageId}) of one engineering workflow.`,
+    `Objective: ${objective.requirement}`,
+    'Judge the branch as it stands against the approved documents:',
+    `  Spec: ${spec.path}`,
+    `  Plan: ${plan.path}`,
+    'Answer every acceptance criterion the Spec declares, every task the Plan declares, and every'
+    + ' Definition of Done obligation you are given. An obligation you do not answer is not a pass.',
+    'This stage is read-only: you may not change the working tree, and work you fixed while judging'
+    + ' it is work nobody reviewed.',
+    '',
+    `End your final message with one line: ${RESULT_MARKER} followed by JSON holding a "conformance"`
+    + ' object with the fields items (array of {id, source, requirement, status, implementationEvidence,'
+    + ' verificationEvidence, summary}), verdict ("PASS", "FAIL" or "BLOCKED") and summary (one line).',
+    'Restate the id, source and requirement of each obligation exactly as they were given to you; a'
+    + ' restated requirement is an answer to something nobody approved.',
+    'Include no credential, connection string or token in any of those fields.',
+  ].join('\n')
+}
+
 /** Prompt text for one stage, stating the envelope every stage owes back. */
 function task(stage: StageSpec, objective: WorkflowObjective): string {
+  if (stage.role === 'conformance') return conformanceTask(stage, objective)
   return [
     `You are the ${stage.role} stage (${stage.stageId}) of one engineering workflow.`,
     `Objective: ${objective.requirement}`,
@@ -266,6 +366,36 @@ export function createPluroraWorkflowHandlers(
       return interpreted
     },
     task,
+    dodObligations: pluroraDodObligations,
+    async loadApprovedArtifacts(objective) {
+      const [spec, plan] = await Promise.all([
+        readApproved(objective.cwd, objective.approvedArtifacts.spec),
+        readApproved(objective.cwd, objective.approvedArtifacts.plan),
+      ])
+      return { specText: spec.text, planText: plan.text, specSha256: spec.sha256, planSha256: plan.sha256 }
+    },
+    conformance(_stage, _executor, result, manifest) {
+      if (result.status !== 'completed') return undefined
+      const claim = envelopeOf(result.output)?.['conformance']
+      if (typeof claim !== 'object' || claim === null || Array.isArray(claim)) return undefined
+      try {
+        const parsed = parseConformanceContract({
+          ...claim,
+          // The hashes identify the documents this reading was scored against,
+          // and they are the runtime's facts. A stage that could state its own
+          // would answer obligations out of documents nobody approved and still
+          // line up with the manifest it was checked against.
+          specSha256: manifest.specSha256,
+          planSha256: manifest.planSha256,
+        })
+        return { ...parsed, summary: safeSummary(parsed.summary) }
+      }
+      catch {
+        // Not a pass and not a fail: a claim this host cannot read has
+        // established nothing, and the runtime ends the run saying exactly that.
+        return undefined
+      }
+    },
     diagnose(_stage, _executor, result): DiagnosisContract | undefined {
       const envelope = envelopeOf(result.output)
       if (envelope === undefined) return undefined

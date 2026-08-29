@@ -441,7 +441,7 @@ Source: [`packages/goal/goal/src/domain.ts:66`](../packages/goal/goal/src/domain
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:156`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:177`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscapability-end--log-only"></a>
 
@@ -459,7 +459,7 @@ Source: [`packages/core/journal/src/types.ts:156`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:120`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:141`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscapability-start--log-only"></a>
 
@@ -483,7 +483,7 @@ Source: [`packages/core/journal/src/types.ts:120`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:113`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:134`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscircuit-breaker--log-only"></a>
 
@@ -500,7 +500,28 @@ Source: [`packages/core/journal/src/types.ts:113`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:164`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:185`](../packages/core/journal/src/types.ts)
+
+<a id="harnessconformance--log-only"></a>
+
+#### `harness/conformance` — log-only
+
+```ts persistence-catalog
+/**
+ * One conformance reading, reduced to hashes, counts and a verdict.
+ *
+ * The reading itself is a model's answer about approved documents, and
+ * neither the documents nor the answer belong in a log that outlives the
+ * run. What survives is which documents were judged, how many obligations
+ * they set, how the answers came out, and what that made the reading.
+ *
+ * Written once per conformance stage, so a repair that forced a second
+ * reading leaves both and the later one is the branch's standing.
+ */
+'harness/conformance': { workflowId: string } & ConformanceStatusSummary
+```
+
+Source: [`packages/core/journal/src/types.ts:72`](../packages/core/journal/src/types.ts)
 
 <a id="harnessdelivery--log-only"></a>
 
@@ -522,7 +543,7 @@ Source: [`packages/core/journal/src/types.ts:164`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:147`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:168`](../packages/core/journal/src/types.ts)
 
 <a id="harnessdiagnosis--log-only"></a>
 
@@ -533,7 +554,7 @@ Source: [`packages/core/journal/src/types.ts:147`](../packages/core/journal/src/
 'harness/diagnosis': { workflowId: string; stageId: string; diagnosis: DiagnosisContract }
 ```
 
-Source: [`packages/core/journal/src/types.ts:131`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:152`](../packages/core/journal/src/types.ts)
 
 <a id="harnessexecutor-end--log-only"></a>
 
@@ -551,7 +572,7 @@ Source: [`packages/core/journal/src/types.ts:131`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:96`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:117`](../packages/core/journal/src/types.ts)
 
 <a id="harnessexecutor-start--log-only"></a>
 
@@ -569,7 +590,7 @@ Source: [`packages/core/journal/src/types.ts:96`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:87`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:108`](../packages/core/journal/src/types.ts)
 
 <a id="harnessfinding--log-only"></a>
 
@@ -580,7 +601,7 @@ Source: [`packages/core/journal/src/types.ts:87`](../packages/core/journal/src/t
 'harness/finding': { workflowId: string; stageId: string; finding: Finding }
 ```
 
-Source: [`packages/core/journal/src/types.ts:129`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:150`](../packages/core/journal/src/types.ts)
 
 <a id="harnessroute-decision--log-only"></a>
 
@@ -606,7 +627,7 @@ Source: [`packages/core/journal/src/types.ts:129`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:57`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:78`](../packages/core/journal/src/types.ts)
 
 <a id="harnessroute-fallback--log-only"></a>
 
@@ -632,7 +653,7 @@ Source: [`packages/core/journal/src/types.ts:57`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:75`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:96`](../packages/core/journal/src/types.ts)
 
 <a id="harnessverdict--log-only"></a>
 
@@ -651,7 +672,7 @@ Source: [`packages/core/journal/src/types.ts:75`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:133`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:154`](../packages/core/journal/src/types.ts)
 
 <a id="harnessworkflow-end--log-only"></a>
 
@@ -667,7 +688,7 @@ Source: [`packages/core/journal/src/types.ts:133`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:172`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:193`](../packages/core/journal/src/types.ts)
 
 <a id="harnessworkflow-start--log-only"></a>
 
@@ -683,10 +704,18 @@ Source: [`packages/core/journal/src/types.ts:172`](../packages/core/journal/src/
   requirement: string
   risk: Risk
   workload: Workload
+  /** Repository-relative path of the approved specification. */
+  specPath: string
+  /** SHA-256 of that specification, so a later edit is visible as a different document. */
+  specSha256: string
+  /** Repository-relative path of the approved plan. */
+  planPath: string
+  /** SHA-256 of that plan. */
+  planSha256: string
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:43`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:44`](../packages/core/journal/src/types.ts)
 
 ### `hook/*`
 

@@ -4,6 +4,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 import {
   AUTO_REPAIRABLE_FINDINGS,
+  CONFORMANCE_ITEM_STATUSES,
+  CONFORMANCE_SOURCES,
   FINDING_CLASSES,
   READ_ONLY_ROLES,
   ROLES,
@@ -37,6 +39,7 @@ const EXPECTED_ROLES = [
   'review',
   'security',
   'qa',
+  'conformance',
   'delivery',
 ]
 
@@ -65,6 +68,12 @@ const EXPECTED_AUTO_REPAIRABLE = ['BUG', 'SECURITY_BUG', 'TEST_DEFECT', 'TOOLING
 /** Restated routable permission modes; see {@link EXPECTED_ROLES}. */
 const EXPECTED_PERMISSION_MODES = ['read-only', 'workspace-write']
 
+/** Restated obligation sources; see {@link EXPECTED_ROLES}. */
+const EXPECTED_CONFORMANCE_SOURCES = ['spec', 'plan', 'dod']
+
+/** Restated conformance item statuses; see {@link EXPECTED_ROLES}. */
+const EXPECTED_CONFORMANCE_STATUSES = ['PASS', 'MISSING', 'PARTIAL', 'FAIL', 'BLOCKED', 'INCONCLUSIVE']
+
 /** Roles that may never hold write authority, restated; see {@link EXPECTED_ROLES}. */
 const EXPECTED_WRITING_ROLES = ['implement', 'repair', 'delivery']
 
@@ -87,6 +96,8 @@ const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
   pin(fail, 'WORKFLOW_VERDICTS', WORKFLOW_VERDICTS, EXPECTED_VERDICTS)
   pin(fail, 'AUTO_REPAIRABLE_FINDINGS', AUTO_REPAIRABLE_FINDINGS, EXPECTED_AUTO_REPAIRABLE)
   pin(fail, 'ROUTED_PERMISSION_MODES', ROUTED_PERMISSION_MODES, EXPECTED_PERMISSION_MODES)
+  pin(fail, 'CONFORMANCE_SOURCES', CONFORMANCE_SOURCES, EXPECTED_CONFORMANCE_SOURCES)
+  pin(fail, 'CONFORMANCE_ITEM_STATUSES', CONFORMANCE_ITEM_STATUSES, EXPECTED_CONFORMANCE_STATUSES)
 
   // The separation these two lists express is the reason the read-only set
   // exists at all: a stage that judges work must not be able to change it.
