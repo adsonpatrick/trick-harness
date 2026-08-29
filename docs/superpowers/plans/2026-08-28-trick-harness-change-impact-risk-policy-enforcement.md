@@ -268,18 +268,18 @@ delivery      -> high, delivery-standard, Security required
 credentials   -> critical, Security required
 ```
 
-- [ ] **Step 1: Write RED profile tests** for each path family above, including `.github/workflows/ci.yml` matching both `dependencies` and `delivery`, and `src/features/auth/signup-form.tsx` matching both `auth` and broad `ui` without losing `auth`.
-- [ ] **Step 2: Write RED risk tests** proving `objective risk=low` plus auth resolves to critical and UI resolves to medium.
-- [ ] **Step 3: Write RED security-trigger tests** proving auth/dependencies/delivery/credentials resolve Security as required independently of the caller risk.
-- [ ] **Step 4: Implement the policy and add it to `pluroraProfile`.** Keep NeuroVia product ref/database name out of this file.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 1: Write RED profile tests** for each path family above, including `.github/workflows/ci.yml` matching both `dependencies` and `delivery`, and `src/features/auth/signup-form.tsx` matching both `auth` and broad `ui` without losing `auth`.
+- [x] **Step 2: Write RED risk tests** proving `objective risk=low` plus auth resolves to critical and UI resolves to medium.
+- [x] **Step 3: Write RED security-trigger tests** proving auth/dependencies/delivery/credentials resolve Security as required independently of the caller risk.
+- [x] **Step 4: Implement the policy and add it to `pluroraProfile`.** Keep NeuroVia product ref/database name out of this file.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run profiles/plurora/tests/change-impact.spec.ts profiles/plurora/tests/profile.spec.ts profiles/plurora/tests/routing.spec.ts
 corepack pnpm run constraints
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add profiles/plurora

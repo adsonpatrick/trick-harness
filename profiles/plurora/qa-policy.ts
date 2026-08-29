@@ -35,6 +35,21 @@ export const qaPolicy: QaPolicyDefinition = {
       use: { evidence: 'visual-regression', independentReview: true, risk: 'medium' },
     },
     {
+      id: 'dependency-surface',
+      when: { surface: 'dependencies' },
+      use: { evidence: 'dependency-audit', independentReview: true, risk: 'high' },
+    },
+    {
+      id: 'delivery-automation',
+      when: { surface: 'delivery' },
+      use: { evidence: 'delivery-dry-run', independentReview: true, risk: 'high' },
+    },
+    {
+      id: 'credential-handling',
+      when: { surface: 'credentials' },
+      use: { evidence: 'secret-scan', independentReview: true, risk: 'critical' },
+    },
+    {
       id: 'default',
       when: {},
       use: { evidence: 'unit-tests', independentReview: false, risk: 'low' },
