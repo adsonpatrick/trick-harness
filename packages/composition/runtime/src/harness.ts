@@ -90,6 +90,14 @@ export interface HarnessWorkflowHandlers {
   readonly loadApprovedArtifacts?: WorkflowRunRequest['loadApprovedArtifacts']
   readonly conformance?: WorkflowRunRequest['conformance']
   /**
+   * The Definition of Done every objective on this deployment is held to.
+   *
+   * Policy rather than product shape, but supplied here for the same reason: it
+   * belongs to the project, and a default kept in this package would be it
+   * deciding what "done" means on a deployment's behalf.
+   */
+  readonly dodObligations?: WorkflowRunRequest['dodObligations']
+  /**
    * What the run should publish, when it reaches delivery.
    *
    * No default, for the same reason `task` has none: the objective names a
@@ -498,6 +506,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
         ? {}
         : { loadApprovedArtifacts: workflow.loadApprovedArtifacts },
       ...workflow.conformance === undefined ? {} : { conformance: workflow.conformance },
+      ...workflow.dodObligations === undefined ? {} : { dodObligations: workflow.dodObligations },
       ...routeOverride === undefined ? {} : { routeOverride },
       ...change === undefined ? {} : { databaseChange: change },
     })

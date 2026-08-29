@@ -8,7 +8,7 @@ import type {
   WorkflowObjective,
   WorkflowVerdict,
 } from '@trick-harness/contracts'
-import type { ConformanceManifest, ConformanceStatusSummary } from '@trick-harness/contracts'
+import type { ConformanceManifest, ConformanceObligation, ConformanceStatusSummary } from '@trick-harness/contracts'
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { WorkflowEndState } from '@trick-harness/journal'
 import type { RepairEvidence } from './repair.ts'
@@ -175,6 +175,17 @@ export interface WorkflowRunRequest {
     result: ExecutorResult,
     manifest: ConformanceManifest,
   ) => unknown
+  /**
+   * The Definition of Done these obligations are judged against, on top of the
+   * approved Spec and Plan.
+   *
+   * Supplied by the caller because it is profile policy: it is the standing bar
+   * a project holds every objective to, and reading it out of the same
+   * documents an objective is judged against would let one pull request lower
+   * the bar it is being measured by. Absent means the obligations are the
+   * Spec's and the Plan's alone.
+   */
+  readonly dodObligations?: readonly ConformanceObligation[]
 }
 
 /** The approved documents as they stand right now, with the identity they carry. */

@@ -14,6 +14,7 @@ import {
   type ModelCatalogReader,
   assertModelsAvailable,
   buildModelRegistry,
+  requestedEfforts,
   routedTiers,
 } from '../src/model-registry.ts'
 
@@ -89,6 +90,7 @@ describe('buildModelRegistry', () => {
 function readerFor(
   opencode: readonly string[],
   codex: readonly string[],
+  efforts: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max'],
 ): { reader: ModelCatalogReader; asked: string[] } {
   const asked: string[] = []
   return {
@@ -100,7 +102,7 @@ function readerFor(
       },
       async codexModels() {
         asked.push('codex')
-        return codex.map(id => ({ id, reasoningEfforts: ['medium'] }))
+        return codex.map(id => ({ id, reasoningEfforts: efforts }))
       },
     },
   }
@@ -177,5 +179,66 @@ describe('assertModelsAvailable', () => {
     expect(raised).toBeInstanceOf(ModelRegistryError)
     const failure = reported(raised)
     expect(failure).not.toContain('hunter2')
+  })
+})
+
+describe('the reasoning effort a routed tier is asked for', () => {
+  const registry = buildModelRegistry(deploymentFor(PLURORA_SEMANTIC_TIERS), pluroraProfile)
+
+  it('reads what the routing table asks each Codex tier for', () => {
+    // Off the profile's own table rather than off a list beside it, for the
+    // same reason the tiers are: a rule added there is a boot failure here.
+    expect(requestedEfforts(pluroraProfile).get('codex.balanced')).toContain('high')
+    expect(requestedEfforts(pluroraProfile).get('codex.frontier')).toContain('xhigh')
+  })
+
+  it('asks nothing of a tier no rule states an effort for', () => {
+    // OpenCode rules state no effort, and inventing one for them would refuse a
+    // deployment over a demand this policy never made.
+    expect(requestedEfforts(pluroraProfile).get('opencode.workhorse')).toBeUndefined()
+  })
+
+  it('passes when the catalogue advertises every effort the table asks for', async () => {
+    const { reader } = readerFor(OPENCODE_IDS, CODEX_IDS)
+    await expect(assertModelsAvailable(registry, pluroraProfile, reader)).resolves.toBeUndefined()
+  })
+
+  it('refuses to boot when a model does not advertise an effort the table asks it for', async () => {
+    // Refused rather than quietly served at whatever the model does advertise:
+    // a downgrade is this host deciding that a critical stage may reason less
+    // than the approved policy says it must, and nothing in the run would say so.
+    const { reader } = readerFor(OPENCODE_IDS, CODEX_IDS, ['low', 'medium'])
+    const failure = await assertModelsAvailable(registry, pluroraProfile, reader).catch(reported)
+
+    expect(failure).toContain('codex.frontier')
+    expect(failure).toContain('codex.balanced')
+    expect(failure).toMatch(/effort/)
+  })
+
+  it('names the effort that is missing, since that is the next move', async () => {
+    const { reader } = readerFor(OPENCODE_IDS, CODEX_IDS, ['low', 'medium', 'high', 'max'])
+    const failure = await assertModelsAvailable(registry, pluroraProfile, reader).catch(reported)
+
+    expect(failure).toContain('xhigh')
+    expect(failure).not.toContain('codex.balanced')
+  })
+
+  it('holds a model to what it advertises, not to what another model advertises', async () => {
+    // One catalogue read serves every Codex tier, so an effort validated
+    // against the union of the catalogue would pass a model that offers none
+    // of it as long as some other model does.
+    const reader: ModelCatalogReader = {
+      async opencodeModels() { return OPENCODE_IDS },
+      async codexModels() {
+        return CODEX_IDS.map(id => ({
+          id,
+          reasoningEfforts: id.endsWith('frontier') ? ['xhigh', 'max'] : ['low'],
+        }))
+      },
+    }
+    const failure = await assertModelsAvailable(registry, pluroraProfile, reader).catch(reported)
+
+    expect(failure).toContain('codex.balanced')
+    expect(failure).not.toContain('codex.frontier')
   })
 })

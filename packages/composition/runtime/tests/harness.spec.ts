@@ -426,6 +426,36 @@ describe('a workflow through the real control-server entry path', () => {
     ])
   })
 
+  it('holds the run to the deployment’s Definition of Done as well as its documents', async () => {
+    // The Spec and the Plan are written per objective; the Definition of Done is
+    // the standing bar. A composition that dropped it would score every run
+    // against obligations the objective itself supplied, which is the objective
+    // choosing what it is held to.
+    const seen: ConformanceManifest[] = []
+    const dodObligations = [
+      { id: 'DOD-GATES', source: 'dod', requirement: 'every deterministic gate passes', required: true },
+    ] as const
+    const started: ExecutorStartRequest[] = []
+    const options = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
+    const harness = compose({
+      ...options,
+      workflow: {
+        ...options.workflow,
+        dodObligations,
+        conformance: (stage, executor, result, manifest) => {
+          seen.push(manifest)
+          return CONFORMS.conformance(stage, executor, result, manifest)
+        },
+      },
+    })
+
+    const outcome = await harness.run(OBJECTIVE)
+
+    expect(seen[0]?.obligations.filter(item => item.source === 'dod')).toEqual(dodObligations)
+    expect(outcome.conformance?.expected.dod).toBe(1)
+    expect(outcome.verdict).toBe('PASS')
+  })
+
   it('routes around a degraded executor through the profile fallback table', async () => {
     const started: ExecutorStartRequest[] = []
     const harness = compose({

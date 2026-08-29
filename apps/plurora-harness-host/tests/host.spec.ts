@@ -49,7 +49,7 @@ function servingCatalogue(): ModelCatalogReader {
     PLURORA_SEMANTIC_TIERS.filter(tier => tier.startsWith(prefix)).map(tier => `model-for-${tier}`)
   return {
     async opencodeModels() { return tiers('opencode.') },
-    async codexModels() { return tiers('codex.').map(id => ({ id, reasoningEfforts: ['medium'] })) },
+    async codexModels() { return tiers('codex.').map(id => ({ id, reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] })) },
   }
 }
 

@@ -62,6 +62,32 @@ export function buildModelRegistry(config: PluroraDeploymentConfig, profile: Har
 }
 
 /**
+ * What reasoning effort each routed tier is asked for.
+ *
+ * Read off the profile's own routing table for the same reason the tiers are:
+ * an effort written into a rule is a demand this deployment has to be able to
+ * meet, and a list of demands maintained beside the table would drift from it
+ * silently. A tier no rule states an effort for is absent rather than empty —
+ * the policy asked for nothing, and inventing a default would refuse a
+ * deployment over a demand nobody made.
+ *
+ * @param profile - the profile whose routing policy is being served.
+ * @returns tier name to the efforts its rules ask for, for tiers that ask.
+ */
+export function requestedEfforts(profile: HarnessProfile): ReadonlyMap<string, readonly string[]> {
+  const wanted = new Map<string, string[]>()
+  for (const rule of [...profile.routingPolicy.rules, ...profile.routingPolicy.fallbackRules]) {
+    const tier = rule.use['tier']
+    const effort = rule.use['effort']
+    if (typeof tier !== 'string' || typeof effort !== 'string') continue
+    const efforts = wanted.get(tier) ?? []
+    if (!efforts.includes(effort)) efforts.push(effort)
+    wanted.set(tier, efforts)
+  }
+  return wanted
+}
+
+/**
  * Read-only access to what the signed-in accounts can actually be asked for.
  *
  * Both halves are native catalogues: OpenCode's own provider configuration and
@@ -134,11 +160,26 @@ export async function assertModelsAvailable(
     else wanted.set(catalogue, [...wanted.get(catalogue) ?? [], tier])
   }
 
+  const efforts = requestedEfforts(profile)
   for (const [catalogue, tiers] of wanted) {
-    const available = new Set(await read(catalogue, reader))
+    // Kept per model rather than unioned across the catalogue: one read serves
+    // every tier on this account, and an effort checked against the union would
+    // pass a model advertising none of it as long as some other model did.
+    const advertised = new Map((await read(catalogue, reader)).map(model => [model.id, model.reasoningEfforts]))
     for (const tier of tiers) {
       const model = registry[tier]?.trim() ?? ''
-      if (!available.has(model)) failures.push(`${tier} wants a ${catalogue} model this account cannot be asked for`)
+      const supported = advertised.get(model)
+      if (supported === undefined) {
+        failures.push(`${tier} wants a ${catalogue} model this account cannot be asked for`)
+        continue
+      }
+      // Refused rather than served at whatever the model does advertise: a
+      // silent downgrade is this host deciding a stage may reason less than the
+      // approved policy says it must, with nothing in the run saying so.
+      const unmet = (efforts.get(tier) ?? []).filter(effort => !supported.includes(effort))
+      if (unmet.length > 0) {
+        failures.push(`${tier} is routed at reasoning effort ${unmet.join(', ')} and its model advertises no such effort`)
+      }
     }
   }
 
@@ -159,13 +200,19 @@ export async function assertModelsAvailable(
  *
  * @param catalogue - which native catalogue to read.
  * @param reader - read-only access to the native catalogues.
- * @returns the model ids the catalogue advertises.
+ * @returns what the catalogue advertises, model by model.
  * @throws {ModelRegistryError} when the catalogue could not be read.
  */
-async function read(catalogue: Catalogue, reader: ModelCatalogReader): Promise<readonly string[]> {
+async function read(
+  catalogue: Catalogue,
+  reader: ModelCatalogReader,
+): Promise<readonly { id: string; reasoningEfforts: readonly string[] }[]> {
   try {
-    if (catalogue === 'opencode') return await reader.opencodeModels()
-    return (await reader.codexModels()).map(model => model.id)
+    // OpenCode's provider configuration states no reasoning effort, and the
+    // routing table asks none of it. An empty list is what it advertises, not a
+    // gap this host fills in with a guess.
+    if (catalogue === 'opencode') return (await reader.opencodeModels()).map(id => ({ id, reasoningEfforts: [] }))
+    return await reader.codexModels()
   } catch {
     throw new ModelRegistryError(`the ${catalogue} model catalogue could not be read, so nothing was validated`)
   }

@@ -833,9 +833,9 @@ export class WorkflowRunner {
     let manifest: ConformanceManifest
     try {
       // The Definition of Done is deterministic profile policy and joins the
-      // manifest with it; until a profile carries one, the obligations are the
-      // Spec's and the Plan's alone.
-      manifest = buildConformanceManifest({ ...approved, dod: [] })
+      // manifest with it. A run that supplies none is judged against the Spec
+      // and the Plan alone, which is a weaker bar and never a silently wider one.
+      manifest = buildConformanceManifest({ ...approved, dod: request.dodObligations ?? [] })
     } catch (error) {
       if (!(error instanceof ConformanceError)) throw error
       return await unestablished(`the approved artifacts state no obligation set: ${error.message}`)
@@ -853,7 +853,7 @@ export class WorkflowRunner {
       return await unestablished(`conformance produced no result that could be held to the approved artifacts: ${cause}`)
     }
     this.#conformance = summarizeConformance(objective.approvedArtifacts, manifest, contract)
-    await this.#options.journal.conformance(this.#conformance)
+    this.#options.journal.conformance(this.#conformance)
     const verdict = weaker(dispatched.facts.verdict, contract.verdict)
     if (verdict === dispatched.facts.verdict) return { facts: dispatched.facts }
     await this.#options.journal.verdict(stage.stageId, stage.role, verdict, contract.summary, [])
