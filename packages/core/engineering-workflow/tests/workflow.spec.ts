@@ -62,6 +62,10 @@ const PROFILE: HarnessProfile = Object.freeze({
   }),
   integrationPolicy: Object.freeze({ enabled: Object.freeze([]), rules: Object.freeze([]) }),
   trustedComposition: Object.freeze({ excludedPluginIds: Object.freeze([]) }),
+  changeImpactPolicy: Object.freeze({
+    rules: Object.freeze([]),
+    writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+  }),
 })
 
 const OBJECTIVE: WorkflowObjective = Object.freeze({

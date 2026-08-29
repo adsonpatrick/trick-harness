@@ -30,4 +30,7 @@ export const minimalProfile: HarnessProfile = {
   securityPolicy: { rules: [] },
   integrationPolicy: { enabled: [], rules: [] },
   trustedComposition: { excludedPluginIds: [] },
+  // Present and empty on purpose: the fixture classifies no path, which is
+  // a decision a project may make, and is not the same as having no policy.
+  changeImpactPolicy: { rules: [], writeVolume: { smallMaxFiles: 3, mediumMaxFiles: 12 } },
 }

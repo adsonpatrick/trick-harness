@@ -108,23 +108,23 @@ export interface HarnessProfile {
 }
 ```
 
-- [ ] **Step 1: Write RED contract tests** proving `ChangeImpactFacts` vocabulary is exported, `WorkflowObjective.taskClass` accepts only a bounded non-empty string when present, and `EffectiveChangeImpact` cannot be constructed by the parsers with unknown risk/write-volume values.
-- [ ] **Step 2: Write RED profile validation tests** for duplicate rule IDs, empty pattern arrays, absolute patterns, traversal patterns, empty `use`, invalid risk floors, non-positive thresholds and `smallMaxFiles >= mediumMaxFiles`.
-- [ ] **Step 3: Run RED.**
+- [x] **Step 1: Write RED contract tests** proving `ChangeImpactFacts` vocabulary is exported, `WorkflowObjective.taskClass` accepts only a bounded non-empty string when present, and `EffectiveChangeImpact` cannot be constructed by the parsers with unknown risk/write-volume values.
+- [x] **Step 2: Write RED profile validation tests** for duplicate rule IDs, empty pattern arrays, absolute patterns, traversal patterns, empty `use`, invalid risk floors, non-positive thresholds and `smallMaxFiles >= mediumMaxFiles`.
+- [x] **Step 3: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts packages/core/contracts/tests/invariant.spec.ts packages/core/profile/tests/profile.spec.ts
 ```
 
-- [ ] **Step 4: Implement the contracts and validators.** Freeze parsed arrays/objects using the package's existing immutable-return pattern. Profile validation must reject path patterns beginning with `/`, drive-letter prefixes such as `C:`, and any `/../` or leading `../` segment.
-- [ ] **Step 5: Run GREEN + typecheck.**
+- [x] **Step 4: Implement the contracts and validators.** Freeze parsed arrays/objects using the package's existing immutable-return pattern. Profile validation must reject path patterns beginning with `/`, drive-letter prefixes such as `C:`, and any `/../` or leading `../` segment.
+- [x] **Step 5: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts packages/core/contracts/tests/invariant.spec.ts packages/core/profile/tests/profile.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/contracts packages/core/profile

@@ -76,6 +76,7 @@ function profile(overrides: Partial<HarnessProfile> = {}): HarnessProfile {
     securityPolicy: { rules: [] },
     integrationPolicy: { enabled: [], rules: [] },
     trustedComposition: { excludedPluginIds: [] },
+    changeImpactPolicy: { rules: [], writeVolume: { smallMaxFiles: 3, mediumMaxFiles: 12 } },
     ...overrides,
   }
 }

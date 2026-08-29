@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   AUTO_REPAIRABLE_FINDINGS,
+  CHANGE_IMPACT_SOURCES,
   ContractError,
   FINDING_CLASSES,
   INDEPENDENCE_REQUIREMENTS,
@@ -16,10 +17,13 @@ import {
   parseRouteDecision,
   parseStageResult,
   parseStageRouteOverride,
+  parseChangeImpactFacts,
   parseConformanceContract,
+  parseEffectiveChangeImpact,
   parseWorkflowObjective,
 } from '../src/index.ts'
 import type {
+  ChangeImpactFacts,
   DiagnosisContract,
   Finding,
   RouteDecision,
@@ -103,6 +107,7 @@ describe('the shared vocabulary', () => {
     INDEPENDENCE_REQUIREMENTS,
     WORKFLOW_VERDICTS,
     FINDING_CLASSES,
+    CHANGE_IMPACT_SOURCES,
   }
 
   for (const [name, values] of Object.entries(vocabularies)) {
@@ -152,6 +157,123 @@ describe('the shared vocabulary', () => {
     for (const value of ['IMPROVEMENT', 'REFACTOR_SUGGESTION', 'STYLE_ONLY'] as const) {
       expect(AUTO_REPAIRABLE_FINDINGS).not.toContain(value)
     }
+  })
+
+  it('separates what a change was planned to touch from what it did touch', () => {
+    // Two readings of the same repository, and the difference between them is
+    // the point: work that stayed inside its approved Plan and work that
+    // reached further both produce facts, and only the source says which is
+    // which. One undifferentiated reading would let the second be filed as the
+    // first.
+    expect([...CHANGE_IMPACT_SOURCES]).toStrictEqual(['planned', 'actual'])
+  })
+})
+
+/** Impact facts as the classifier produces them, for mutation in individual tests. */
+const facts: ChangeImpactFacts = {
+  source: 'planned',
+  pathCount: 2,
+  surfaces: ['auth'],
+  riskFloor: 'critical',
+  writeVolume: 'small',
+  taskClasses: ['auth'],
+  requiredCapabilities: [],
+  evidenceProfiles: ['auth-standard'],
+  databaseMutation: false,
+  matchedRuleIds: ['auth-library'],
+  unplannedPaths: [],
+}
+
+describe('reading change-impact facts back', () => {
+  it('survives a JSON round trip unchanged', () => {
+    expect(parseChangeImpactFacts(roundTrip(facts))).toStrictEqual(facts)
+  })
+
+  it('rebuilds the facts rather than carrying what a producer attached', () => {
+    // These facts are classification output, and classification is the one
+    // thing in this workflow no model may author. A field that travelled
+    // through untouched would be somewhere to author one.
+    const read = parseChangeImpactFacts({
+      ...facts,
+      rationale: 'I judged this safe',
+      paths: ['src/lib/auth/session.ts'],
+    })
+
+    expect(Object.keys(read)).not.toContain('rationale')
+    expect(Object.keys(read)).not.toContain('paths')
+  })
+
+  it('refuses a source, a risk floor or a write volume nobody declared', () => {
+    expect(() => parseChangeImpactFacts({ ...facts, source: 'guessed' })).toThrow(/impact\.source/)
+    expect(() => parseChangeImpactFacts({ ...facts, riskFloor: 'spicy' })).toThrow(/impact\.riskFloor/)
+    expect(() => parseChangeImpactFacts({ ...facts, writeVolume: 'enormous' })).toThrow(/impact\.writeVolume/)
+  })
+
+  it('refuses a path count that is not a whole non-negative number', () => {
+    for (const pathCount of [-1, 1.5, Number.NaN, '2']) {
+      expect(() => parseChangeImpactFacts({ ...facts, pathCount })).toThrow(/impact\.pathCount/)
+    }
+  })
+
+  it('refuses a database mutation flag stated as anything but a boolean', () => {
+    // A truthy string would read as a mutation and a falsy one as none, and
+    // neither is a decision anybody made.
+    expect(() => parseChangeImpactFacts({ ...facts, databaseMutation: 'yes' })).toThrow(/impact\.databaseMutation/)
+  })
+
+  it('names the field it refused without quoting what it held', () => {
+    // The rejection is journalled, and a path is repository text.
+    let raised: unknown
+    try {
+      parseChangeImpactFacts({ ...facts, unplannedPaths: ['src/secrets/service-role.ts', 7] })
+    }
+    catch (error) {
+      raised = error
+    }
+
+    expect(raised).toBeInstanceOf(ContractError)
+    expect((raised as ContractError).path).toBe('impact.unplannedPaths[1]')
+    expect((raised as ContractError).message).not.toContain('service-role')
+  })
+})
+
+describe('reading the effective impact of a change back', () => {
+  const effective = {
+    planned: facts,
+    effectiveRisk: 'critical' as const,
+    writeVolume: 'small' as const,
+    surfaces: ['auth'],
+    taskClasses: ['auth'],
+    requiredCapabilities: [],
+    evidenceProfiles: ['auth-standard'],
+    databaseMutation: false,
+  }
+
+  it('survives a JSON round trip unchanged, with and without an actual reading', () => {
+    expect(parseEffectiveChangeImpact(roundTrip(effective))).toStrictEqual(effective)
+    const delivered = { ...effective, actual: { ...facts, source: 'actual' as const } }
+    expect(parseEffectiveChangeImpact(roundTrip(delivered))).toStrictEqual(delivered)
+  })
+
+  it('requires the planned reading, which exists before any mutation ran', () => {
+    const { planned: _dropped, ...rest } = effective
+    expect(() => parseEffectiveChangeImpact(rest)).toThrow(/effectiveImpact\.planned/)
+  })
+
+  it('refuses an effective risk or write volume outside its vocabulary', () => {
+    expect(() => parseEffectiveChangeImpact({ ...effective, effectiveRisk: 'spicy' })).toThrow(/effectiveImpact\.effectiveRisk/)
+    expect(() => parseEffectiveChangeImpact({ ...effective, writeVolume: 'vast' })).toThrow(/effectiveImpact\.writeVolume/)
+  })
+
+  it('reads an absent actual reading as absent rather than as a present empty one', () => {
+    // Before delivery there is no published branch to read, and a reading
+    // invented to fill the field would be a claim that nothing was touched.
+    expect('actual' in parseEffectiveChangeImpact(effective)).toBe(false)
+  })
+
+  it('holds the actual reading to the same contract as the planned one', () => {
+    expect(() => parseEffectiveChangeImpact({ ...effective, actual: { ...facts, source: 'invented' } }))
+      .toThrow(/effectiveImpact\.actual\.source/)
   })
 })
 
@@ -311,6 +433,19 @@ describe('reading a serialized objective back', () => {
   it('rejects a risk or workload outside its vocabulary', () => {
     expect(() => parseWorkflowObjective({ ...objective, risk: 'spicy' })).toThrow(/objective\.risk/)
     expect(() => parseWorkflowObjective({ ...objective, workload: 'enormous' })).toThrow(/objective\.workload/)
+  })
+
+  it('accepts an optional task class, and keeps it absent when it was absent', () => {
+    // The class names what kind of work this is, and policy reads it. An
+    // objective that never stated one has not stated an empty one either.
+    expect(parseWorkflowObjective({ ...objective, taskClass: 'auth' }).taskClass).toBe('auth')
+    expect('taskClass' in parseWorkflowObjective(objective)).toBe(false)
+  })
+
+  it('refuses a task class that is empty, oversized or not a string', () => {
+    for (const taskClass of ['', '   ', 'a'.repeat(65), 7, null]) {
+      expect(() => parseWorkflowObjective({ ...objective, taskClass })).toThrow(/objective\.taskClass/)
+    }
   })
 
   it('requires a workspace and a profile', () => {

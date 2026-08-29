@@ -471,6 +471,85 @@ export interface ConformanceStatusSummary {
   readonly verdict: WorkflowVerdict
 }
 
+/**
+ * The two readings of what a change touches.
+ *
+ * `planned` is derived from the approved Plan before any mutation-capable
+ * stage runs; `actual` is derived from the published branch after delivery.
+ * They are kept apart rather than merged into one number because the gap
+ * between them is itself a fact: work that reached past what was approved
+ * looks exactly like work that did not, once the two are added together.
+ */
+export const CHANGE_IMPACT_SOURCES = ['planned', 'actual'] as const
+
+/** Which of the two readings a set of impact facts came from. */
+export type ChangeImpactSource = typeof CHANGE_IMPACT_SOURCES[number]
+
+/**
+ * What deterministic classification concluded about one set of paths.
+ *
+ * Every field here is produced by code from a profile's declared path rules.
+ * None of it is a model's account of its own change, which is the reason the
+ * type exists: the run's risk, its required stages and its evidence bar are
+ * decided from these facts, and a stage that could write them could lower the
+ * bar it is about to be held to.
+ */
+export interface ChangeImpactFacts {
+  /** Which reading this is. */
+  readonly source: ChangeImpactSource
+  /** How many distinct repository paths were classified. */
+  readonly pathCount: number
+  /** Distinct surfaces the paths fall in, in policy order. */
+  readonly surfaces: readonly string[]
+  /** The highest risk any matched rule requires. */
+  readonly riskFloor: Risk
+  /** How large the change is, scored against the profile's thresholds. */
+  readonly writeVolume: WriteVolume
+  /** Task classes the matched rules name, in policy order. */
+  readonly taskClasses: readonly string[]
+  /** Capabilities the matched rules require of the runtime, in policy order. */
+  readonly requiredCapabilities: readonly string[]
+  /** Evidence profiles the matched rules require, in policy order. */
+  readonly evidenceProfiles: readonly string[]
+  /** Whether any matched rule marks this as touching database state. */
+  readonly databaseMutation: boolean
+  /** Ids of the rules that matched, in policy order, for a reader to trace. */
+  readonly matchedRuleIds: readonly string[]
+  /** Paths present in this reading that the approved plan did not name. */
+  readonly unplannedPaths: readonly string[]
+}
+
+/**
+ * The two readings resolved into the single policy the run is held to.
+ *
+ * Resolution is monotonic in both directions it can move: neither reading can
+ * lower what the other established, and neither can lower the risk the
+ * objective was opened at. A delivered change that turned out to touch
+ * migrations is judged as a database change even though nobody planned it that
+ * way, and a planned database change stays one even if the diff came back
+ * empty.
+ */
+export interface EffectiveChangeImpact {
+  /** What the approved plan said the change would touch. */
+  readonly planned: ChangeImpactFacts
+  /** What the published branch turned out to touch, once there is one. */
+  readonly actual?: ChangeImpactFacts
+  /** `max` of the objective's risk and both readings' floors. */
+  readonly effectiveRisk: Risk
+  /** `max` of both readings' write volumes. */
+  readonly writeVolume: WriteVolume
+  /** Union of both readings' surfaces. */
+  readonly surfaces: readonly string[]
+  /** Union of both readings' task classes. */
+  readonly taskClasses: readonly string[]
+  /** Union of both readings' required capabilities. */
+  readonly requiredCapabilities: readonly string[]
+  /** Union of both readings' evidence profiles. */
+  readonly evidenceProfiles: readonly string[]
+  /** True when either reading found database state in the change. */
+  readonly databaseMutation: boolean
+}
+
 /** What a workflow was asked to accomplish, as approved before it started. */
 export interface WorkflowObjective {
   /** Stable workflow id, durable across restarts. */
@@ -487,6 +566,14 @@ export interface WorkflowObjective {
   readonly profileId: string
   /** The approved documents conformance later judges the implementation against. */
   readonly approvedArtifacts: ApprovedArtifactSet
+  /**
+   * What kind of work this is, when the caller knows it.
+   *
+   * Policy may read it, and classification may add to it, but neither depends
+   * on it: an objective that names nothing is classified from its paths alone.
+   * It is a hint that can raise the bar, never one that can lower it.
+   */
+  readonly taskClass?: string
 }
 
 /**

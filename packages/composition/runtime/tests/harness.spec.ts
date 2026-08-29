@@ -89,6 +89,10 @@ function profileEnabling(capabilities: readonly string[]): HarnessProfile {
     securityPolicy: Object.freeze({ rules: Object.freeze([]) }),
     integrationPolicy: Object.freeze({ enabled: Object.freeze([...capabilities]), rules: Object.freeze([]) }),
     trustedComposition: Object.freeze({ excludedPluginIds: Object.freeze([]) }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
   })
 }
 
