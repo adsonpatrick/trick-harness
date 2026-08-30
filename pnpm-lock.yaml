@@ -3487,6 +3487,9 @@ importers:
       '@trick-harness/executor':
         specifier: workspace:^
         version: link:../../core/executor
+      '@trick-harness/github-certification':
+        specifier: workspace:^
+        version: link:../../integrations/github-certification
       '@trick-harness/github-delivery':
         specifier: workspace:^
         version: link:../../integrations/github-delivery
@@ -5450,6 +5453,18 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+
+  packages/integrations/github-certification:
+    devDependencies:
+      '@deepseek-ai/dsh-subprocess':
+        specifier: workspace:^
+        version: link:../../subprocess/subprocess
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../../core/contracts
+      '@trick-harness/engineering-workflow':
+        specifier: workspace:^
+        version: link:../../core/engineering-workflow
 
   packages/integrations/github-delivery:
     devDependencies:

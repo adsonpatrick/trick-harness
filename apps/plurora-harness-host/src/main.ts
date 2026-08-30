@@ -38,6 +38,18 @@ import { createPluroraWorkflowHandlers } from './workflow-handlers.ts'
  */
 export const DEFAULT_DISPOSE_GRACE_MS = 5_000
 
+/**
+ * The status context this deployment's certifications are published under.
+ *
+ * The exact name the branch-protection rule on the product repository is
+ * configured with, owned by the host and by nothing below it. Not a profile
+ * field, not a deployment-config key and not a run input: a certification
+ * published under a name a rule is not watching satisfies nothing, and one
+ * published under a name a run chose satisfies the rule by answering a
+ * different question than the one being asked.
+ */
+const PLURORA_CERTIFICATION_CONTEXT = 'plurora/harness-certification'
+
 /** Raised when the host cannot be started with what it was given. */
 export class PluroraHostError extends Error {
   override readonly name = 'PluroraHostError'
@@ -205,7 +217,22 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       },
       // Delivery is the project's own checkout, driven through the same
       // subprocess seam as everything else this host starts.
-      integrations: { github: { cwd: options.projectRoot, spawn: options.spawn, graceMs: disposeGraceMs } },
+      integrations: {
+        github: { cwd: options.projectRoot, spawn: options.spawn, graceMs: disposeGraceMs },
+        // Certification is bound here and nowhere else. The repository comes
+        // from the deployment file, the base branch is the protected branch
+        // that file already names, and the context is this host's own constant
+        // — the three together are the question this capability answers, and
+        // none of them is a run's to change.
+        githubCertification: {
+          cwd: options.projectRoot,
+          repository: config.projectRepository,
+          baseBranch: config.project.protectedBranch,
+          context: PLURORA_CERTIFICATION_CONTEXT,
+          spawn: options.spawn,
+          graceMs: disposeGraceMs,
+        },
+      },
       // This deployment verifies a shared cloud development project through the
       // project's own fixed command, so it supplies this port and configures no
       // Supabase preview: the composition refuses both, since two verifiers is

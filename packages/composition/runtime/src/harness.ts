@@ -42,6 +42,8 @@ import type {
 } from '@trick-harness/engineering-workflow'
 import { createExecutorRuntime } from '@trick-harness/executor'
 import type { ExecutorResult, HarnessExecutorRuntime } from '@trick-harness/executor'
+import { GitHubCertification } from '@trick-harness/github-certification'
+import type { GitHubCertificationOptions } from '@trick-harness/github-certification'
 import { GitHubDelivery } from '@trick-harness/github-delivery'
 import type { DeliveryRequest, GitHubDeliveryOptions } from '@trick-harness/github-delivery'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
@@ -56,6 +58,9 @@ import type { HarnessRuntimeBundleOptions } from './index.ts'
 
 /** Integration capability id for scoped GitHub delivery. */
 export const GITHUB_DELIVERY_CAPABILITY = 'github-delivery'
+
+/** Integration capability id for scoped GitHub certification. */
+export const GITHUB_CERTIFICATION_CAPABILITY = 'github-certification'
 
 /** Integration capability id for cloud-only Supabase preview validation. */
 export const SUPABASE_PREVIEW_CAPABILITY = 'supabase-preview'
@@ -155,6 +160,15 @@ export interface HarnessProjectCapabilities {
 /** Integration seams a profile may enable. */
 export interface HarnessIntegrationOptions {
   readonly github?: GitHubDeliveryOptions
+  /**
+   * What this deployment publishes its certification through.
+   *
+   * Separate from delivery, and deliberately not derived from it: delivery may
+   * push a branch and open a pull request, certification may publish one commit
+   * status and nothing else, and a single set of options covering both would be
+   * a capability whose authority a reader has to infer.
+   */
+  readonly githubCertification?: GitHubCertificationOptions
   readonly supabase?: SupabasePreviewOptions
 }
 
@@ -220,6 +234,7 @@ export interface ComposedHarness {
   /** The integrations the profile actually enabled. */
   readonly integrations: {
     readonly github?: GitHubDelivery
+    readonly githubCertification?: GitHubCertification
     readonly supabase?: SupabasePreview
   }
   /** The control server, present only when the profile enables one. */
@@ -272,6 +287,29 @@ function assertAuthorised(profile: HarnessProfile, options: HarnessCompositionOp
   if (options.integrations?.github !== undefined && !enabled(profile, GITHUB_DELIVERY_CAPABILITY)) {
     throw new BundleCompositionError(
       `profile ${JSON.stringify(profile.id)} does not enable ${GITHUB_DELIVERY_CAPABILITY}`,
+    )
+  }
+  if (
+    options.integrations?.githubCertification !== undefined
+    && !enabled(profile, GITHUB_CERTIFICATION_CAPABILITY)
+  ) {
+    throw new BundleCompositionError(
+      `profile ${JSON.stringify(profile.id)} does not enable ${GITHUB_CERTIFICATION_CAPABILITY}`,
+    )
+  }
+  // The other direction, and the one that decides whether unverified work can
+  // reach a merge button: a profile requiring certification is a deployment
+  // whose branch protection waits on a status. Composed without something to
+  // publish it, that deployment comes up green and every pull request sits on a
+  // check that never arrives, which reads as a slow reviewer rather than as a
+  // gate nobody wired.
+  if (
+    enabled(profile, GITHUB_CERTIFICATION_CAPABILITY)
+    && options.integrations?.githubCertification === undefined
+  ) {
+    throw new BundleCompositionError(
+      `profile ${JSON.stringify(profile.id)} requires ${GITHUB_CERTIFICATION_CAPABILITY} `
+      + 'and this composition supplies nothing to certify through',
     )
   }
   if (options.integrations?.supabase !== undefined && !enabled(profile, SUPABASE_PREVIEW_CAPABILITY)) {
@@ -358,6 +396,13 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   // The capability exists only when both halves are there: something to deliver
   // with, and something that says what to deliver. Half of it is not a weaker
   // delivery, it is a push with nothing decided about what goes in it.
+  // Built once rather than per run, unlike delivery: this capability keeps no
+  // journal observer of its own — the runtime records what was published, after
+  // the certifier has read its own status back — so there is nothing about it
+  // that belongs to one run's history.
+  const githubCertification = options.integrations?.githubCertification === undefined
+    ? undefined
+    : new GitHubCertification(options.integrations.githubCertification)
   const supabase = options.integrations?.supabase === undefined
     ? undefined
     : new SupabasePreview(options.integrations.supabase)
@@ -502,9 +547,14 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       executors: runtime,
       journal,
       ...options.degradedExecutors === undefined ? {} : { degradedExecutors: options.degradedExecutors },
+      // Composition has already refused the profile that requires certification
+      // and composed none, so a certifier being here is the same fact as this
+      // deployment's policy requiring one.
+      ...githubCertification === undefined ? {} : { requireCertification: true },
       capabilities: {
         ...delivery === undefined ? {} : { delivery },
         ...databaseVerification === undefined ? {} : { databaseVerification },
+        ...githubCertification === undefined ? {} : { certification: githubCertification },
       },
     })
     const change = workflow.databaseChange?.(objective)
@@ -580,6 +630,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
     policy,
     integrations: Object.freeze({
       ...github === undefined ? {} : { github },
+      ...githubCertification === undefined ? {} : { githubCertification },
       ...supabase === undefined ? {} : { supabase },
     }),
     ...server === undefined ? {} : { server },

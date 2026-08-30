@@ -494,11 +494,11 @@ new GitHubCertification({
 })
 ```
 
-- [ ] **Step 1: Write RED profile tests** requiring `github-certification` in Plurora's enabled integration/capability set.
-- [ ] **Step 2: Write RED composition tests** proving Plurora runnable composition refuses to become ready without certification while the minimal fixture profile can still run without a GitHub certification capability.
-- [ ] **Step 3: Write RED config tests** requiring exact `projectRepository`, refusing credential-shaped repository config, and proving `plurora-harness.json` cannot override status context or base branch.
-- [ ] **Step 4: Write RED host test** proving the bound certification integration uses project cwd + configured project repository + fixed Plurora context, and uses the same managed subprocess seam as delivery.
-- [ ] **Step 5: Run RED.**
+- [x] **Step 1: Write RED profile tests** requiring `github-certification` in Plurora's enabled integration/capability set.
+- [x] **Step 2: Write RED composition tests** proving Plurora runnable composition refuses to become ready without certification while the minimal fixture profile can still run without a GitHub certification capability.
+- [x] **Step 3: Write RED config tests** requiring exact `projectRepository`, refusing credential-shaped repository config, and proving `plurora-harness.json` cannot override status context or base branch.
+- [x] **Step 4: Write RED host test** proving the bound certification integration uses project cwd + configured project repository + fixed Plurora context, and uses the same managed subprocess seam as delivery.
+- [x] **Step 5: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -509,8 +509,8 @@ corepack pnpm vitest run \
   apps/plurora-harness-host/tests/host.spec.ts
 ```
 
-- [ ] **Step 6: Implement composition/profile/host wiring** without moving project repository identity into generic packages.
-- [ ] **Step 7: Run GREEN + constraints/typecheck.**
+- [x] **Step 6: Implement composition/profile/host wiring** without moving project repository identity into generic packages.
+- [x] **Step 7: Run GREEN + constraints/typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -523,7 +523,7 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add packages/composition/runtime profiles/plurora apps/plurora-harness-host

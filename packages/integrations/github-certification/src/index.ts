@@ -152,6 +152,18 @@ export class GitHubCertification implements CertificationCapabilityPort {
   readonly #graceMs: number
 
   /**
+   * What this capability is bound to, readable by whoever composed it.
+   *
+   * None of it is a secret and none of it is a run's to choose: it is the
+   * question this capability answers, and a deployment that wired the wrong
+   * repository, the wrong base branch or a context no branch-protection rule
+   * watches has no other way to be told so before a pull request sits on a
+   * check that never arrives. The checkout is deliberately not here — a path
+   * is the one field of the five a status has no business carrying anywhere.
+   */
+  readonly scope: Readonly<{ repository: string; baseBranch: string; context: string }>
+
+  /**
    * @param options - The checkout, the repository, the base branch, the status
    *   context and the subprocess seam.
    * @throws CertificationError when the repository or the context is not one
@@ -173,6 +185,11 @@ export class GitHubCertification implements CertificationCapabilityPort {
     this.#context = options.context
     this.#spawn = options.spawn
     this.#graceMs = options.graceMs ?? DEFAULT_GRACE_MS
+    this.scope = Object.freeze({
+      repository: this.#repository,
+      baseBranch: this.#baseBranch,
+      context: this.#context,
+    })
   }
 
   /**

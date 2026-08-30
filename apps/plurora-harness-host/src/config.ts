@@ -25,6 +25,16 @@ export const DEPLOYMENT_CONFIG_FILE = 'plurora-harness.json'
 /** The only checkout this host will run. */
 const REPOSITORY = 'adsonpatrick/trick-harness'
 
+/**
+ * The only product repository whose pull requests this deployment certifies.
+ *
+ * Exact rather than free text for the same reason the checkout is: the
+ * certification is the status a branch-protection rule waits on, and a file
+ * able to name another repository is a file able to point this deployment's
+ * certifications at somebody else's pull requests.
+ */
+const PROJECT_REPOSITORY = 'adsonpatrick/neuro-via'
+
 /** The only profile this host will run. */
 const PROFILE = 'plurora'
 
@@ -67,6 +77,7 @@ const KNOWN_KEYS = new Set([
   'environment',
   'database',
   'project',
+  'projectRepository',
   'modelRegistry',
 ])
 
@@ -107,6 +118,16 @@ export interface PluroraDeploymentConfig {
   readonly project: {
     readonly protectedBranch: string
   }
+  /**
+   * The product repository this deployment certifies pull requests in.
+   *
+   * What the certification is published *under* is not here and cannot be: the
+   * status context is the exact name a branch-protection rule is configured
+   * with, and the base branch is what "certified" is a claim about. A
+   * deployment file able to set either could satisfy a rule by answering a
+   * different question than the one being asked.
+   */
+  readonly projectRepository: typeof PROJECT_REPOSITORY
   readonly modelRegistry: Readonly<Record<string, string>>
 }
 
@@ -254,6 +275,7 @@ export function parseDeploymentConfig(raw: unknown): PluroraDeploymentConfig {
     environment: requireExactly(raw, 'environment', ENVIRONMENT),
     database: requireDatabase(raw),
     project: requireProject(raw),
+    projectRepository: requireExactly(raw, 'projectRepository', PROJECT_REPOSITORY),
     modelRegistry: requireModelRegistry(raw),
   }
 }

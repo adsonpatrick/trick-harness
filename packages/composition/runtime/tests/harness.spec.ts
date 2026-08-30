@@ -13,6 +13,7 @@ import {
   BundleCompositionError,
   CONTROL_SERVER_CAPABILITY,
   DATABASE_VERIFICATION_CAPABILITY,
+  GITHUB_CERTIFICATION_CAPABILITY,
   GITHUB_DELIVERY_CAPABILITY,
   SUPABASE_PREVIEW_CAPABILITY,
   composeHarness,
@@ -225,6 +226,7 @@ function baseOptions(profile: HarnessProfile, started: ExecutorStartRequest[]): 
   // A profile that enabled delivery gets something to deliver with, because the
   // runtime blocks a lifecycle that must publish and cannot.
   const delivering = profile.integrationPolicy.enabled.includes(GITHUB_DELIVERY_CAPABILITY)
+  const certifying = profile.integrationPolicy.enabled.includes(GITHUB_CERTIFICATION_CAPABILITY)
   return {
     profile,
     registry: REGISTRY,
@@ -242,8 +244,23 @@ function baseOptions(profile: HarnessProfile, started: ExecutorStartRequest[]): 
         pullRequest: { title: 'the thing', body: 'what it does', base: 'main' },
       }),
     },
-    ...delivering
-      ? { integrations: { github: { cwd: '/repo', spawn: deliveringSpawn } } }
+    ...delivering || certifying
+      ? {
+        integrations: {
+          ...delivering ? { github: { cwd: '/repo', spawn: deliveringSpawn } } : {},
+          ...certifying
+            ? {
+              githubCertification: {
+                cwd: '/repo',
+                repository: 'an-owner/a-product',
+                baseBranch: 'main',
+                context: 'a-namespace/a-certification',
+                spawn: deliveringSpawn,
+              },
+            }
+            : {},
+        },
+      }
       : {},
     providers: {
       extraProviders: [
@@ -306,6 +323,57 @@ describe('what the profile decides exists', () => {
 
     expect(harness.integrations.supabase).toBeDefined()
     expect(harness.integrations.github).toBeUndefined()
+  })
+
+  it('refuses a certification capability the profile does not enable', () => {
+    const started: ExecutorStartRequest[] = []
+    const spawn = (_spec: SubprocessSpawnSpec): never => {
+      throw new Error('never spawned')
+    }
+
+    expect(() => composeHarness({
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started),
+      integrations: {
+        github: { cwd: '/repo', spawn },
+        githubCertification: {
+          cwd: '/repo',
+          repository: 'an-owner/a-product',
+          baseBranch: 'main',
+          context: 'a-namespace/a-certification',
+          spawn,
+        },
+      },
+    })).toThrow(BundleCompositionError)
+  })
+
+  it('refuses to compose a profile that requires certification with nothing to certify through', () => {
+    // The other half of the same rule, and the half that matters: a deployment
+    // whose branch protection waits on a status nothing in the composition can
+    // publish is a deployment that comes up green and never certifies. Refusing
+    // it here makes that a boot failure rather than a pull request that sits.
+    const started: ExecutorStartRequest[] = []
+    const spawn = (_spec: SubprocessSpawnSpec): never => {
+      throw new Error('never spawned')
+    }
+
+    expect(() => composeHarness({
+      ...baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY, GITHUB_CERTIFICATION_CAPABILITY]), started),
+      integrations: { github: { cwd: '/repo', spawn } },
+    })).toThrow(BundleCompositionError)
+  })
+
+  it('builds the certification a profile enables, and leaves a profile without one able to run', () => {
+    const started: ExecutorStartRequest[] = []
+    const certifying = compose(
+      baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY, GITHUB_CERTIFICATION_CAPABILITY]), started),
+    )
+
+    expect(certifying.integrations.githubCertification).toBeDefined()
+
+    // And the fixture profile that enables neither still composes: certification
+    // is what one deployment's policy requires, not what this package requires.
+    const plain = compose(baseOptions(profileEnabling([]), started))
+    expect(plain.integrations.githubCertification).toBeUndefined()
   })
 
   it('refuses a control server the profile does not enable', () => {

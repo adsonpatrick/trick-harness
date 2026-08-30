@@ -211,6 +211,15 @@ function scriptedProvider(
 }
 
 /** A parent project and the isolated branch a preview run creates under it. */
+/** The product repository this deployment's certifications belong to. */
+const PROJECT_REPOSITORY = 'adsonpatrick/neuro-via'
+
+/** The exact name the branch-protection rule being answered is configured with. */
+const CERTIFICATION_CONTEXT = 'plurora/harness-certification'
+
+/** The commit the scripted checkout is on, which is what gets certified. */
+const HEAD_REVISION = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
 const PARENT_REF = 'abcdefghijklmnop'
 const PREVIEW_REF = 'qrstuvwxyzabcdef'
 
@@ -336,6 +345,7 @@ describe('Plurora policy driving a live run', () => {
       // rather than sent anywhere: what this file tests is routing, not GitHub.
       integrations: {
         github: { cwd: '/repo', spawn: deliveringSpawn },
+        githubCertification: certifying(deliveringSpawn),
         ...overrides.database === true
           ? {
             supabase: {
@@ -376,17 +386,46 @@ describe('Plurora policy driving a live run', () => {
     }
   }
 
+  /** The state of the last certification the scripted remote accepted. */
+  let certified = ''
+
   /**
-   * Every command a successful delivery issues, answered without a remote.
+   * Every command a successful delivery and its certification issue, answered
+   * without a remote.
    * @param spec - the command the capability constructed.
    * @returns the handle.
    */
   function deliveringSpawn(spec: SubprocessSpawnSpec): SubprocessHandle {
     const argv = spec.argv.join(' ')
-    if (argv.includes('--abbrev-ref')) return answered('feature')
+    if (argv.includes('--abbrev-ref') || argv.includes('branch --show-current')) return answered('feature')
     if (argv.includes('diff --cached')) return answered('src/thing.ts')
-    if (argv.includes('rev-parse')) return answered('4b825dc642cb6eb9a060e54bf8d69288fbee4904')
-    if (argv.startsWith('gh pr view')) return answered('{"number":7,"url":"https://example.invalid/pr/7","state":"OPEN","headRefName":"feature"}')
+    if (argv.includes('rev-parse')) return answered(HEAD_REVISION)
+    if (argv.startsWith('gh repo view')) return answered(PROJECT_REPOSITORY)
+    if (argv.startsWith('gh pr view')) {
+      return answered(JSON.stringify({
+        number: 7,
+        url: `https://github.com/${PROJECT_REPOSITORY}/pull/7`,
+        state: 'OPEN',
+        headRefName: 'feature',
+      }))
+    }
+    if (argv.includes('--method POST') && argv.includes(`/statuses/${HEAD_REVISION}`)) {
+      // What the run asked for, kept so the read-back below answers with it.
+      // A fake that always answered `success` would let a run that published
+      // something else pass the one check that exists to catch exactly that.
+      certified = spec.argv.find(entry => entry.startsWith('state='))?.slice('state='.length) ?? ''
+      return answered('')
+    }
+    if (argv.includes(`/commits/${HEAD_REVISION}/statuses`)) {
+      return answered(JSON.stringify([{ id: 4815162342, state: certified, context: CERTIFICATION_CONTEXT }]))
+    }
+    if (argv.includes('/pulls/7')) {
+      return answered(JSON.stringify({
+        state: 'open',
+        base: { ref: 'main' },
+        head: { ref: 'feature', sha: HEAD_REVISION },
+      }))
+    }
     return answered('')
   }
 
@@ -641,6 +680,32 @@ describe('Plurora policy driving a live run', () => {
 
 })
 
+/**
+ * The certification binding this deployment would run under.
+ *
+ * The repository and the base branch are the project's; the context is the
+ * exact name a branch-protection rule is configured with, which is why it comes
+ * from a deployment rather than from the profile. Nothing here is sent
+ * anywhere: every command is answered by the seam the caller supplies.
+ * @param spawn - the subprocess seam this composition already uses.
+ * @returns the options the composition binds a certifier from.
+ */
+function certifying(spawn: (spec: SubprocessSpawnSpec) => SubprocessHandle): {
+  cwd: string
+  repository: string
+  baseBranch: string
+  context: string
+  spawn: (spec: SubprocessSpawnSpec) => SubprocessHandle
+} {
+  return {
+    cwd: '/repo',
+    repository: PROJECT_REPOSITORY,
+    baseBranch: 'main',
+    context: CERTIFICATION_CONTEXT,
+    spawn,
+  }
+}
+
 describe('the capabilities this project actually turns on', () => {
   let opened: ComposedHarness[] = []
 
@@ -672,6 +737,7 @@ describe('the capabilities this project actually turns on', () => {
       providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
       integrations: {
         github: { cwd: '/repo', spawn: seams.spawn },
+        githubCertification: certifying(seams.spawn),
         supabase: { cwd: '/repo', spawn: seams.spawn, projectRef: 'uljaajwwnygopsyvwsre' },
       },
       control: { host: '127.0.0.1', port: 0, token: 'a-token-long-enough' },
@@ -682,9 +748,45 @@ describe('the capabilities this project actually turns on', () => {
     // is the check that the two files agree — the one no unit test of either
     // side alone can make.
     expect(harness.integrations.github).toBeDefined()
+    expect(harness.integrations.githubCertification).toBeDefined()
     expect(harness.integrations.supabase).toBeDefined()
     expect(harness.server).toBeDefined()
     // Composing is not running: no process, no server, no client.
+    expect(seams.reached()).toBe(0)
+  })
+
+  it('does not come up at all without the certification its own policy requires', () => {
+    // The composition refuses what the profile does not enable; this is the
+    // other direction, and the one that decides whether an unverified branch
+    // can reach a merge button. A deployment whose branch protection waits on a
+    // status nothing composed can publish would otherwise boot green and leave
+    // every pull request sitting on a check that never arrives.
+    const seams = productSeams()
+
+    expect(() => composeHarness({
+      profile: pluroraProfile,
+      registry: DEFAULT_MODEL_REGISTRY,
+      session: Session.create(SessionId('plurora-uncertified')),
+      flush: async () => true,
+      workflow: {
+        interpret: (stage, executor) => ({
+          role: stage.role,
+          executor,
+          verdict: 'PASS',
+          summary: `${stage.role} passed`,
+          findings: [],
+          evidence: [],
+        }),
+        task: stage => `${stage.role}: do the work`,
+        ...CONFORMS,
+      },
+      providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
+      integrations: {
+        github: { cwd: '/repo', spawn: seams.spawn },
+        supabase: { cwd: '/repo', spawn: seams.spawn, projectRef: 'uljaajwwnygopsyvwsre' },
+      },
+      control: { host: '127.0.0.1', port: 0, token: 'a-token-long-enough' },
+    })).toThrow(BundleCompositionError)
     expect(seams.reached()).toBe(0)
   })
 
@@ -732,6 +834,7 @@ describe('the capabilities this project actually turns on', () => {
       providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
       integrations: {
         github: { cwd: '/repo', spawn },
+        githubCertification: certifying(spawn),
         supabase: { cwd: '/repo', spawn, projectRef: 'uljaajwwnygopsyvwsre', pollIntervalMs: 0 },
       },
       control: { host: '127.0.0.1', port: 0, token: 'a-token-long-enough' },
@@ -780,6 +883,7 @@ describe('the capabilities this project actually turns on', () => {
       providers: { opencode: { adapter: seams.adapter }, codex: { spawn: seams.spawn } },
       integrations: {
         github: { cwd: '/repo', spawn: seams.spawn },
+        githubCertification: certifying(seams.spawn),
         supabase: { cwd: '/repo', spawn: seams.spawn, projectRef: 'uljaajwwnygopsyvwsre' },
       },
       control: { host: '127.0.0.1', port: 0, token: 'a-token-long-enough' },
