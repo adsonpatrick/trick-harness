@@ -1,0 +1,312 @@
+/**
+ * What a change's impact buys it in certification.
+ *
+ * The question this answers is not "what did the caller say this run is" but
+ * "what do the paths say it is". Every rule the impact matches contributes; the
+ * run is held to the union, and never to whichever rule the policy happened to
+ * list first.
+ */
+
+import { describe, expect, it } from 'vitest'
+import type { EffectiveChangeImpact, Risk } from '@trick-harness/contracts'
+import type { HarnessProfile } from '@trick-harness/profile'
+import {
+  applyCertificationRequirements,
+  impactRoutingFacts,
+  planPullRequestCertificationStages,
+  planPullRequestImplementationStages,
+  resolveCertificationRequirements,
+} from '../src/impact-policy.ts'
+
+/** A profile with QA rows on several surfaces and security triggers on two. */
+const profile = {
+  id: 'fixture',
+  policyVersion: 'fixture-v1',
+  independencePolicy: {
+    low: 'fresh-context',
+    medium: 'cross-executor-preferred',
+    high: 'cross-executor-required',
+    critical: 'cross-executor-required',
+  },
+  qaPolicy: {
+    rules: [
+      { id: 'database', when: { surface: 'database' }, use: { evidence: 'preview-branch', independentReview: true, risk: 'critical' } },
+      { id: 'auth', when: { surface: 'auth' }, use: { evidence: 'security-review', independentReview: true, risk: 'critical' } },
+      { id: 'ui', when: { surface: 'ui' }, use: { evidence: 'visual-regression', independentReview: true, risk: 'medium' } },
+      { id: 'default', when: {}, use: { evidence: 'unit-tests', independentReview: false, risk: 'low' } },
+    ],
+  },
+  securityPolicy: {
+    rules: [
+      { id: 'auth-flow', when: { surface: 'auth' }, use: { review: 'security', independence: 'cross-executor-required', blocking: true } },
+      { id: 'delivery', when: { surface: 'delivery' }, use: { review: 'security', independence: 'cross-executor-required', blocking: true } },
+    ],
+    repairRules: [],
+  },
+} as unknown as HarnessProfile
+
+/** One reading of what a change touched. */
+function facts(overrides: Partial<EffectiveChangeImpact['planned']> = {}): EffectiveChangeImpact['planned'] {
+  return {
+    source: 'planned',
+    pathCount: 1,
+    surfaces: [],
+    riskFloor: 'low',
+    writeVolume: 'small',
+    taskClasses: [],
+    requiredCapabilities: [],
+    evidenceProfiles: [],
+    databaseMutation: false,
+    matchedRuleIds: [],
+    unplannedPaths: [],
+    ...overrides,
+  }
+}
+
+/** A resolution carrying `surfaces` at `effectiveRisk`. */
+function impact(
+  surfaces: readonly string[],
+  effectiveRisk: Risk = 'low',
+  overrides: Partial<EffectiveChangeImpact> = {},
+): EffectiveChangeImpact {
+  return {
+    planned: facts({ surfaces }),
+    effectiveRisk,
+    writeVolume: 'small',
+    surfaces,
+    taskClasses: [],
+    requiredCapabilities: [],
+    evidenceProfiles: [],
+    databaseMutation: false,
+    ...overrides,
+  }
+}
+
+describe('resolving what certification a change has to buy', () => {
+  it('accumulates every QA row the impact matches, not the first', () => {
+    // A change that is both a database change and a UI change owes both bars.
+    // First-match-wins would charge it whichever the table listed first, and
+    // the other surface's evidence would never be asked for.
+    const requirements = resolveCertificationRequirements(profile, impact(['database', 'ui']))
+
+    expect(requirements.evidenceProfiles).toContain('preview-branch')
+    expect(requirements.evidenceProfiles).toContain('visual-regression')
+  })
+
+  it('accumulates every security trigger the impact matches', () => {
+    const requirements = resolveCertificationRequirements(profile, impact(['auth', 'delivery']))
+
+    expect(requirements.securityRequired).toBe(true)
+  })
+
+  it('takes the highest risk any matched row states', () => {
+    expect(resolveCertificationRequirements(profile, impact(['ui'])).effectiveRisk).toBe('medium')
+    expect(resolveCertificationRequirements(profile, impact(['ui', 'auth'])).effectiveRisk).toBe('critical')
+  })
+
+  it('never resolves below the risk the impact already established', () => {
+    expect(resolveCertificationRequirements(profile, impact(['ui'], 'high')).effectiveRisk).toBe('high')
+  })
+
+  it('requires QA wherever a matched row asks for independent review', () => {
+    expect(resolveCertificationRequirements(profile, impact(['ui'])).qaRequired).toBe(true)
+    expect(resolveCertificationRequirements(profile, impact([])).qaRequired).toBe(false)
+  })
+
+  it('requires QA for anything above low risk even where no surface matched', () => {
+    expect(resolveCertificationRequirements(profile, impact([], 'medium')).qaRequired).toBe(true)
+  })
+
+  it('requires security at critical risk even where no trigger matched', () => {
+    expect(resolveCertificationRequirements(profile, impact([], 'critical')).securityRequired).toBe(true)
+  })
+
+  it('leaves a change that matched nothing at the bar it came in with', () => {
+    const requirements = resolveCertificationRequirements(profile, impact([]))
+
+    expect(requirements).toMatchObject({ effectiveRisk: 'low', qaRequired: false, securityRequired: false })
+  })
+
+  it('reads independence off the resolved risk, not off the caller risk', () => {
+    // The independence ladder is the profile's, and it is indexed by the risk
+    // the paths resolved to. Indexing it by the risk a caller declared would
+    // let a critical change be reviewed by the executor that wrote it.
+    expect(resolveCertificationRequirements(profile, impact(['auth'])).independenceRequirement)
+      .toBe('cross-executor-required')
+    expect(resolveCertificationRequirements(profile, impact([])).independenceRequirement)
+      .toBe('fresh-context')
+  })
+
+  it('carries the evidence profiles the paths themselves named', () => {
+    const resolved = resolveCertificationRequirements(
+      profile,
+      impact(['ui'], 'low', { evidenceProfiles: ['ui-standard'] }),
+    )
+
+    expect(resolved.evidenceProfiles).toContain('ui-standard')
+  })
+
+  it('says each requirement once', () => {
+    const resolved = resolveCertificationRequirements(
+      profile,
+      impact(['ui'], 'low', { evidenceProfiles: ['visual-regression'] }),
+    )
+
+    expect(resolved.evidenceProfiles.filter(entry => entry === 'visual-regression')).toHaveLength(1)
+  })
+
+  it('hands back requirements a caller cannot edit', () => {
+    const resolved = resolveCertificationRequirements(profile, impact(['auth']))
+
+    expect(Object.isFrozen(resolved)).toBe(true)
+    expect(Object.isFrozen(resolved.evidenceProfiles)).toBe(true)
+  })
+})
+
+describe('holding the run to what its certification requires', () => {
+  const objective = {
+    id: 'obj-1',
+    cwd: '/repo',
+    requirement: 'do the thing',
+    risk: 'low',
+    workload: 'medium',
+    profileId: 'fixture',
+    approvedArtifacts: { spec: { path: 's', sha256: 'a' }, plan: { path: 'p', sha256: 'b' } },
+  } as const
+
+  it('raises the resolution to the risk the matched QA rows stated', () => {
+    // The paths put a database change at medium; the QA row says a database
+    // change is critical work. Resolving that and then routing on the lower
+    // number is a policy a reviewer reads as enforced and a run never sees.
+    const measured = impact(['database'], 'medium')
+    const raised = applyCertificationRequirements(measured, resolveCertificationRequirements(profile, measured))
+
+    expect(raised.effectiveRisk).toBe('critical')
+    expect(impactRoutingFacts({ stageId: 'review-1', role: 'review' }, objective, profile, raised).risk)
+      .toBe('critical')
+    expect(impactRoutingFacts({ stageId: 'review-1', role: 'review' }, objective, profile, raised)
+      .independenceRequirement).toBe('cross-executor-required')
+  })
+
+  it('carries the evidence a matched row asked for into what the run is routed on', () => {
+    const measured = impact(['ui'], 'low')
+    const raised = applyCertificationRequirements(measured, resolveCertificationRequirements(profile, measured))
+
+    expect(raised.evidenceProfiles).toContain('visual-regression')
+  })
+
+  it('never lowers anything the resolution already established', () => {
+    const measured = impact(['ui'], 'critical', { evidenceProfiles: ['db-standard'], databaseMutation: true })
+    const raised = applyCertificationRequirements(measured, resolveCertificationRequirements(profile, measured))
+
+    expect(raised.effectiveRisk).toBe('critical')
+    expect(raised.evidenceProfiles).toContain('db-standard')
+    expect(raised.databaseMutation).toBe(true)
+    expect(raised.surfaces).toStrictEqual(['ui'])
+  })
+})
+
+describe('planning the two halves of a pull-request run', () => {
+  it('implements, verifies and delivers before anything certifies', () => {
+    expect(planPullRequestImplementationStages().map(stage => stage.role))
+      .toStrictEqual(['implement', 'verify', 'delivery'])
+  })
+
+  it('reviews, then buys what the impact requires, then closes on conformance', () => {
+    const requirements = resolveCertificationRequirements(profile, impact(['auth']))
+
+    expect(planPullRequestCertificationStages(requirements).map(stage => stage.role))
+      .toStrictEqual(['review', 'qa', 'security', 'conformance', 'verify'])
+  })
+
+  it('buys QA without security when no trigger fired', () => {
+    const requirements = resolveCertificationRequirements(profile, impact(['ui']))
+
+    expect(planPullRequestCertificationStages(requirements).map(stage => stage.role))
+      .toStrictEqual(['review', 'qa', 'conformance', 'verify'])
+  })
+
+  it('still reviews, conforms and verifies a change that bought neither', () => {
+    // A docs-only change is not exempt from being read and from being held to
+    // the Plan. It is only exempt from the stages a surface would have bought.
+    const requirements = resolveCertificationRequirements(profile, impact([]))
+
+    expect(planPullRequestCertificationStages(requirements).map(stage => stage.role))
+      .toStrictEqual(['review', 'conformance', 'verify'])
+  })
+
+  it('closes on a verification that runs after every certifying reading', () => {
+    const stages = planPullRequestCertificationStages(resolveCertificationRequirements(profile, impact(['auth'])))
+
+    expect(stages.at(-1)).toMatchObject({ stageId: 'verify-final', role: 'verify' })
+  })
+})
+
+describe('what the measured impact tells the router', () => {
+  const objective = {
+    id: 'obj-1',
+    cwd: '/repo',
+    requirement: 'do the thing',
+    risk: 'low',
+    workload: 'medium',
+    profileId: 'fixture',
+    approvedArtifacts: { spec: { path: 's', sha256: 'a' }, plan: { path: 'p', sha256: 'b' } },
+  } as const
+
+  it('routes on the risk the paths resolved to, not the one the objective was opened at', () => {
+    const facts = impactRoutingFacts(
+      { stageId: 'implement-1', role: 'implement' }, objective, profile, impact(['auth'], 'critical'),
+    )
+
+    expect(facts.risk).toBe('critical')
+    expect(facts.independenceRequirement).toBe('cross-executor-required')
+  })
+
+  it('carries the write volume the change actually has', () => {
+    const large = impact([], 'low', { writeVolume: 'large' })
+
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, objective, profile, large).writeVolume)
+      .toBe('large')
+  })
+
+  it('never lets a small change lower what the role itself writes', () => {
+    // The role-shaped volume is a floor, not a default. An implementation that
+    // happened to touch one file is still an implementation, and routing it as
+    // a smaller write than the role implies is a bar going down.
+    const small = impact([], 'low', { writeVolume: 'small' })
+
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, objective, profile, small).writeVolume)
+      .toBe('medium')
+  })
+
+  it('gives every read-only role no write volume at all', () => {
+    const large = impact([], 'low', { writeVolume: 'large' })
+
+    for (const role of ['review', 'qa', 'security', 'verify', 'conformance', 'debug'] as const) {
+      expect(impactRoutingFacts({ stageId: `${role}-1`, role }, objective, profile, large).writeVolume).toBe('none')
+    }
+  })
+
+  it('prefers the task class the paths named over the one the caller guessed', () => {
+    // Classification is ordered by the profile's own rule order, so the first
+    // class it produced is the one policy speaks about first.
+    const classified = impact(['auth'], 'low', { taskClasses: ['auth-change', 'ui-change'] })
+
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, { ...objective, taskClass: 'chore' }, profile, classified).taskClass)
+      .toBe('auth-change')
+  })
+
+  it('falls back to the caller task class only when the paths named none', () => {
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, { ...objective, taskClass: 'chore' }, profile, impact([])).taskClass)
+      .toBe('chore')
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, objective, profile, impact([])).taskClass)
+      .toBeUndefined()
+  })
+
+  it('carries the capabilities the change requires of the runtime', () => {
+    const database = impact(['database'], 'critical', { requiredCapabilities: ['database-verification'] })
+
+    expect(impactRoutingFacts({ stageId: 'implement-1', role: 'implement' }, objective, profile, database).requiredCapabilities)
+      .toStrictEqual(['database-verification'])
+  })
+})

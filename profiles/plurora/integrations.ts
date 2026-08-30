@@ -40,6 +40,7 @@ import type { IntegrationPolicyDefinition } from '@trick-harness/profile'
 export const integrationPolicy: IntegrationPolicyDefinition = {
   enabled: [
     'github-delivery',
+    'github-certification',
     'supabase-preview',
     'database-verification',
     'control-server',
@@ -58,6 +59,33 @@ export const integrationPolicy: IntegrationPolicyDefinition = {
         allowDefaultBranchPush: false,
         allowMerge: false,
         allowRelease: false,
+      },
+    },
+    {
+      id: 'github-certification',
+      when: { integration: 'github-certification' },
+      use: {
+        repository: 'adsonpatrick/neuro-via',
+        // One status on one pull request head, and every other mutation named
+        // and denied. This is the capability a branch-protection rule waits on,
+        // which makes it the last thing standing between an automated run and a
+        // merge button: what it may not do is worth stating even where nothing
+        // in the integration could express it.
+        publishes: 'commit-status',
+        target: 'pull-request-head',
+        required: 'before-pull-request-ready',
+        allowCommit: false,
+        allowPush: false,
+        allowPullRequestEdit: false,
+        allowMerge: false,
+        allowRelease: false,
+        allowDeploy: false,
+        // The context is the exact name the branch-protection rule is
+        // configured with, so it belongs to the deployment being protected. A
+        // context written down here is one a run could satisfy by publishing
+        // under a name no rule is watching, and one no reviewer reading the
+        // pull request could tell apart from the name that was configured.
+        contextSource: 'deployment',
       },
     },
     {

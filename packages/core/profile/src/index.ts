@@ -49,6 +49,7 @@ const REQUIRED_BLOCKS = [
   'securityPolicy',
   'integrationPolicy',
   'trustedComposition',
+  'changeImpactPolicy',
 ] as const
 
 /** Thrown when a candidate profile does not satisfy the contract. */
@@ -198,6 +199,128 @@ function validateSecurityRepairRules(value: unknown): void {
   }
 }
 
+/** Risk levels a path rule may raise a run to; see {@link ChangeImpactRiskFloor}. */
+const RISK_FLOORS = ['low', 'medium', 'high', 'critical']
+
+/** What a matched path rule may contribute, and what each contribution must be. */
+const IMPACT_USE_FIELDS = {
+  surface: 'string',
+  riskFloor: 'risk',
+  taskClass: 'string',
+  requiredCapability: 'string',
+  evidenceProfile: 'string',
+  databaseMutation: 'boolean',
+} as const
+
+/**
+ * Validate one repository-relative glob pattern.
+ *
+ * A pattern is matched against paths that have already been normalized to
+ * repository-relative POSIX form. So a pattern that is rooted — at `/`, at a
+ * drive letter, at a UNC share — or that walks upward can only ever match
+ * nothing. Accepting one would leave a policy whose surface reads as covered
+ * and is not, which is worse than a policy that fails at registration.
+ * @param value - the candidate pattern.
+ * @param path - dotted path of the pattern, for attributing a failure.
+ * @throws {ProfileValidationError} naming the pattern's own field path.
+ */
+function validatePathPattern(value: unknown, path: string): void {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new ProfileValidationError(path, 'must be a non-empty string')
+  }
+  const posix = value.replaceAll('\\', '/')
+  if (posix.startsWith('/') || /^[a-zA-Z]:/.test(posix)) {
+    throw new ProfileValidationError(path, 'must be a repository-relative pattern')
+  }
+  if (posix.split('/').includes('..')) {
+    throw new ProfileValidationError(path, 'must not walk out of the repository')
+  }
+}
+
+/**
+ * Validate one path rule's contribution row.
+ *
+ * Stated as a closed set of known fields rather than as a shape check, because
+ * the failure this guards against is a misspelling: `surfaces` instead of
+ * `surface` is a rule that reads like policy, passes every structural test and
+ * contributes nothing to the classification it was written for.
+ * @param value - the candidate `use` row.
+ * @param path - dotted path of the row, for attributing a failure.
+ * @throws {ProfileValidationError} naming the exact entry that fails.
+ */
+function validateImpactUse(value: unknown, path: string): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ProfileValidationError(path, 'must be a flat object')
+  }
+  const entries = Object.entries(value)
+  if (entries.length === 0) {
+    throw new ProfileValidationError(path, 'must contribute at least one value')
+  }
+  for (const [key, entry] of entries) {
+    const at = `${path}.${key}`
+    const expected = (IMPACT_USE_FIELDS as Record<string, string | undefined>)[key]
+    if (expected === undefined) {
+      throw new ProfileValidationError(at, 'is not a field the classifier reads')
+    }
+    if (expected === 'risk') {
+      if (typeof entry !== 'string' || !RISK_FLOORS.includes(entry)) {
+        throw new ProfileValidationError(at, `must be one of ${RISK_FLOORS.join(', ')}`)
+      }
+      continue
+    }
+    if (expected === 'boolean') {
+      if (typeof entry !== 'boolean') throw new ProfileValidationError(at, 'must be a boolean')
+      continue
+    }
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      throw new ProfileValidationError(at, 'must be a non-empty string')
+    }
+  }
+}
+
+/**
+ * Validate the project's change-impact policy.
+ *
+ * An empty rule list is a legitimate decision — a project that has not
+ * classified its paths yet — and is not the same as a missing list, which is an
+ * omission the runtime cannot tell apart from a decision unless it is refused.
+ * @param value - the candidate policy block.
+ * @throws {ProfileValidationError} naming the first field that fails.
+ */
+function validateChangeImpactPolicy(value: unknown): void {
+  const path = 'changeImpactPolicy'
+  const rules = requireArray(field(value, 'rules'), `${path}.rules`)
+  const seen = new Set<string>()
+  for (const [index, rule] of rules.entries()) {
+    const at = `${path}.rules[${index}]`
+    const id = field(rule, 'id')
+    if (typeof id !== 'string' || id.length === 0) {
+      throw new ProfileValidationError(`${at}.id`, 'must be a non-empty string')
+    }
+    if (seen.has(id)) {
+      // Matched rule ids are durable facts a later reader routes on; two rules
+      // under one id make a recorded fact ambiguous about what produced it.
+      throw new ProfileValidationError(`${at}.id`, `repeats rule id ${JSON.stringify(id)}`)
+    }
+    seen.add(id)
+    const paths = requireArray(field(rule, 'paths'), `${at}.paths`)
+    if (paths.length === 0) {
+      throw new ProfileValidationError(`${at}.paths`, 'must declare at least one pattern')
+    }
+    for (const [patternIndex, pattern] of paths.entries()) {
+      validatePathPattern(pattern, `${at}.paths[${patternIndex}]`)
+    }
+    validateImpactUse(field(rule, 'use'), `${at}.use`)
+  }
+
+  const writeVolume = field(value, 'writeVolume')
+  requirePositiveInteger(field(writeVolume, 'smallMaxFiles'), `${path}.writeVolume.smallMaxFiles`)
+  requirePositiveInteger(field(writeVolume, 'mediumMaxFiles'), `${path}.writeVolume.mediumMaxFiles`)
+  if ((field(writeVolume, 'mediumMaxFiles') as number) <= (field(writeVolume, 'smallMaxFiles') as number)) {
+    throw new ProfileValidationError(`${path}.writeVolume.mediumMaxFiles`, 'must be greater than smallMaxFiles')
+  }
+}
+
 /**
  * Validate a candidate profile against the contract.
  * @param candidate - the value to check; may be any shape.
@@ -254,6 +377,8 @@ export function validateProfile(candidate: unknown): asserts candidate is Harnes
     field(field(candidate, 'trustedComposition'), 'excludedPluginIds'),
     'trustedComposition.excludedPluginIds',
   )
+
+  validateChangeImpactPolicy(field(candidate, 'changeImpactPolicy'))
 }
 
 /** Recursively freeze a registry-owned copy so a holder cannot edit live policy. */

@@ -20,7 +20,13 @@
 
 import type { Finding, Role, WorkflowObjective, WorkflowVerdict } from '@trick-harness/contracts'
 import { triage } from './triage.ts'
-import type { StageFacts, StageSpec, WorkflowOutcome } from './types.ts'
+import type {
+  ExternalCertificationState,
+  StageFacts,
+  StageSpec,
+  WorkflowCertificationDecision,
+  WorkflowOutcome,
+} from './types.ts'
 
 /** How a pull-request run finished, in the vocabulary a person reads. */
 export type PullRequestState = 'PR_READY' | 'BLOCKED' | 'FAIL' | 'PARTIAL' | 'INCONCLUSIVE'
@@ -181,4 +187,59 @@ function summaryOf(
       + `${outcome.summary}${carried}`
   }
   return `${outcome.summary}${carried}`
+}
+
+/**
+ * Whether a finished run may be certified outside the harness.
+ *
+ * One projection, derived from {@link assessPullRequest} and nothing else. The
+ * temptation is to restate the conditions here — conformance passed, the final
+ * verification passed, no defect is open — and that restatement is exactly the
+ * bug: it is a second definition of ready that starts identical and drifts, so
+ * a later narrowing of `PR_READY` leaves the certification a branch-protection
+ * rule requires standing on the older, weaker one. This asks the same function
+ * a person reading the run would.
+ *
+ * `summary` is for the journal. Nothing here reaches a status field: what the
+ * certifier publishes is chosen by the capability from the state alone.
+ *
+ * @param outcome - the workflow as the runner finished it.
+ * @returns whether the run is ready, with the verdict and summary behind it.
+ */
+export function certificationDecision(outcome: WorkflowOutcome): WorkflowCertificationDecision {
+  const assessed = assessPullRequest(outcome)
+  return Object.freeze({
+    ready: assessed.state === 'PR_READY',
+    verdict: outcome.verdict,
+    summary: assessed.summary,
+  })
+}
+
+/**
+ * What one finished run says about itself on GitHub.
+ *
+ * Three answers, and the order they are asked in is the whole of the rule.
+ * `failure` is a statement about the work: this branch was looked at and it is
+ * not ready. A run that was canceled or came apart made no such statement, so
+ * it says `error` instead — a reviewer who reads "failed" believes something
+ * was established, and nothing was. Readiness is asked last and only ever
+ * turns `failure` into `success`, which is why no operational trouble can be
+ * outranked by a verdict.
+ *
+ * The verdict is carried for the caller's own reporting, not consulted here:
+ * the harness's five-verdict vocabulary is richer than GitHub's four states,
+ * and mapping the middle of it to anything but "not ready" would publish a
+ * distinction the status page cannot hold.
+ * @param input - Readiness, the run's verdict, and how the run ended.
+ * @returns The state to publish.
+ */
+export function externalCertificationState(input: {
+  readonly ready: boolean
+  readonly verdict: WorkflowVerdict
+  readonly operationalFailure: boolean
+  readonly canceled: boolean
+}): ExternalCertificationState {
+  if (input.canceled || input.operationalFailure) return 'error'
+  if (input.ready) return 'success'
+  return 'failure'
 }

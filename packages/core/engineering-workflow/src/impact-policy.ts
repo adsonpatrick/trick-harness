@@ -1,0 +1,289 @@
+/**
+ * What a change's measured impact requires of the run that produced it.
+ *
+ * The profile states, per surface, what QA bar a change owes and whether it
+ * needs a security reading. This module reads those tables against the impact
+ * facts and resolves one set of requirements. Two properties are the whole
+ * point of doing it here rather than at each call site:
+ *
+ * - **Rules accumulate.** Unlike routing, where the first matching row wins, a
+ *   change that touches two surfaces owes both bars. Picking one would let a
+ *   change be certified as whichever half the table happened to list first.
+ * - **Nothing resolves downward.** Every ladder is merged with `max` and every
+ *   list with a union, so no reading can remove what another established.
+ *
+ * @module @trick-harness/engineering-workflow/impact-policy
+ */
+
+import { READ_ONLY_ROLES, RISKS, WRITE_VOLUMES } from '@trick-harness/contracts'
+import type {
+  EffectiveChangeImpact,
+  IndependenceRequirement,
+  Risk,
+  Role,
+  WorkflowObjective,
+  WriteVolume,
+} from '@trick-harness/contracts'
+import type { HarnessProfile, PolicyRuleDefinition } from '@trick-harness/profile'
+import type { StageSpec } from './types.ts'
+
+/** What certification a run has to buy, resolved from its measured impact. */
+export interface CertificationRequirements {
+  /** The risk the run is held at: the impact's, raised by any matched QA row. */
+  readonly effectiveRisk: Risk
+  /** Whether an independent QA stage runs. */
+  readonly qaRequired: boolean
+  /** Whether a security reading runs. */
+  readonly securityRequired: boolean
+  /** Every evidence profile the impact and the matched QA rows name, deduplicated. */
+  readonly evidenceProfiles: readonly string[]
+  /** How independent the certifying stages must be, read off the resolved risk. */
+  readonly independenceRequirement: IndependenceRequirement
+}
+
+/**
+ * Whether `rule` speaks about any of the surfaces this change touched.
+ *
+ * A row with an empty `when` is the profile's default and speaks about every
+ * change; a row keyed on a surface speaks only about changes carrying it.
+ *
+ * @param rule - the policy row.
+ * @param surfaces - the surfaces the impact resolved to.
+ * @returns true when the row applies to this change.
+ */
+function matches(rule: PolicyRuleDefinition, surfaces: readonly string[]): boolean {
+  const wanted = rule.when['surface']
+  if (wanted === undefined) return Object.keys(rule.when).length === 0
+  return surfaces.includes(String(wanted))
+}
+
+/**
+ * The higher of two risks on the profile-pinned ladder.
+ *
+ * @param left - one risk.
+ * @param right - the other.
+ * @returns whichever sits further up.
+ */
+function higherRisk(left: Risk, right: Risk): Risk {
+  return RISKS.indexOf(left) >= RISKS.indexOf(right) ? left : right
+}
+
+/**
+ * Resolve what certification this change's impact requires.
+ *
+ * @param profile - the project's QA, security and independence tables.
+ * @param impact - the resolved impact of the change, planned and actual.
+ * @returns the requirements, frozen, so no later stage can lower its own bar.
+ */
+export function resolveCertificationRequirements(
+  profile: HarnessProfile,
+  impact: EffectiveChangeImpact,
+): CertificationRequirements {
+  const evidence = new Set<string>(impact.evidenceProfiles)
+  let risk = impact.effectiveRisk
+  let independentReviewAsked = false
+
+  for (const rule of profile.qaPolicy.rules) {
+    if (!matches(rule, impact.surfaces)) continue
+    const stated = rule.use['risk']
+    if (typeof stated === 'string' && (RISKS as readonly string[]).includes(stated)) {
+      risk = higherRisk(risk, stated as Risk)
+    }
+    const profileName = rule.use['evidence']
+    if (typeof profileName === 'string' && profileName !== '') evidence.add(profileName)
+    if (rule.use['independentReview'] === true) independentReviewAsked = true
+  }
+
+  const securityTriggered = profile.securityPolicy.rules.some(rule => matches(rule, impact.surfaces))
+
+  return Object.freeze({
+    effectiveRisk: risk,
+    // Above `low` the run buys QA whether or not a surface matched: an impact
+    // that already resolved to medium is not made ordinary by the absence of a
+    // row naming it.
+    qaRequired: independentReviewAsked || risk !== 'low',
+    // Critical work is read for security even where no trigger named the
+    // surface, which is the behaviour the fixed lifecycle had before impact
+    // could speak at all.
+    securityRequired: securityTriggered || risk === 'critical',
+    evidenceProfiles: Object.freeze([...evidence]),
+    independenceRequirement: profile.independencePolicy[risk],
+  })
+}
+
+/**
+ * Hold the resolution to what its own certification requires.
+ *
+ * `resolveCertificationRequirements` reads the QA rows and can land above the
+ * floor the paths established — a database change whose paths said `high` is
+ * critical work by the row that names the surface. Without this the raised risk
+ * only chose which stages ran, while every one of those stages was routed, and
+ * its independence read, off the lower number: a policy row a reviewer reads as
+ * enforced and no run is ever held to.
+ *
+ * Monotonic like everything else here. Nothing is lowered, and the readings
+ * themselves are untouched — this raises what the run is held to, not what the
+ * change was measured as.
+ *
+ * @param impact - the resolution as the two readings produced it.
+ * @param requirements - what that resolution requires of certification.
+ * @returns the resolution, never weaker than the one given.
+ */
+export function applyCertificationRequirements(
+  impact: EffectiveChangeImpact,
+  requirements: CertificationRequirements,
+): EffectiveChangeImpact {
+  return Object.freeze({
+    ...impact,
+    effectiveRisk: higherRisk(impact.effectiveRisk, requirements.effectiveRisk),
+    evidenceProfiles: Object.freeze([...new Set([...impact.evidenceProfiles, ...requirements.evidenceProfiles])]),
+  })
+}
+
+/**
+ * The stages that produce and publish the change.
+ *
+ * Fixed, and deliberately independent of impact: what a change turns out to be
+ * is not known until it exists, so nothing here may be decided from it.
+ *
+ * @returns the implementation half of a pull-request run.
+ */
+export function planPullRequestImplementationStages(): readonly StageSpec[] {
+  return Object.freeze([
+    { stageId: 'implement-1', role: 'implement' },
+    { stageId: 'verify-1', role: 'verify' },
+    { stageId: 'delivery-1', role: 'delivery' },
+  ] as const satisfies readonly StageSpec[])
+}
+
+/**
+ * The stages that certify the published change.
+ *
+ * Planned after delivery, when the actual change set has been read, so the bar
+ * is set by what was delivered rather than by what was intended.
+ *
+ * @param requirements - what the measured impact requires.
+ * @param pass - which certification pass this is, so a re-certification after
+ * a repair names stages the journal can tell apart from the first pass's.
+ * @returns the certification half, always closing on a final verification.
+ */
+export function planPullRequestCertificationStages(
+  requirements: CertificationRequirements,
+  pass = 1,
+): readonly StageSpec[] {
+  // Every certifying stage carries the same resolved list, and carries the
+  // same frozen array: a stage that could edit its own evidence requirement
+  // could certify itself against a bar it lowered.
+  const evidence = requirements.evidenceProfiles
+  const stages: StageSpec[] = [{ stageId: `review-${String(pass)}`, role: 'review', requiredEvidenceProfiles: evidence }]
+  if (requirements.qaRequired) stages.push({ stageId: `qa-${String(pass)}`, role: 'qa', requiredEvidenceProfiles: evidence })
+  if (requirements.securityRequired) {
+    stages.push({ stageId: `security-${String(pass)}`, role: 'security', requiredEvidenceProfiles: evidence })
+  }
+  stages.push({ stageId: `conformance-${String(pass)}`, role: 'conformance', requiredEvidenceProfiles: evidence })
+  // Last, and after every certifying reading: a verification that ran before a
+  // stage could still change something attests to a tree nobody certified.
+  stages.push({ stageId: `verify-final${pass === 1 ? '' : `-${String(pass)}`}`, role: 'verify' })
+  return Object.freeze(stages)
+}
+
+/**
+ * The routing facts a stage presents that come from the change itself.
+ *
+ * Everything here used to be derived from the role and the objective alone —
+ * that is, from what a caller declared before any of the work existed. Read
+ * from the measured impact instead, a run is routed as what it turned out to
+ * be: an objective opened as low-risk housekeeping that delivered an auth
+ * change is routed as an auth change, and the caller's word about it is a floor
+ * rather than a ceiling.
+ */
+/**
+ * Keep whatever the run has already established about its own change.
+ *
+ * A repair produces a second published branch, and that branch is classified
+ * again. Taking the new reading on its own would let a repair that removed a
+ * sensitive file un-owe the security reading the earlier diff bought — a bar
+ * going down because the work got smaller, which is exactly the move the
+ * monotonicity rule exists to refuse. The readings themselves are the new
+ * ones, because they describe the branch as it now stands; everything resolved
+ * from them is the stronger of the two.
+ *
+ * @param previous - what the run had resolved before this delivery.
+ * @param next - what the branch as delivered resolves to on its own.
+ * @returns the resolution, never weaker than either input.
+ */
+export function retainStrongerImpact(
+  previous: EffectiveChangeImpact,
+  next: EffectiveChangeImpact,
+): EffectiveChangeImpact {
+  const union = (left: readonly string[], right: readonly string[]): readonly string[] =>
+    Object.freeze([...new Set([...left, ...right])])
+
+  return Object.freeze({
+    ...next,
+    effectiveRisk: higherRisk(previous.effectiveRisk, next.effectiveRisk),
+    writeVolume: WRITE_VOLUMES[Math.max(
+      WRITE_VOLUMES.indexOf(previous.writeVolume), WRITE_VOLUMES.indexOf(next.writeVolume),
+    )] as WriteVolume,
+    surfaces: union(previous.surfaces, next.surfaces),
+    taskClasses: union(previous.taskClasses, next.taskClasses),
+    requiredCapabilities: union(previous.requiredCapabilities, next.requiredCapabilities),
+    evidenceProfiles: union(previous.evidenceProfiles, next.evidenceProfiles),
+    databaseMutation: previous.databaseMutation || next.databaseMutation,
+  })
+}
+
+export interface ImpactRoutingFacts {
+  readonly risk: Risk
+  readonly writeVolume: WriteVolume
+  readonly independenceRequirement: IndependenceRequirement
+  /** The class the paths named, falling back to the caller's hint. */
+  readonly taskClass?: string
+  readonly requiredCapabilities: readonly string[]
+}
+
+/**
+ * How much of the tree a role is expected to write, before the change is known.
+ *
+ * A floor rather than a default: the impact may raise it, and may not lower it.
+ *
+ * @param role - the role the stage runs as.
+ * @returns the role's own write volume.
+ */
+function roleWriteVolume(role: Role): WriteVolume {
+  if (READ_ONLY_ROLES.includes(role)) return 'none'
+  return role === 'delivery' ? 'small' : 'medium'
+}
+
+/**
+ * Build the impact-derived half of a stage's routing context.
+ *
+ * @param stage - the stage being routed.
+ * @param objective - the approved objective, for the caller's own task class.
+ * @param profile - the project's independence ladder.
+ * @param impact - what the change was measured to be.
+ * @returns the facts, frozen.
+ */
+export function impactRoutingFacts(
+  stage: StageSpec,
+  objective: WorkflowObjective,
+  profile: HarnessProfile,
+  impact: EffectiveChangeImpact,
+): ImpactRoutingFacts {
+  // A reader writes nothing whatever the change turned out to be. This is the
+  // one place the impact is not allowed to raise anything: a review with a
+  // writable tree is not a review.
+  const floor = roleWriteVolume(stage.role)
+  const writeVolume = floor === 'none'
+    ? 'none'
+    : WRITE_VOLUMES[Math.max(WRITE_VOLUMES.indexOf(floor), WRITE_VOLUMES.indexOf(impact.writeVolume))] as WriteVolume
+  const taskClass = impact.taskClasses[0] ?? objective.taskClass
+
+  return Object.freeze({
+    risk: impact.effectiveRisk,
+    writeVolume,
+    independenceRequirement: profile.independencePolicy[impact.effectiveRisk],
+    ...taskClass === undefined ? {} : { taskClass },
+    requiredCapabilities: impact.requiredCapabilities,
+  })
+}

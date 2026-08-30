@@ -10,9 +10,15 @@ import type {
 import { WorkflowJournal } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { RoutingPolicy } from '@trick-harness/routing'
-import type { ConformanceManifest, DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
-import { WorkflowRunner, assessPullRequest, planPullRequestStages } from '../src/index.ts'
-import type { DeliveryCapabilityPort, PullRequestOutcome, StageSpec } from '../src/index.ts'
+import type { ConformanceManifest, DiagnosisContract, Finding, StageResult, WorkflowObjective, WorkflowVerdict } from '@trick-harness/contracts'
+import {
+  WorkflowRunner,
+  assessPullRequest,
+  certificationDecision,
+  externalCertificationState,
+  planPullRequestStages,
+} from '../src/index.ts'
+import type { DeliveryCapabilityPort, PullRequestOutcome, StageFacts, StageSpec, WorkflowOutcome } from '../src/index.ts'
 
 /**
  * The Plurora shape of the policy: heavy implementation and repair go to the
@@ -54,6 +60,10 @@ const PROFILE: HarnessProfile = Object.freeze({
   securityPolicy: Object.freeze({ rules: Object.freeze([]) }),
   integrationPolicy: Object.freeze({ enabled: Object.freeze([]), rules: Object.freeze([]) }),
   trustedComposition: Object.freeze({ excludedPluginIds: Object.freeze([]) }),
+  changeImpactPolicy: Object.freeze({
+    rules: Object.freeze([]),
+    writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+  }),
 })
 
 const OBJECTIVE: WorkflowObjective = Object.freeze({
@@ -609,5 +619,123 @@ describe('conformance standing between a green run and a ready pull request', ()
     })
 
     expect(result.state).toBe('INCONCLUSIVE')
+  })
+})
+
+describe('deciding whether a run may be certified outside the harness', () => {
+  /** A finished run whose stages are exactly the ones the argument is about. */
+  const outcomeOf = (stages: readonly StageFacts[], verdict: WorkflowVerdict = 'PASS'): WorkflowOutcome => ({
+    workflowId: 'wf-1',
+    objectiveId: 'obj-1',
+    state: verdict === 'PASS' ? 'completed' : 'failed',
+    verdict,
+    summary: 'synthesized',
+    stages,
+    repairCycles: 0,
+    executorStarts: stages.length,
+  })
+
+  it('is ready only for the run the readiness predicate itself calls ready', () => {
+    const outcome = outcomeOf([
+      { ...PASSING, stageId: 'delivery-1', role: 'delivery' },
+      { ...PASSING, stageId: 'conformance-1', role: 'conformance' },
+      { ...PASSING, stageId: 'verify-final', role: 'verify' },
+    ])
+
+    const decision = certificationDecision(outcome)
+
+    // Not merely "true here": the same answer the state does, so a later
+    // narrowing of readiness cannot leave certification standing on the old one.
+    expect(decision.ready).toBe(assessPullRequest(outcome).state === 'PR_READY')
+    expect(decision.ready).toBe(true)
+    expect(decision.verdict).toBe('PASS')
+  })
+
+  it('is not ready when conformance never answered', () => {
+    const decision = certificationDecision(outcomeOf([
+      { ...PASSING, stageId: 'delivery-1', role: 'delivery' },
+      { ...PASSING, stageId: 'verify-final', role: 'verify' },
+    ]))
+
+    expect(decision.ready).toBe(false)
+  })
+
+  it('is not ready when conformance answered and did not pass', () => {
+    const decision = certificationDecision(outcomeOf([
+      { ...PASSING, stageId: 'delivery-1', role: 'delivery' },
+      { ...PASSING, stageId: 'conformance-1', role: 'conformance', verdict: 'FAIL' },
+      { ...PASSING, stageId: 'verify-final', role: 'verify' },
+    ], 'FAIL'))
+
+    expect(decision.ready).toBe(false)
+    expect(decision.verdict).toBe('FAIL')
+  })
+
+  it('is not ready when the final verification did not pass', () => {
+    const decision = certificationDecision(outcomeOf([
+      { ...PASSING, stageId: 'delivery-1', role: 'delivery' },
+      { ...PASSING, stageId: 'conformance-1', role: 'conformance' },
+      { ...PASSING, stageId: 'verify-final', role: 'verify', verdict: 'FAIL' },
+    ], 'FAIL'))
+
+    expect(decision.ready).toBe(false)
+  })
+
+  it('is not ready when the branch changed after conformance answered', () => {
+    const decision = certificationDecision(outcomeOf([
+      { ...PASSING, stageId: 'conformance-1', role: 'conformance' },
+      { ...PASSING, stageId: 'delivery-2', role: 'delivery' },
+      { ...PASSING, stageId: 'verify-final', role: 'verify' },
+    ]))
+
+    expect(decision.ready).toBe(false)
+  })
+
+  it('carries a summary for the journal and not for a status field', () => {
+    const decision = certificationDecision(outcomeOf([
+      { ...PASSING, stageId: 'delivery-1', role: 'delivery' },
+      { ...PASSING, stageId: 'conformance-1', role: 'conformance' },
+      { ...PASSING, stageId: 'verify-final', role: 'verify' },
+    ]))
+
+    expect(decision.summary).toBe(assessPullRequest(outcomeOf([
+      { ...PASSING, stageId: 'delivery-1', role: 'delivery' },
+      { ...PASSING, stageId: 'conformance-1', role: 'conformance' },
+      { ...PASSING, stageId: 'verify-final', role: 'verify' },
+    ])).summary)
+  })
+})
+
+describe('what a run says on GitHub about itself', () => {
+  it('says success only for a run the readiness predicate called ready', () => {
+    expect(externalCertificationState({
+      ready: true, verdict: 'PASS', operationalFailure: false, canceled: false,
+    })).toBe('success')
+  })
+
+  it('says failure for every verdict a not-ready run can end on', () => {
+    for (const verdict of ['FAIL', 'PARTIAL', 'BLOCKED', 'INCONCLUSIVE'] as const) {
+      expect(externalCertificationState({
+        ready: false, verdict, operationalFailure: false, canceled: false,
+      })).toBe('failure')
+    }
+  })
+
+  it('says error, not failure, when the run could not answer at all', () => {
+    // The distinction is the point: `failure` is a statement about the work,
+    // and a run that was canceled or came apart has made no such statement.
+    expect(externalCertificationState({
+      ready: false, verdict: 'INCONCLUSIVE', operationalFailure: false, canceled: true,
+    })).toBe('error')
+    expect(externalCertificationState({
+      ready: false, verdict: 'INCONCLUSIVE', operationalFailure: true, canceled: false,
+    })).toBe('error')
+  })
+
+  it('never lets a ready verdict outrank a cancellation or an operational failure', () => {
+    for (const [canceled, operationalFailure] of [[true, false], [false, true], [true, true]] as const) {
+      expect(externalCertificationState({ ready: true, verdict: 'PASS', operationalFailure, canceled }))
+        .toBe('error')
+    }
   })
 })

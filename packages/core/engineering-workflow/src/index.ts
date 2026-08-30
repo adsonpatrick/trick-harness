@@ -10,13 +10,19 @@
  * @packageDocumentation
  */
 
-import { READ_ONLY_ROLES, parseConformanceContract } from '@trick-harness/contracts'
+import { ChangeImpactError, classifyChangeImpact, mergeChangeImpact } from '@trick-harness/change-impact'
+import { READ_ONLY_ROLES, parseConformanceContract, summarizeChangeImpact } from '@trick-harness/contracts'
 import type {
+  ChangeImpactFacts,
+  ChangeImpactSource,
+  ChangeImpactStatusSummary,
   ConformanceManifest,
   ConformanceStatusSummary,
   DiagnosisContract,
+  EffectiveChangeImpact,
   EvidenceRef,
   Finding,
+  Risk,
   Role,
   RoutedPermissionMode,
   StageResult,
@@ -44,9 +50,13 @@ import type { ExecutorCircuit, RoutingPolicy } from '@trick-harness/routing'
 import type { RouteDecision, RoutingContext, StageRouteOverride } from '@trick-harness/contracts'
 
 export type * from './types.ts'
+// The one value in `types.ts`: the certification vocabulary is checked
+// against at runtime, not only referred to in a signature.
+export { EXTERNAL_CERTIFICATION_STATES } from './types.ts'
 export * from './repair.ts'
 export * from './triage.ts'
 export * from './lifecycle.ts'
+export * from './impact-policy.ts'
 export * from './conformance.ts'
 
 import {
@@ -57,7 +67,15 @@ import {
   validateDiagnosis,
 } from './repair.ts'
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
-import { planPullRequestStages } from './lifecycle.ts'
+import { certificationDecision, externalCertificationState, planPullRequestStages } from './lifecycle.ts'
+import {
+  impactRoutingFacts,
+  planPullRequestCertificationStages,
+  planPullRequestImplementationStages,
+  applyCertificationRequirements,
+  resolveCertificationRequirements,
+  retainStrongerImpact,
+} from './impact-policy.ts'
 import {
   ConformanceError,
   buildConformanceManifest,
@@ -67,7 +85,11 @@ import {
 import type { ApprovedArtifactTexts } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
+import type { CertificationStatusSummary } from '@trick-harness/contracts'
 import type {
+  CertificationCapabilityPort,
+  ChangeImpactReader,
+  ExternalCertificationState,
   DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
@@ -166,7 +188,11 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
   // stage: the difference between the two is who was holding the tool, not
   // whether the world may have moved while nobody was recording it.
   const interrupted = projection.openStages.length > 0 || projection.openCapabilities.length > 0
-  const mutated = projection.deliveries.length > 0
+  // A certification is a mark on a pull request, so a `pending` nobody came
+  // back to is world state this run left behind exactly as a push is. A retry
+  // that read the log as untouched would publish over a branch it has not read.
+  const standingCertification = projection.latestCertification?.state === 'pending'
+  const mutated = projection.deliveries.length > 0 || standingCertification
   // An id, not a fallback to the execution id: a projection with no start
   // event is not a workflow this harness can speak for, and `restartOf` refuses
   // it before ever reaching here.
@@ -190,6 +216,7 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
     reasons.push(`capabilities still open: ${projection.openCapabilities.join(', ')}`)
   }
   for (const delivery of projection.deliveries) reasons.push(`recorded ${delivery.action} on ${delivery.branch}`)
+  if (standingCertification) reasons.push('a certification is standing as pending and was never answered')
   return Object.freeze({
     ...identity,
     state: 'interrupted' as const,
@@ -201,6 +228,21 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
       : `workflow was interrupted; verify the world before retrying — ${reasons.join('; ')}`,
   })
 }
+
+/**
+ * What the durable record says about each certification state.
+ *
+ * A fixed sentence per state, selected by the state alone. The certifier writes
+ * its own description on the status, a model writes the stage summaries, and
+ * neither reaches this: a log that quoted either would be a log whose contents
+ * are chosen by whatever produced them.
+ */
+const CERTIFICATION_SUMMARIES: Readonly<Record<ExternalCertificationState, string>> = Object.freeze({
+  pending: 'certification published as pending',
+  success: 'certification published as success',
+  failure: 'certification published as failure',
+  error: 'certification published as error',
+})
 
 /**
  * What one workflow learns about its executors while it runs.
@@ -249,6 +291,17 @@ interface AvailabilityState {
 }
 
 /**
+ * What the run's change was measured to be, as it stands.
+ *
+ * A box for the same reason the override is one: the reading is replaced once,
+ * after delivery, and every stage routed after that has to see the replacement
+ * rather than the one taken before any of the work existed.
+ */
+interface ImpactBox {
+  impact?: EffectiveChangeImpact
+}
+
+/**
  * The human override a run was given, and whether it has been spent.
  *
  * A box rather than a plain value because the routing context is built deep in
@@ -259,6 +312,16 @@ interface AvailabilityState {
 interface OverrideBox {
   readonly override: StageRouteOverride | undefined
   spent: boolean
+}
+
+/** A certification this run published as pending and has yet to answer. */
+interface PendingCertification {
+  /** The delivery stage that published it, so the terminal window is named for it. */
+  readonly stageId: string
+  /** The revision the capability reported having marked. */
+  readonly revision: string
+  /** The capability that marked it, which is the only one that may answer it. */
+  readonly capability: CertificationCapabilityPort
 }
 
 /** Fresh availability state for one run. */
@@ -281,6 +344,16 @@ export interface WorkflowRuntimeOptions {
    * bound is the reason the capability exists.
    */
   readonly capabilities?: WorkflowCapabilities
+  /**
+   * Whether this deployment's work may only be certified externally.
+   *
+   * Composed here rather than read off a request, a profile field or a project
+   * config, for the same reason the capability itself is: a run able to say it
+   * does not need certifying is a run able to answer a branch-protection rule
+   * by declining to be asked. A deployment that sets this and composes no
+   * certification capability is blocked, not quietly exempted.
+   */
+  readonly requireCertification?: boolean
   /** Executors the breaker has marked degraded for this run. */
   readonly degradedExecutors?: readonly string[]
   /** Injectable clock, so a stage's duration is measurable in a test. */
@@ -337,6 +410,23 @@ export class WorkflowRunner {
    * serves one workflow, so there is nothing here to leak into another.
    */
   #conformance: ConformanceStatusSummary | undefined
+
+  /** The last reading of what this change is, for the outcome to carry out. */
+  #changeImpact: ChangeImpactStatusSummary | undefined
+
+  /**
+   * The certification this run has left open on a revision, if any.
+   *
+   * Held on the runner rather than threaded through the terminal paths for one
+   * reason: there are many ways for a run to end and only one of them is the
+   * happy one, and a pending status that is never answered is indistinguishable
+   * from work still in progress. Every ending goes through the same finish
+   * path, and this is what that path reads to know it owes GitHub an answer.
+   */
+  #pending: PendingCertification | undefined
+
+  /** The last certification this run published, as the outcome reports it. */
+  #certified: CertificationStatusSummary | undefined
   readonly #options: WorkflowRuntimeOptions
   readonly #now: () => number
   #controller: AbortController | undefined
@@ -393,9 +483,20 @@ export class WorkflowRunner {
     }
     const controller = new AbortController()
     this.#controller = controller
+    this.#pending = undefined
+    this.#certified = undefined
     try {
       return await this.#drive(request, controller.signal)
-    } finally {
+    }
+    catch (error) {
+      // The one ending that does not pass through `#end`. A run that came apart
+      // still marked a revision pending, and leaving that status standing would
+      // hold the pull request in a state that reads as "still working".
+      await this.#answerPending(request.objective, 'error')
+      throw error
+    }
+    finally {
+      this.#pending = undefined
       this.#controller = undefined
     }
   }
@@ -407,7 +508,13 @@ export class WorkflowRunner {
     const { maxRepairCycles, maxExecutorStarts } = profile.workflowPolicy
 
     journal.start(objective)
-    const queue = [...(request.plan ?? planStages)(objective)]
+    // A run that can read its own change set plans in two halves: what it does,
+    // then what that turned out to be worth certifying. Everything else keeps
+    // the fixed risk-driven plan, and an explicit caller plan still wins.
+    const measured = request.plan === undefined && request.changeImpact !== undefined
+    const queue = measured
+      ? [...planPullRequestImplementationStages()]
+      : [...(request.plan ?? planStages)(objective)]
     const stages: StageFacts[] = []
     let repairCycles = 0
     let executorStarts = 0
@@ -425,6 +532,12 @@ export class WorkflowRunner {
     // by a fresh delivery, so the stage that re-reads the work reads the diff a
     // person would now see rather than the one that provoked the repair.
     let delivered = false
+    // The revision this run has marked pending, and may therefore later speak
+    // about. Replaced by each redelivery: a repair publishes a second branch,
+    // and a status about the branch it replaced is a status about work nobody
+    // will merge.
+    let certifiedRevision: string | undefined
+    let certificationStarted = false
     // Whether the isolated preview has already passed for this run. A repair
     // and a fresh delivery do not re-verify a schema nothing touched again.
     let schemaVerified = false
@@ -437,6 +550,30 @@ export class WorkflowRunner {
     // The approved documents as they last read, held so the conformance stage
     // scores against the same bytes the implementation was gated on.
     let approved: ApprovedArtifactTexts | undefined
+    // What the paths say this change is. The planned reading is taken before
+    // anything writes, so the run cannot be classified from work it has already
+    // done; the actual one after delivery, once there is a branch to read.
+    // Carried as a box rather than a value: it is re-read after delivery, and
+    // every stage routed afterwards has to see the reading that replaced it.
+    const measurement: ImpactBox = {}
+    let plannedPaths: readonly string[] | undefined
+    // How many times the certification half has been planned. A repair is
+    // followed by a fresh delivery, and the branch that delivery published is
+    // classified again, so the half that certifies it is planned again too.
+    let certificationPasses = 0
+    if (measured) {
+      const read = await this.#classify(
+        'planned', request, reader => reader.plannedPaths(objective, signal),
+      )
+      if (typeof read === 'string') {
+        return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
+      }
+      plannedPaths = read.paths
+      measurement.impact = mergeChangeImpact({ objectiveRisk: objective.risk, planned: read.facts })
+      // Checkpointed before the loop starts, so the first writable tree this
+      // run hands out is authorised by a classification the log already holds.
+      await this.#record(read.facts, measurement.impact.effectiveRisk)
+    }
 
     while (queue.length > 0) {
       const stage = queue.shift() as StageSpec
@@ -487,7 +624,13 @@ export class WorkflowRunner {
         // The schema is verified before the branch is published, not after: a
         // pull request is what a person reviews and a reviewer reading a
         // migration nobody has applied anywhere is reading a guess.
-        if (request.databaseChange?.required === true && !schemaVerified) {
+        // Either the caller declared a schema change, or the change set was
+        // classified as one. There is deliberately no caller field that can
+        // turn the second half off: a migration in the tree is a fact about
+        // the change, not a claim about it.
+        const databaseRequired
+          = request.databaseChange?.required === true || measurement.impact?.databaseMutation === true
+        if (databaseRequired && !schemaVerified) {
           const verifier = this.#options.capabilities?.databaseVerification
           if (verifier === undefined) {
             return await this.#blocked(
@@ -540,7 +683,92 @@ export class WorkflowRunner {
             published.facts.summary)
         }
         delivered = true
+        // The branch exists now, so there is finally a revision to name, and
+        // nobody has reviewed it yet, so there is still time to say the answer
+        // is not known. Both halves matter: this is the window in which a
+        // pending status is the truth.
+        const certifier = this.#options.capabilities?.certification
+        if (this.#options.requireCertification === true && certifier === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'this deployment requires its work to be certified externally, and composed no certification '
+            + 'capability to certify it with',
+          )
+        }
+        if (certifier !== undefined) {
+          const pending = await this.#certify(stage.stageId, objective, signal, certifier, 'pending')
+          if (pending.revision === undefined) {
+            // Not a softer verdict and not a warning. A run that could not say
+            // "not yet" cannot later be trusted to have said "yes", so it stops
+            // here rather than continuing towards a readiness it has no way to
+            // publish.
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external', pending.summary,
+            )
+          }
+          certificationStarted = true
+          certifiedRevision = pending.revision
+          this.#pending = { stageId: stage.stageId, revision: pending.revision, capability: certifier }
+        }
+        if (measured) {
+          // Only now: what the branch turned out to touch is a fact about a
+          // branch, and before delivery there is none. The planned reading
+          // stays part of the resolution, so a delivery that touched less than
+          // it was approved to touch cannot hand back what that already bought.
+          // Re-read after every delivery, not only the first: a repair
+          // publishes a second branch, and certifying that one against the
+          // classification of the branch it replaced certifies a diff nobody
+          // will look at.
+          const read = await this.#classify(
+            'actual', request, reader => reader.actualPaths(objective, signal), plannedPaths,
+          )
+          if (typeof read === 'string') {
+            return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
+          }
+          const previous = measurement.impact as EffectiveChangeImpact
+          const resolved = mergeChangeImpact({
+            objectiveRisk: objective.risk,
+            planned: previous.planned,
+            actual: read.facts,
+          })
+          const merged = certificationPasses === 0
+            ? resolved
+            : retainStrongerImpact(previous, resolved)
+          certificationPasses += 1
+          // Resolved once and then folded back in, so the risk the certifying
+          // stages are routed at — and the independence their reviewers are
+          // held to — is the one the matched QA rows established rather than
+          // the lower one the paths alone did.
+          const requirements = resolveCertificationRequirements(profile, merged)
+          measurement.impact = applyCertificationRequirements(merged, requirements)
+          // Checkpointed before the certification half is planned, for the
+          // same reason: the bar those stages are held to is read off this.
+          await this.#record(read.facts, measurement.impact.effectiveRisk)
+          // Everything still queued at this point certifies the branch that
+          // was just replaced, so it is dropped rather than resumed: the whole
+          // certification half is planned again from the reading that describes
+          // what a person would now be asked to review.
+          queue.length = 0
+          queue.push(...planPullRequestCertificationStages(requirements, certificationPasses))
+        }
         continue
+      }
+
+      // A stage that certifies the work speaks about a revision, and where
+      // certification is required, the only revision it may speak about is the
+      // one this run has already marked pending. Checked per stage rather than
+      // once after delivery: a repair replaces the branch mid-run, and the
+      // stages queued behind it must be answering for the branch that exists.
+      if (
+        this.#options.requireCertification === true
+        && CERTIFYING_ROLES.includes(stage.role)
+        && delivered
+        && (!certificationStarted || certifiedRevision === undefined)
+      ) {
+        return await this.#blocked(
+          objective, stages, repairCycles, executorStarts, 'external',
+          `stage ${stage.stageId} certifies work this run has not marked pending certification`,
+        )
       }
 
       executorStarts += 1
@@ -549,7 +777,7 @@ export class WorkflowRunner {
       try {
         dispatched = await this.#dispatch(
           stage, request, signal, repairCycles, lastMutator, availability,
-          maxExecutorStarts - executorStarts, humanOverride,
+          maxExecutorStarts - executorStarts, humanOverride, measurement,
         )
       } catch (error) {
         // A policy that cannot answer for this stage — a degraded executor no
@@ -588,6 +816,7 @@ export class WorkflowRunner {
       if (stage.role === 'conformance') {
         const folded = await this.#readConformance(
           stage, request, approved, dispatched, objective, stages, repairCycles, executorStarts,
+          measurement,
         )
         if ('outcome' in folded) return folded.outcome
         // The contract is what the stage established; the executor's own
@@ -756,6 +985,58 @@ export class WorkflowRunner {
   }
 
   /**
+   * Journal one reading of the change, and hold it for the outcome.
+   *
+   * @param facts - the reading, as the classifier produced it.
+   * @param effectiveRisk - the risk the run resolved to on it.
+   */
+  async #record(facts: ChangeImpactFacts, effectiveRisk: Risk): Promise<void> {
+    this.#changeImpact = summarizeChangeImpact(facts, effectiveRisk)
+    await this.#options.journal.changeImpact({ ...facts, effectiveRisk })
+  }
+
+  /**
+   * Read one set of repository paths and classify what it means.
+   *
+   * @param source - which of the two readings this is.
+   * @param request - the run request, which supplies the reader.
+   * @param read - the reader call this reading is taken from.
+   * @param approvedPlannedPaths - the planned set, when there is one to compare against.
+   * @returns the paths and the facts, or the refusal to state as a blocker.
+   */
+  async #classify(
+    source: ChangeImpactSource,
+    request: WorkflowRunRequest,
+    read: (reader: ChangeImpactReader) => Promise<readonly string[]>,
+    approvedPlannedPaths?: readonly string[],
+  ): Promise<{ paths: readonly string[]; facts: ChangeImpactFacts } | string> {
+    const reader = request.changeImpact as ChangeImpactReader
+    let paths: readonly string[]
+    try {
+      paths = await read(reader)
+    } catch {
+      // The reader's own error text is not repeated: it comes from a project
+      // checkout and this summary reaches the journal.
+      return `the ${source} change set could not be read, so nothing can be certified against it`
+    }
+    try {
+      return {
+        paths,
+        facts: classifyChangeImpact({
+          source,
+          paths,
+          policy: this.#options.profile.changeImpactPolicy,
+          ...approvedPlannedPaths === undefined ? {} : { approvedPlannedPaths },
+        }),
+      }
+    } catch (error) {
+      if (!(error instanceof ChangeImpactError)) throw error
+      // Same reason: the message can name a repository path.
+      return `the ${source} change set names a path this profile cannot classify`
+    }
+  }
+
+  /**
    * Re-read the approved documents and check they are still the approved ones.
    *
    * @param request - The run request, which supplies the reader.
@@ -813,6 +1094,7 @@ export class WorkflowRunner {
     stages: readonly StageFacts[],
     repairCycles: number,
     executorStarts: number,
+    measurement: ImpactBox,
   ): Promise<{ facts: StageFacts } | { outcome: WorkflowOutcome }> {
     /**
      * End the run without establishing conformance.
@@ -835,7 +1117,14 @@ export class WorkflowRunner {
       // The Definition of Done is deterministic profile policy and joins the
       // manifest with it. A run that supplies none is judged against the Spec
       // and the Plan alone, which is a weaker bar and never a silently wider one.
-      manifest = buildConformanceManifest({ ...approved, dod: request.dodObligations ?? [] })
+      manifest = buildConformanceManifest({
+        ...approved,
+        dod: request.dodObligations ?? [],
+        // What the delivered branch touched that the approved Plan never named.
+        // Handed over as evidence, not as a verdict: conformance decides what a
+        // widened write set means for the obligations it is scoring.
+        unplannedPaths: measurement.impact?.actual?.unplannedPaths ?? [],
+      })
     } catch (error) {
       if (!(error instanceof ConformanceError)) throw error
       return await unestablished(`the approved artifacts state no obligation set: ${error.message}`)
@@ -875,11 +1164,12 @@ export class WorkflowRunner {
     availability: AvailabilityState,
     extraStarts: number,
     humanOverride: OverrideBox,
+    measurement: ImpactBox,
   ): Promise<Dispatched> {
     let spent = 0
     for (;;) {
       const attempt = await this.#attempt(
-        stage, request, signal, priorAttempts, lastMutator, availability, humanOverride,
+        stage, request, signal, priorAttempts, lastMutator, availability, humanOverride, measurement,
       )
       // Only an executor that could not serve the run is retried, and only
       // while the budget the profile set still has room. A wrong answer is not
@@ -904,10 +1194,11 @@ export class WorkflowRunner {
     lastMutator: string | undefined,
     availability: AvailabilityState,
     humanOverride: OverrideBox,
+    measurement: ImpactBox,
   ): Promise<{ readonly dispatched: Dispatched; readonly reroutable: boolean }> {
     const { journal, executors, policy } = this.#options
     const context = this.#routingContext(
-      stage, request, priorAttempts, lastMutator, availability, humanOverride,
+      stage, request, priorAttempts, lastMutator, availability, humanOverride, measurement,
     )
     const decision = route(context, policy)
     // Spent only once a route actually resolved. An override the router refused
@@ -1113,6 +1404,7 @@ export class WorkflowRunner {
     lastMutator: string | undefined,
     availability: AvailabilityState,
     humanOverride: OverrideBox,
+    measurement: ImpactBox,
   ): RoutingContext {
     const { objective } = request
     const { profile, degradedExecutors = [], executors, policy } = this.#options
@@ -1138,16 +1430,26 @@ export class WorkflowRunner {
     const applies = override !== undefined && !humanOverride.spent && override.role === stage.role
       ? override
       : undefined
+    // What the change was measured to be, when it has been. Before the first
+    // reading — and in a run with no reader at all — the stage presents what
+    // the caller declared, which is the behaviour this harness had all along.
+    const impact = measurement.impact
+    const measured = impact === undefined
+      ? {
+        risk: objective.risk,
+        writeVolume: writeVolumeFor(stage.role),
+        independenceRequirement: profile.independencePolicy[objective.risk],
+        requiredCapabilities: Object.freeze([]) as readonly string[],
+        ...objective.taskClass === undefined ? {} : { taskClass: objective.taskClass },
+      }
+      : impactRoutingFacts(stage, objective, profile, impact)
     return {
       role: stage.role,
       workload: objective.workload,
-      risk: objective.risk,
-      writeVolume: writeVolumeFor(stage.role),
-      independenceRequirement: profile.independencePolicy[objective.risk],
+      ...measured,
       priorAttempts,
       priorRouteFailures: Object.freeze([]),
       degradedExecutors: degraded,
-      requiredCapabilities: Object.freeze([]),
       ...implementer === undefined || !READ_ONLY_ROLES.includes(stage.role)
         ? {}
         : { implementationExecutor: implementer },
@@ -1217,6 +1519,72 @@ export class WorkflowRunner {
           durationMs,
         },
         canceled,
+      }
+    }
+  }
+
+  /**
+   * Publish one external certification state, with the journal opened around it.
+   *
+   * The `capability-start` record is flushed before the capability may post, so
+   * a run that dies between the POST and its own bookkeeping leaves a window a
+   * restart can see is open. That ordering is the whole point: a status may
+   * exist on GitHub that this run never got to record, and an open window says
+   * so where a silence would not.
+   *
+   * No executor start is counted and no model is consulted. What is published
+   * is a state and a revision the capability read for itself.
+   */
+  async #certify(
+    owner: string,
+    objective: WorkflowObjective,
+    signal: AbortSignal,
+    capability: CertificationCapabilityPort,
+    state: ExternalCertificationState,
+    expectedRevision?: string,
+  ): Promise<{ readonly revision: string | undefined; readonly summary: string }> {
+    const { journal } = this.#options
+    const clock = this.#options.now ?? Date.now
+    const name = 'github-certification'
+    const stageId = `${owner}-certification`
+    await journal.beginCapability(stageId, name, true)
+    const started = clock()
+    try {
+      const result = await capability.publish(
+        expectedRevision === undefined
+          ? { objective, state }
+          : { objective, state, expectedRevision },
+        signal,
+      )
+      // Recorded before the window closes, so the durable evidence of what was
+      // published sits inside the window a restart would otherwise have to
+      // reason about. A record the journal refuses is a certification this run
+      // cannot account for, and the catch below treats it as one that failed.
+      await journal.certification({
+        revision: result.revision,
+        externalId: result.externalId,
+        state,
+        context: result.context,
+        summary: CERTIFICATION_SUMMARIES[state],
+        evidence: result.evidence,
+      })
+      this.#certified = { state, revision: result.revision, externalId: result.externalId }
+      await journal.endCapability(stageId, name, 'completed', clock() - started)
+      return { revision: result.revision, summary: CERTIFICATION_SUMMARIES[state] }
+    }
+    catch (error) {
+      const canceled = signal.aborted
+      await journal.endCapability(
+        stageId, name, canceled ? 'aborted' : 'error', clock() - started,
+        canceled ? 'canceled' : 'certification-error',
+      )
+      return {
+        revision: undefined,
+        // The capability's own message is bounded by contract and names no
+        // command output, no path and no credential.
+        summary: canceled
+          ? 'the run was canceled before its certification could be published'
+          : error instanceof Error ? error.message : 'the certification ended without saying why',
       }
     }
   }
@@ -1307,7 +1675,79 @@ export class WorkflowRunner {
     verdict: WorkflowVerdict,
     summary: string,
   ): Promise<WorkflowOutcome> {
-    await this.#options.journal.end(state, verdict, summary)
+    let endState = state
+    let endVerdict = verdict
+    let endSummary = summary
+    const pending = this.#pending
+    if (pending !== undefined) {
+      // Built before anything is published, because what is published is a
+      // projection of it: readiness is the existing predicate's answer about
+      // this exact run, not a second opinion assembled here.
+      const candidate = this.#outcome(objective, stages, repairCycles, executorStarts, state, verdict, summary)
+      const published = await this.#answerPending(objective, externalCertificationState({
+        ready: certificationDecision(candidate).ready,
+        verdict,
+        operationalFailure: false,
+        canceled: state === 'canceled',
+      }))
+      if (published !== undefined) {
+        // A success this run could not publish, or published against a head it
+        // never read, is not a success. The verdict a person reads is lowered
+        // to match what the repository will actually show them.
+        endState = 'failed'
+        endVerdict = 'INCONCLUSIVE'
+        endSummary = published
+      }
+    }
+    await this.#options.journal.end(endState, endVerdict, endSummary)
+    return this.#outcome(objective, stages, repairCycles, executorStarts, endState, endVerdict, endSummary)
+  }
+
+  /**
+   * Answer the pending certification this run left open, if it left one.
+   *
+   * The publication is attempted on a fresh signal rather than the run's own.
+   * A canceled run is exactly the case where the status most needs replacing,
+   * and a terminal publication that inherits the cancellation would abandon the
+   * pull request holding the pending status the cancellation was supposed to
+   * clear.
+   * @param objective - The objective, which the capability re-reads its target from.
+   * @param state - The state this run's ending maps to.
+   * @returns Why the run's own verdict must be lowered, or undefined when it need not be.
+   */
+  async #answerPending(
+    objective: WorkflowObjective,
+    state: ExternalCertificationState,
+  ): Promise<string | undefined> {
+    const pending = this.#pending
+    if (pending === undefined) return undefined
+    // Cleared first: one terminal answer per run, whatever happens below.
+    this.#pending = undefined
+    const result = await this.#certify(
+      `${pending.stageId}-final`, objective, new AbortController().signal, pending.capability, state,
+      pending.revision,
+    )
+    if (state !== 'success') return undefined
+    if (result.revision === undefined) {
+      return 'this run could not publish the certification for the revision it delivered, so nothing here says '
+        + 'the branch is ready'
+    }
+    if (result.revision !== pending.revision) {
+      return 'the pull request head moved after this run certified it, so what was reviewed is not what is there'
+    }
+    return undefined
+  }
+
+  /** Assemble the outcome record, so every ending reports the same shape. */
+  #outcome(
+    objective: WorkflowObjective,
+    stages: readonly StageFacts[],
+    repairCycles: number,
+    executorStarts: number,
+    state: WorkflowEndState,
+    verdict: WorkflowVerdict,
+    summary: string,
+  ): WorkflowOutcome {
     return Object.freeze({
       workflowId: this.#workflowId,
       objectiveId: objective.id,
@@ -1318,6 +1758,8 @@ export class WorkflowRunner {
       repairCycles,
       executorStarts,
       ...this.#conformance === undefined ? {} : { conformance: this.#conformance },
+      ...this.#changeImpact === undefined ? {} : { changeImpact: this.#changeImpact },
+      ...this.#certified === undefined ? {} : { certification: this.#certified },
     })
   }
 }

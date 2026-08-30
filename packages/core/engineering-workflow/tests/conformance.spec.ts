@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ConformanceContract, ConformanceObligation } from '@trick-harness/contracts'
 
-import { ConformanceError, buildConformanceManifest, validateConformanceCoverage } from '../src/conformance.ts'
+import { ConformanceError, buildConformanceManifest, extractApprovedPlanWriteSet, validateConformanceCoverage } from '../src/conformance.ts'
 
 const SPEC_SHA = 'a'.repeat(64)
 const PLAN_SHA = 'b'.repeat(64)
@@ -210,5 +210,119 @@ describe('holding a returned conformance result to the obligations that were set
       expect(error).toBeInstanceOf(ConformanceError)
       expect((error as Error).message).not.toContain(secret)
     }
+  })
+})
+
+describe('reading the write set the approved plan named', () => {
+  const APPROVED = [
+    '# A plan',
+    '',
+    'Prose before any task.',
+    '',
+    '**Files:**',
+    '- Modify: `docs/not-a-task.md`',
+    '',
+    '### Task 1: First task',
+    '',
+    '**Files:**',
+    '- Create: `src/lib/auth/session.ts`',
+    '- Modify: `src/proxy.ts`',
+    '- Test: `src/lib/auth/tests/session.spec.ts`',
+    '- Delete: `src/lib/auth/legacy.ts`',
+    '',
+    '**Dependencies:**',
+    '',
+    '- Modify: `src/never-approved.ts`',
+    '',
+    '- [ ] **Step 1: do the thing** in `src/also-not-approved.ts`',
+    '',
+    '### Task 2: Second task',
+    '',
+    '**Files:**',
+    '- Modify: `src/proxy.ts:120-145`',
+    '- Create: `supabase/migrations/0001_init.sql`',
+  ].join('\n')
+
+  it('reads every declared entry kind and says each path once', () => {
+    expect(extractApprovedPlanWriteSet(APPROVED)).toStrictEqual([
+      'src/lib/auth/legacy.ts',
+      'src/lib/auth/session.ts',
+      'src/lib/auth/tests/session.spec.ts',
+      'src/proxy.ts',
+      'supabase/migrations/0001_init.sql',
+    ])
+  })
+
+  it('reads only Files blocks that belong to a task', () => {
+    // A Files block in the preamble is a summary of the whole plan, and a
+    // `- Modify:` line in prose is prose. Counting either would approve a path
+    // no task committed to, which is exactly the drift this set detects.
+    const set = extractApprovedPlanWriteSet(APPROVED)
+
+    expect(set).not.toContain('docs/not-a-task.md')
+    expect(set).not.toContain('src/never-approved.ts')
+    expect(set).not.toContain('src/also-not-approved.ts')
+  })
+
+  it('drops a line locator only after the path has been read', () => {
+    expect(extractApprovedPlanWriteSet(APPROVED)).toContain('src/proxy.ts')
+  })
+
+  it('returns nothing when the plan names no file', () => {
+    // Empty is the honest answer and the safe one: it means the plan approved
+    // no path, so every delivered path is reported as unplanned. Guessing a
+    // set here would approve work nobody wrote down.
+    expect(extractApprovedPlanWriteSet('### Task 1: A task\n\nNo files block.\n')).toStrictEqual([])
+  })
+
+  it('refuses a declared entry that is not a repository-relative path', () => {
+    for (const entry of ['/etc/passwd', 'C:/Users/x/secrets.ts', '../outside/x.ts', 'src/../../x.ts']) {
+      expect(() => extractApprovedPlanWriteSet(`### Task 1: T\n\n**Files:**\n- Modify: \`${entry}\`\n`), entry)
+        .toThrow(ConformanceError)
+    }
+  })
+
+  it('refuses a pattern where the plan owes a concrete file', () => {
+    // A glob is a promise to touch an unknown number of files, and a planned
+    // set that contains one cannot be compared with a delivered set at all.
+    for (const entry of ['src/**/*.ts', 'src/x?.ts', 'src/[ab].ts', 'src/{a,b}.ts']) {
+      expect(() => extractApprovedPlanWriteSet(`### Task 1: T\n\n**Files:**\n- Modify: \`${entry}\`\n`), entry)
+        .toThrow(ConformanceError)
+    }
+  })
+
+  it('refuses a declared entry whose path it could not read at all', () => {
+    for (const line of ['- Modify: src/unquoted.ts', '- Create: `src/unclosed.ts', '- Delete: ``']) {
+      expect(() => extractApprovedPlanWriteSet(`### Task 1: T\n\n**Files:**\n${line}\n`), line)
+        .toThrow(ConformanceError)
+    }
+  })
+
+  it('names what it refused without quoting the path', () => {
+    try {
+      extractApprovedPlanWriteSet('### Task 1: T\n\n**Files:**\n- Modify: `../keys/sk-live-000111.ts`\n')
+      expect.unreachable('the traversing path should have been refused')
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(ConformanceError)
+      expect((error as Error).message).not.toContain('sk-live')
+    }
+  })
+
+  it('reads one path as one path however a plan spelled it', () => {
+    const plan = [
+      '### Task 1: T',
+      '',
+      '**Files:**',
+      '- Create: `src\\lib\\auth\\session.ts`',
+      '- Modify: `./src/lib/auth/session.ts`',
+    ].join('\n')
+
+    expect(extractApprovedPlanWriteSet(plan)).toStrictEqual(['src/lib/auth/session.ts'])
+  })
+
+  it('carries no document content beyond the paths', () => {
+    const plan = '### Task 1: Rotate the service role key\n\n**Files:**\n- Modify: `src/x.ts`\n'
+
+    expect(JSON.stringify(extractApprovedPlanWriteSet(plan))).not.toContain('service role')
   })
 })

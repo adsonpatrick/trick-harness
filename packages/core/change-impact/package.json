@@ -1,0 +1,44 @@
+{
+  "name": "@trick-harness/change-impact",
+  "description": "Deterministic classification of what a repository change touches, and what that requires of the run",
+  "version": "0.1.1-rc.2",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-invariants": "workspace:^",
+    "@trick-harness/contracts": "workspace:^",
+    "@trick-harness/profile": "workspace:^"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-invariants": "workspace:^",
+    "@trick-harness/contracts": "workspace:^",
+    "@trick-harness/profile": "workspace:^",
+    "@types/picomatch": "4.0.3"
+  },
+  "dependencies": {
+    "picomatch": "4.0.5"
+  }
+}

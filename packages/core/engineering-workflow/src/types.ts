@@ -1,5 +1,6 @@
 import type {
   EvidenceRef,
+  ExternalCertificationState,
   Finding,
   Role,
   RoutedPermissionMode,
@@ -8,7 +9,13 @@ import type {
   WorkflowObjective,
   WorkflowVerdict,
 } from '@trick-harness/contracts'
-import type { ConformanceManifest, ConformanceObligation, ConformanceStatusSummary } from '@trick-harness/contracts'
+import type {
+  CertificationStatusSummary,
+  ChangeImpactStatusSummary,
+  ConformanceManifest,
+  ConformanceObligation,
+  ConformanceStatusSummary,
+} from '@trick-harness/contracts'
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { WorkflowEndState } from '@trick-harness/journal'
 import type { RepairEvidence } from './repair.ts'
@@ -17,6 +24,15 @@ import type { RepairEvidence } from './repair.ts'
 export interface StageSpec {
   readonly stageId: string
   readonly role: Role
+  /**
+   * The evidence profiles this stage owes, named by the change's own impact.
+   *
+   * Present only on stages that certify a change: what evidence a change owes
+   * is resolved from what it turned out to be, which is not known while it is
+   * still being produced. Profile names, never commands — the runtime that
+   * holds the profile decides what producing one costs.
+   */
+  readonly requiredEvidenceProfiles?: readonly string[]
 }
 
 /**
@@ -68,6 +84,22 @@ export interface WorkflowOutcome {
    * from a reading that found nothing satisfied.
    */
   readonly conformance?: ConformanceStatusSummary
+  /**
+   * What the change turned out to be, as the run last resolved it.
+   *
+   * Absent when the run classified nothing at all, which is a different fact
+   * from a change that classified to nothing.
+   */
+  readonly changeImpact?: ChangeImpactStatusSummary
+  /**
+   * What this run last published about the branch, bounded.
+   *
+   * Absent when nothing was certified, which a reader must be able to tell
+   * apart from a certification that published `error`. Three fields only: the
+   * description and the target URL belong on the pull request, where the
+   * certifier put them.
+   */
+  readonly certification?: CertificationStatusSummary
 }
 
 /** What a restart may conclude about a workflow it finds in a durable log. */
@@ -146,6 +178,18 @@ export interface WorkflowRunRequest {
    * database with nothing having read it back.
    */
   readonly databaseChange?: WorkflowDatabaseChange
+  /**
+   * Reads the two sets of repository paths a run's impact is classified from.
+   *
+   * Supplied by a deployment that knows where the checkout is; the runtime
+   * never opens a repository. Both answers are lists of paths and nothing else:
+   * what they mean is decided here, from the profile's declared rules, so no
+   * reader — and no stage — can hand back a classification of its own work.
+   *
+   * Absent, the run uses the fixed risk-driven plan. Present, the run splits at
+   * delivery and its certification is planned from what was actually published.
+   */
+  readonly changeImpact?: ChangeImpactReader
   /**
    * Reads the approved Spec and Plan back, with the hashes they carry now.
    *
@@ -290,6 +334,89 @@ export type WorkflowDatabasePreviewResult = WorkflowDatabaseVerificationResult
 export type DatabasePreviewCapabilityPort = DatabaseVerificationCapabilityPort
 
 /**
+ * The certification vocabulary, owned by the contracts package.
+ *
+ * Re-exported rather than restated: the durable journal reads these states back
+ * and cannot depend on the runtime that wrote them, so one definition upstream
+ * of both is the only arrangement in which the two cannot drift apart.
+ */
+export { EXTERNAL_CERTIFICATION_STATES } from '@trick-harness/contracts'
+export type { ExternalCertificationState } from '@trick-harness/contracts'
+
+/**
+ * What the runtime tells a certification capability, and nothing more.
+ *
+ * Deliberately thin: a state the runtime chose, and the revision it believes it
+ * is talking about. There is no description, no summary and no URL here,
+ * because everything a certification publishes outside the harness is chosen by
+ * the capability from the state alone. A field a run could fill is a field a
+ * model's output could reach, and a commit status is read by people deciding
+ * whether to merge.
+ */
+export interface WorkflowCertificationInput {
+  readonly objective: WorkflowObjective
+  readonly state: ExternalCertificationState
+  /**
+   * The revision this certification is meant for, when the run already knows it.
+   *
+   * The capability re-reads the revision itself either way; this is what it
+   * checks that reading against. A run that has certified a revision and then
+   * finds the branch has moved has not certified the branch, and must not be
+   * able to publish as though it had.
+   */
+  readonly expectedRevision?: string
+}
+
+/** What a certification capability reports back about what it published. */
+export interface WorkflowCertificationResult {
+  /** The revision the capability actually certified, as it re-read it. */
+  readonly revision: string
+  /** The certifier's own id for the status, so a later read can find it. */
+  readonly externalId: string
+  /**
+   * The context the status was published under.
+   *
+   * Reported by the capability rather than assumed by the runtime: the context
+   * is what a branch-protection rule names, and a durable record that guessed
+   * it would be evidence about a check nobody is actually required to pass.
+   */
+  readonly context: string
+  /** Where a person can see it. */
+  readonly url?: string
+  readonly evidence: readonly EvidenceRef[]
+}
+
+/**
+ * Certifying a revision outside the harness is deterministic, so it is a port.
+ *
+ * Separate from {@link DeliveryCapabilityPort} on purpose. Delivery may move a
+ * branch; this may not move anything at all. It publishes one status against
+ * one revision, and has no way to express a commit, a push, a pull-request
+ * edit, a merge, a release or a deploy — which is what makes it safe to let a
+ * branch-protection rule require it.
+ */
+/**
+ * Whether the run is ready, as the workflow owner alone computes it.
+ *
+ * Internal to the harness: `summary` is journal-facing prose that may name
+ * stages and findings, and is never copied into anything published outside.
+ * Built by {@link certificationDecision} from the same predicate that permits
+ * `PR_READY`, never from a second checklist that agrees with it today.
+ */
+export interface WorkflowCertificationDecision {
+  readonly ready: boolean
+  readonly verdict: WorkflowVerdict
+  readonly summary: string
+}
+
+export interface CertificationCapabilityPort {
+  publish(
+    input: WorkflowCertificationInput,
+    signal: AbortSignal,
+  ): Promise<WorkflowCertificationResult>
+}
+
+/**
  * The deterministic capabilities a run may reach, if a deployment supplied them.
  *
  * Absent is not the same as unnecessary. A lifecycle that needs one and does not
@@ -298,4 +425,31 @@ export type DatabasePreviewCapabilityPort = DatabaseVerificationCapabilityPort
 export interface WorkflowCapabilities {
   readonly delivery?: DeliveryCapabilityPort
   readonly databaseVerification?: DatabaseVerificationCapabilityPort
+  readonly certification?: CertificationCapabilityPort
+}
+
+/**
+ * Where the two readings of a change's paths come from.
+ *
+ * The planned reading is taken from the Plan a person approved, before any
+ * mutation-capable stage runs; the actual one from the published branch, after
+ * delivery. Both are asked for paths, never for conclusions: a stage that could
+ * describe its own change could describe a smaller one, and a smaller change
+ * scores as lower risk with a thinner evidence bar.
+ */
+export interface ChangeImpactReader {
+  /**
+   * The paths the approved Plan says this objective will touch.
+   *
+   * @param objective - the approved objective.
+   * @param signal - the run's abort signal.
+   */
+  plannedPaths(objective: WorkflowObjective, signal: AbortSignal): Promise<readonly string[]>
+  /**
+   * The paths the published branch turned out to touch.
+   *
+   * @param objective - the approved objective.
+   * @param signal - the run's abort signal.
+   */
+  actualPaths(objective: WorkflowObjective, signal: AbortSignal): Promise<readonly string[]>
 }

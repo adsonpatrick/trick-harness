@@ -27,7 +27,19 @@ const valid: HarnessProfile = {
   securityPolicy: { rules: [] },
   integrationPolicy: { enabled: [], rules: [] },
   trustedComposition: { excludedPluginIds: [] },
+  changeImpactPolicy: {
+    writeVolume: { smallMaxFiles: 3, mediumMaxFiles: 12 },
+    rules: [{ id: 'auth', paths: ['src/lib/auth/**'], use: { surface: 'auth', riskFloor: 'critical' } }],
+  },
 }
+
+/** Replace the change-impact policy without widening the profile's type. */
+function withImpact(policy: unknown): unknown {
+  return { ...valid, changeImpactPolicy: policy }
+}
+
+/** The valid change-impact policy, as the base for one-field mutations. */
+const impact = valid.changeImpactPolicy
 
 /** Drop one key from the profile without widening its type at the call site. */
 function without(key: keyof HarnessProfile): unknown {
@@ -232,6 +244,92 @@ describe('policy is flat scalar data and nothing else', () => {
         fallbackRules: [],
       },
     })).toThrow(/routingPolicy\.rules\[0\]\.use/)
+  })
+})
+
+describe('the change-impact policy a profile declares', () => {
+  it('accepts a policy that names path rules and write-volume thresholds', () => {
+    expect(check(valid)).not.toThrow()
+  })
+
+  it('requires the block, since an absent one reads as no path being sensitive', () => {
+    // Fail-closed is not available here the way it is for security repair: a
+    // missing policy would classify a migration and a README identically, and
+    // the run would proceed at whatever risk its caller asked for.
+    expect(check(without('changeImpactPolicy'))).toThrow(ProfileValidationError)
+  })
+
+  it('accepts a policy that declares no rules yet, but not one with no rule list', () => {
+    expect(check(withImpact({ ...impact, rules: [] }))).not.toThrow()
+    expect(check(withImpact({ writeVolume: impact.writeVolume }))).toThrow(/changeImpactPolicy\.rules/)
+  })
+
+  it('rejects a rule id repeated within the policy', () => {
+    // Matched rule ids are durable facts a reader routes on; two rules under
+    // one id make a recorded fact ambiguous about which rule produced it.
+    const rules = [...impact.rules, { ...impact.rules[0] }]
+    expect(check(withImpact({ ...impact, rules }))).toThrow(/changeImpactPolicy\.rules\[1\]\.id/)
+  })
+
+  it('rejects a rule that matches no path at all', () => {
+    const rules = [{ ...impact.rules[0], paths: [] }]
+    expect(check(withImpact({ ...impact, rules }))).toThrow(/changeImpactPolicy\.rules\[0\]\.paths/)
+  })
+
+  it('rejects a rule that contributes nothing when it matches', () => {
+    const rules = [{ ...impact.rules[0], use: {} }]
+    expect(check(withImpact({ ...impact, rules }))).toThrow(/changeImpactPolicy\.rules\[0\]\.use/)
+  })
+
+  it('rejects a pattern that is not repository-relative', () => {
+    // Patterns are matched against repository-relative POSIX paths. One rooted
+    // at the filesystem, or at a Windows volume, can only ever match nothing —
+    // so a policy written that way silently classifies its surface as absent.
+    for (const pattern of ['/src/lib/auth/**', 'C:/src/**', 'c:\\src\\**', '\\\\server\\share\\**']) {
+      const rules = [{ ...impact.rules[0], paths: [pattern] }]
+      expect(check(withImpact({ ...impact, rules }))).toThrow(/changeImpactPolicy\.rules\[0\]\.paths\[0\]/)
+    }
+  })
+
+  it('rejects a pattern that walks out of the repository', () => {
+    for (const pattern of ['../secrets/**', 'src/../../etc/**', 'src/..', '..']) {
+      const rules = [{ ...impact.rules[0], paths: [pattern] }]
+      expect(check(withImpact({ ...impact, rules }))).toThrow(/changeImpactPolicy\.rules\[0\]\.paths\[0\]/)
+    }
+  })
+
+  it('rejects a risk floor outside the vocabulary risk is scored on', () => {
+    const rules = [{ ...impact.rules[0], use: { riskFloor: 'catastrophic' } }]
+    expect(check(withImpact({ ...impact, rules }))).toThrow(/changeImpactPolicy\.rules\[0\]\.use\.riskFloor/)
+  })
+
+  it('rejects a use field the classifier has no meaning for', () => {
+    // A misspelled key would read as policy and contribute nothing, which is
+    // the failure mode this whole block exists to make loud.
+    const rules = [{ ...impact.rules[0], use: { surfaces: 'auth' } }]
+    expect(check(withImpact({ ...impact, rules }))).toThrow(/changeImpactPolicy\.rules\[0\]\.use\.surfaces/)
+  })
+
+  it('rejects a database-mutation marker stated as anything but a boolean', () => {
+    const rules = [{ ...impact.rules[0], use: { databaseMutation: 'true' } }]
+    expect(check(withImpact({ ...impact, rules }))).toThrow(/changeImpactPolicy\.rules\[0\]\.use\.databaseMutation/)
+  })
+
+  it('rejects write-volume thresholds that are not positive whole numbers', () => {
+    for (const smallMaxFiles of [0, -1, 2.5, '3']) {
+      expect(check(withImpact({ ...impact, writeVolume: { smallMaxFiles, mediumMaxFiles: 12 } })))
+        .toThrow(/changeImpactPolicy\.writeVolume\.smallMaxFiles/)
+    }
+  })
+
+  it('rejects thresholds that leave no room for a medium change', () => {
+    // Equal bounds make `medium` unreachable, so every change above the small
+    // bound would be scored `large` while the policy reads as having three
+    // bands. That is a policy nobody wrote, arrived at by arithmetic.
+    for (const mediumMaxFiles of [3, 2]) {
+      expect(check(withImpact({ ...impact, writeVolume: { smallMaxFiles: 3, mediumMaxFiles } })))
+        .toThrow(/changeImpactPolicy\.writeVolume\.mediumMaxFiles/)
+    }
   })
 })
 

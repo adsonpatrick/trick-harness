@@ -91,7 +91,7 @@ export interface WorkflowCertificationDecision {
 
 The decision's `ready=true` branch must call the exact same post-Plan-F/G readiness predicate that permits `PR_READY`; it may not duplicate a weaker checklist. `summary` remains internal/journal-facing and is never sent to GitHub status fields.
 
-- [ ] **Step 1: Write RED contract/runtime tests** proving the new states are bounded and `WorkflowCapabilities.certification` is callable only through the workflow runtime.
+- [x] **Step 1: Write RED contract/runtime tests** proving the new states are bounded and `WorkflowCapabilities.certification` is callable only through the workflow runtime.
 
 Representative assertion:
 
@@ -101,8 +101,8 @@ expect(EXTERNAL_CERTIFICATION_STATES).toEqual([
 ])
 ```
 
-- [ ] **Step 2: Write RED lifecycle tests** proving `ready=true` cannot be constructed before `conformance=PASS` and `verify-final=PASS` under the post-Plan-F lifecycle fixture.
-- [ ] **Step 3: Run RED.**
+- [x] **Step 2: Write RED lifecycle tests** proving `ready=true` cannot be constructed before `conformance=PASS` and `verify-final=PASS` under the post-Plan-F lifecycle fixture.
+- [x] **Step 3: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -110,8 +110,8 @@ corepack pnpm vitest run \
   packages/core/engineering-workflow/tests/lifecycle.spec.ts
 ```
 
-- [ ] **Step 4: Implement the contracts and a single readiness-to-certification decision helper** beside the existing final readiness reconciliation. Do not add GitHub vocabulary to Core.
-- [ ] **Step 5: Run GREEN + typecheck.**
+- [x] **Step 4: Implement the contracts and a single readiness-to-certification decision helper** beside the existing final readiness reconciliation. Do not add GitHub vocabulary to Core.
+- [x] **Step 5: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -120,7 +120,7 @@ corepack pnpm vitest run \
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
@@ -215,12 +215,12 @@ interface GitHubCertificationTarget {
 }
 ```
 
-- [ ] **Step 1: Write RED command tests** proving every endpoint/argv is fixed and that repository, PR number and SHA are validated before interpolation. Reject repository strings outside `owner/repo`, non-positive PR numbers and non-40-hex SHAs.
-- [ ] **Step 2: Write RED identity tests** for wrong repository, detached/empty branch, closed PR, wrong base branch, PR head branch mismatch, local HEAD vs PR head mismatch and `expectedRevision` mismatch. Every case must perform zero POST-status calls.
-- [ ] **Step 3: Write RED status tests** proving only `pending|success|failure|error` are accepted, context is the constructor's trusted value, descriptions come only from `STATUS_DESCRIPTIONS`, target URL comes from the verified PR, and raw subprocess/model output is absent from errors/evidence/status fields.
-- [ ] **Step 4: Write RED publication verification tests** proving POST is followed by a bounded GET of statuses and the latest matching context must report the requested state; mismatch produces a certification error.
-- [ ] **Step 5: Write RED subprocess lifecycle tests** proving cancellation still waits for whole-process-tree quiescence and no token/environment credential is constructed/injected by this integration.
-- [ ] **Step 6: Run RED.**
+- [x] **Step 1: Write RED command tests** proving every endpoint/argv is fixed and that repository, PR number and SHA are validated before interpolation. Reject repository strings outside `owner/repo`, non-positive PR numbers and non-40-hex SHAs.
+- [x] **Step 2: Write RED identity tests** for wrong repository, detached/empty branch, closed PR, wrong base branch, PR head branch mismatch, local HEAD vs PR head mismatch and `expectedRevision` mismatch. Every case must perform zero POST-status calls.
+- [x] **Step 3: Write RED status tests** proving only `pending|success|failure|error` are accepted, context is the constructor's trusted value, descriptions come only from `STATUS_DESCRIPTIONS`, target URL comes from the verified PR, and raw subprocess/model output is absent from errors/evidence/status fields.
+- [x] **Step 4: Write RED publication verification tests** proving POST is followed by a bounded GET of statuses and the latest matching context must report the requested state; mismatch produces a certification error.
+- [x] **Step 5: Write RED subprocess lifecycle tests** proving cancellation still waits for whole-process-tree quiescence and no token/environment credential is constructed/injected by this integration.
+- [x] **Step 6: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -228,8 +228,8 @@ corepack pnpm vitest run \
   packages/integrations/github-certification/tests/certification.spec.ts
 ```
 
-- [ ] **Step 7: Implement the package** by following the bounded-output, argv-array and `waitForExit()` pattern already proven in `packages/integrations/github-delivery` rather than importing delivery mutation helpers.
-- [ ] **Step 8: Run GREEN + constraints/typecheck.**
+- [x] **Step 7: Implement the package** by following the bounded-output, argv-array and `waitForExit()` pattern already proven in `packages/integrations/github-delivery` rather than importing delivery mutation helpers.
+- [x] **Step 8: Run GREEN + constraints/typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -239,7 +239,7 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
 ```bash
 git add packages/integrations/github-certification
@@ -277,8 +277,8 @@ delivery confirmed
 
 For redelivery after repair, repeat the sequence and replace `certifiedRevision` with the new published revision.
 
-- [ ] **Step 1: Write RED test** proving normal delivery calls certification exactly once with `pending` before Review is dispatched.
-- [ ] **Step 2: Write RED repair test** where a review finding triggers repair/redelivery; assert call order:
+- [x] **Step 1: Write RED test** proving normal delivery calls certification exactly once with `pending` before Review is dispatched.
+- [x] **Step 2: Write RED repair test** where a review finding triggers repair/redelivery; assert call order:
 
 ```text
 pending(sha1)
@@ -291,9 +291,9 @@ re-review
 ```
 
 and assert `sha2` becomes the only revision eligible for terminal success.
-- [ ] **Step 3: Write RED missing-capability test** for Plurora composition semantics: a workflow that requires certification and has no certification port ends fail-closed before a certifying stage can claim readiness.
-- [ ] **Step 4: Write RED same-SHA rerun test** proving a second certification run publishes `pending` again if it reaches the published certification boundary, even if the previous latest status for that SHA was success.
-- [ ] **Step 5: Run RED.**
+- [x] **Step 3: Write RED missing-capability test** for Plurora composition semantics: a workflow that requires certification and has no certification port ends fail-closed before a certifying stage can claim readiness.
+- [x] **Step 4: Write RED same-SHA rerun test** proving a second certification run publishes `pending` again if it reaches the published certification boundary, even if the previous latest status for that SHA was success.
+- [x] **Step 5: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -302,8 +302,8 @@ corepack pnpm vitest run \
   packages/core/engineering-workflow/tests/repair.spec.ts
 ```
 
-- [ ] **Step 6: Implement pending publication in the workflow owner**, not in a model stage/interpreter. Treat publish failure as external certification failure and do not continue to an eventual `PR_READY` path.
-- [ ] **Step 7: Run GREEN.**
+- [x] **Step 6: Implement pending publication in the workflow owner**, not in a model stage/interpreter. Treat publish failure as external certification failure and do not continue to an eventual `PR_READY` path.
+- [x] **Step 7: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run \
@@ -312,7 +312,7 @@ corepack pnpm vitest run \
   packages/core/engineering-workflow/tests/repair.spec.ts
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
@@ -351,7 +351,7 @@ function externalCertificationState(input: {
 
 Every terminal path that occurs after a `pending` status was published must pass through one helper that attempts terminal certification before the workflow writes its final terminal outcome. No early return may bypass it.
 
-- [ ] **Step 1: Write RED success test** proving call order ends:
+- [x] **Step 1: Write RED success test** proving call order ends:
 
 ```text
 conformance PASS
@@ -361,11 +361,11 @@ certification.publish(success, expectedRevision=latestPendingRevision)
 workflow terminal PR_READY
 ```
 
-- [ ] **Step 2: Write RED non-ready matrix test** covering `FAIL`, `PARTIAL`, `BLOCKED` and terminal `INCONCLUSIVE`; each publishes `failure`, never success.
-- [ ] **Step 3: Write RED cancel/runtime-error tests** proving they publish `error` when a pending certification exists.
-- [ ] **Step 4: Write RED stale-revision test** where the capability reports the PR head moved between pending and terminal; workflow must end `INCONCLUSIVE`/not-ready and never emit `PR_READY`.
-- [ ] **Step 5: Write RED publisher-failure test** proving inability to publish terminal success cannot be converted to `PR_READY`; the repository remains blocked by pending/absent/error status.
-- [ ] **Step 6: Run RED.**
+- [x] **Step 2: Write RED non-ready matrix test** covering `FAIL`, `PARTIAL`, `BLOCKED` and terminal `INCONCLUSIVE`; each publishes `failure`, never success.
+- [x] **Step 3: Write RED cancel/runtime-error tests** proving they publish `error` when a pending certification exists.
+- [x] **Step 4: Write RED stale-revision test** where the capability reports the PR head moved between pending and terminal; workflow must end `INCONCLUSIVE`/not-ready and never emit `PR_READY`.
+- [x] **Step 5: Write RED publisher-failure test** proving inability to publish terminal success cannot be converted to `PR_READY`; the repository remains blocked by pending/absent/error status.
+- [x] **Step 6: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -374,8 +374,8 @@ corepack pnpm vitest run \
   packages/core/engineering-workflow/tests/repair.spec.ts
 ```
 
-- [ ] **Step 7: Refactor terminal outcome construction through one internal finish helper** and implement the mapping above. Preserve user-facing `WorkflowVerdict`; external GitHub state is a separate projection.
-- [ ] **Step 8: Run GREEN + typecheck.**
+- [x] **Step 7: Refactor terminal outcome construction through one internal finish helper** and implement the mapping above. Preserve user-facing `WorkflowVerdict`; external GitHub state is a separate projection.
+- [x] **Step 8: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -385,7 +385,7 @@ corepack pnpm vitest run \
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
@@ -421,11 +421,11 @@ export interface CertificationRecord {
 
 Projection exposes ordered records and `latestCertification` only. It does not persist PR HTML, command output, tokens or model content beyond bounded evidence locators. `summary` is generated deterministically from state, not copied from model output.
 
-- [ ] **Step 1: Write RED journal tests** proving certification records round-trip, revision is 40-hex, state is bounded, context/summary are length-bounded and raw credential-shaped fields are rejected by parser/invariant checks.
-- [ ] **Step 2: Write RED durability test** proving capability-start is flushed before the POST seam is invoked and the confirmed certification record is flushed after publication.
-- [ ] **Step 3: Write RED crash-window restart test**: journal has an open certification capability but no terminal certification record; `assessRestart` requires world verification and retry may not blindly publish success.
-- [ ] **Step 4: Write RED control-server test** proving status returns only bounded certification state/revision/external id plus existing workflow fields.
-- [ ] **Step 5: Run RED.**
+- [x] **Step 1: Write RED journal tests** proving certification records round-trip, revision is 40-hex, state is bounded, context/summary are length-bounded and raw credential-shaped fields are rejected by parser/invariant checks.
+- [x] **Step 2: Write RED durability test** proving capability-start is flushed before the POST seam is invoked and the confirmed certification record is flushed after publication.
+- [x] **Step 3: Write RED crash-window restart test**: journal has an open certification capability but no terminal certification record; `assessRestart` requires world verification and retry may not blindly publish success.
+- [x] **Step 4: Write RED control-server test** proving status returns only bounded certification state/revision/external id plus existing workflow fields.
+- [x] **Step 5: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -434,8 +434,8 @@ corepack pnpm vitest run \
   packages/core/control-server/tests/server.spec.ts
 ```
 
-- [ ] **Step 6: Implement journal/projection/control status support** using the current capability durability mechanism; do not invent a second persistence backend.
-- [ ] **Step 7: Run GREEN + typecheck.**
+- [x] **Step 6: Implement journal/projection/control status support** using the current capability durability mechanism; do not invent a second persistence backend.
+- [x] **Step 7: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -445,7 +445,7 @@ corepack pnpm vitest run \
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add packages/core/journal packages/core/engineering-workflow packages/core/control-server
@@ -494,11 +494,11 @@ new GitHubCertification({
 })
 ```
 
-- [ ] **Step 1: Write RED profile tests** requiring `github-certification` in Plurora's enabled integration/capability set.
-- [ ] **Step 2: Write RED composition tests** proving Plurora runnable composition refuses to become ready without certification while the minimal fixture profile can still run without a GitHub certification capability.
-- [ ] **Step 3: Write RED config tests** requiring exact `projectRepository`, refusing credential-shaped repository config, and proving `plurora-harness.json` cannot override status context or base branch.
-- [ ] **Step 4: Write RED host test** proving the bound certification integration uses project cwd + configured project repository + fixed Plurora context, and uses the same managed subprocess seam as delivery.
-- [ ] **Step 5: Run RED.**
+- [x] **Step 1: Write RED profile tests** requiring `github-certification` in Plurora's enabled integration/capability set.
+- [x] **Step 2: Write RED composition tests** proving Plurora runnable composition refuses to become ready without certification while the minimal fixture profile can still run without a GitHub certification capability.
+- [x] **Step 3: Write RED config tests** requiring exact `projectRepository`, refusing credential-shaped repository config, and proving `plurora-harness.json` cannot override status context or base branch.
+- [x] **Step 4: Write RED host test** proving the bound certification integration uses project cwd + configured project repository + fixed Plurora context, and uses the same managed subprocess seam as delivery.
+- [x] **Step 5: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -509,8 +509,8 @@ corepack pnpm vitest run \
   apps/plurora-harness-host/tests/host.spec.ts
 ```
 
-- [ ] **Step 6: Implement composition/profile/host wiring** without moving project repository identity into generic packages.
-- [ ] **Step 7: Run GREEN + constraints/typecheck.**
+- [x] **Step 6: Implement composition/profile/host wiring** without moving project repository identity into generic packages.
+- [x] **Step 7: Run GREEN + constraints/typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -523,7 +523,7 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add packages/composition/runtime profiles/plurora apps/plurora-harness-host
@@ -559,8 +559,8 @@ cancellation after pending                         -> error, not success
 model/raw output contains secret/path material      -> status description remains fixed safe text
 ```
 
-- [ ] **Step 1: Implement the adversarial tests using fakes at the subprocess/capability seam**, not by mocking the readiness predicate itself.
-- [ ] **Step 2: Run the focused matrix.**
+- [x] **Step 1: Implement the adversarial tests using fakes at the subprocess/capability seam**, not by mocking the readiness predicate itself.
+- [x] **Step 2: Run the focused matrix.**
 
 ```bash
 corepack pnpm vitest run \
@@ -570,8 +570,8 @@ corepack pnpm vitest run \
   packages/integrations/github-certification/tests/certification.spec.ts
 ```
 
-- [ ] **Step 3: Fix only confirmed Plan H defects and rerun the affected tests.**
-- [ ] **Step 4: Commit.**
+- [x] **Step 3: Fix only confirmed Plan H defects and rerun the affected tests.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add profiles/plurora/tests packages/core/engineering-workflow/tests packages/integrations/github-certification/tests
@@ -597,13 +597,13 @@ corepack pnpm run test:trick
 corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
-- [ ] **Step 1: Run all deterministic gates fresh** and record command, exit status and material result.
-- [ ] **Step 2: Run a real authenticated read-only GitHub certification canary on the Plan H implementation PR** using native `gh` auth and a dedicated non-required canary context, ending in a non-success state. This proves the real endpoint/identity/read-back path without falsely claiming the Trick PR itself passed Plurora's production certification contract.
-- [ ] **Step 3: Re-read the canary commit statuses** and verify exact SHA/context/latest state through GitHub.
-- [ ] **Step 4: Perform independent code/security review** of endpoint construction, repository/head binding, status-state mapping, fixed safe descriptions, subprocess lifecycle, durability ordering and absence of merge authority.
-- [ ] **Step 5: Fix confirmed defects and rerun all affected gates.**
-- [ ] **Step 6: Record the final reviewed exact Trick Harness SHA.** This SHA supersedes the post-Plan-G intermediate SHA for initial NeuroVia installation.
-- [ ] **Step 7: Update README only with implemented/proven behavior and commit.**
+- [x] **Step 1: Run all deterministic gates fresh** and record command, exit status and material result.
+- [x] **Step 2: Run a real authenticated read-only GitHub certification canary on the Plan H implementation PR** using native `gh` auth and a dedicated non-required canary context, ending in a non-success state. This proves the real endpoint/identity/read-back path without falsely claiming the Trick PR itself passed Plurora's production certification contract.
+- [x] **Step 3: Re-read the canary commit statuses** and verify exact SHA/context/latest state through GitHub.
+- [x] **Step 4: Perform independent code/security review** of endpoint construction, repository/head binding, status-state mapping, fixed safe descriptions, subprocess lifecycle, durability ordering and absence of merge authority.
+- [x] **Step 5: Fix confirmed defects and rerun all affected gates.**
+- [x] **Step 6: Record the final reviewed exact Trick Harness SHA.** This SHA supersedes the post-Plan-G intermediate SHA for initial NeuroVia installation.
+- [x] **Step 7: Update README only with implemented/proven behavior and commit.**
 
 ```bash
 git add README.trick-harness.md docs/verification/2026-08-28-harness-v2-plan-h-certification-evidence.md

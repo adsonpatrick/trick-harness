@@ -106,6 +106,33 @@ describe('plurora profile', () => {
     })
   })
 
+  it('certifies through a capability that can do nothing but publish a status', () => {
+    // The capability a branch-protection rule waits on is the last thing
+    // between an automated run and a merge button. The policy says so in the
+    // only way that survives a reader who skips the prose: every mutation that
+    // is not publishing a status is named and denied.
+    expect(rule(pluroraProfile.integrationPolicy.rules, 'github-certification')).toMatchObject({
+      publishes: 'commit-status',
+      target: 'pull-request-head',
+      required: 'before-pull-request-ready',
+      allowCommit: false,
+      allowPush: false,
+      allowPullRequestEdit: false,
+      allowMerge: false,
+      allowRelease: false,
+      allowDeploy: false,
+    })
+  })
+
+  it('leaves the status context to the deployment, since a rule is configured by its exact name', () => {
+    // A context written here is one a run could satisfy by publishing under a
+    // name no branch-protection rule is watching, and one no reviewer reading
+    // the pull request could tell apart from the name that was configured.
+    expect(JSON.stringify(pluroraProfile)).not.toContain('plurora/harness-certification')
+    expect(rule(pluroraProfile.integrationPolicy.rules, 'github-certification'))
+      .toMatchObject({ contextSource: 'deployment' })
+  })
+
   it('keeps database execution cloud-only with no fallback path', () => {
     expect(rule(pluroraProfile.integrationPolicy.rules, 'supabase-preview')).toMatchObject({
       execution: 'cloud-only',
@@ -121,6 +148,7 @@ describe('plurora profile', () => {
     // says nothing about having done so.
     expect([...pluroraProfile.integrationPolicy.enabled]).toStrictEqual([
       'github-delivery',
+      'github-certification',
       'supabase-preview',
       'database-verification',
       'control-server',

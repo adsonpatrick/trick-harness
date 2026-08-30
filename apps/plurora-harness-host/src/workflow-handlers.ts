@@ -28,8 +28,10 @@ import type {
 } from '@trick-harness/contracts'
 import { parseConformanceContract, parseDiagnosisContract, parseStageResult } from '@trick-harness/contracts'
 import { pluroraDodObligations } from '../../../profiles/plurora/profile.ts'
-import type { StageSpec } from '@trick-harness/engineering-workflow'
+import { extractApprovedPlanWriteSet } from '@trick-harness/engineering-workflow'
+import type { ChangeImpactReader, StageSpec } from '@trick-harness/engineering-workflow'
 import type { ExecutorResult } from '@trick-harness/executor'
+import type { ProjectChangeSetReader } from './change-set.ts'
 import { looksLikeSecret } from './redaction.ts'
 
 /**
@@ -61,6 +63,17 @@ export const MAX_BRANCH_NAME_CHARS = 80
 export interface PluroraWorkflowHandlerOptions {
   /** The pull request's base branch; the run may never push to it. */
   readonly baseBranch?: string
+  /**
+   * What the published branch actually changed, read from this checkout's Git.
+   *
+   * Supplied, the run classifies itself: the planned write set is parsed out of
+   * the approved Plan before anything writes, the delivered one is read back
+   * from version control after the branch is published, and the certification
+   * half is planned from the two together. Absent, the run keeps the fixed
+   * risk-driven plan — this host does not approximate a change set, because a
+   * classification taken from an approximation is a bar set on a guess.
+   */
+  readonly changeSet?: ProjectChangeSetReader
 }
 
 /** The default base for every pull request this deployment opens. */
@@ -285,6 +298,41 @@ async function readApproved(root: string, artifact: ApprovedArtifactRef): Promis
 }
 
 /**
+ * The two readings this deployment classifies a change from.
+ *
+ * The planned one is parsed out of the approved Plan, and out of the exact
+ * bytes that hash to what was approved: a Plan edited after approval is a
+ * different Plan, and a planned write set taken from one would authorise the
+ * first writable tree of the run against a document nobody agreed to. The
+ * delivered one is read from version control, never from the stage that did the
+ * work — a stage that could report its own diff could report a smaller one, and
+ * a smaller diff is a lower risk and a thinner evidence bar decided by the thing
+ * about to be measured against it.
+ *
+ * Neither answer is a conclusion. Both are lists of paths; what they mean is
+ * decided by the profile's declared rules.
+ *
+ * @param changeSet - this checkout's delivered change-set reader.
+ * @returns the reader the runtime classifies the run from.
+ */
+function changeImpactReader(changeSet: ProjectChangeSetReader): ChangeImpactReader {
+  return {
+    async plannedPaths(objective) {
+      const plan = await readApproved(objective.cwd, objective.approvedArtifacts.plan)
+      if (plan.sha256 !== objective.approvedArtifacts.plan.sha256) {
+        // Named without quoting either hash: this refusal is journalled, and
+        // the run stops here rather than classifying itself from the edit.
+        throw new ApprovedArtifactError('the approved Plan on disk is not the one this objective was approved against')
+      }
+      return extractApprovedPlanWriteSet(plan.text)
+    },
+    async actualPaths(_objective, signal) {
+      return await changeSet.actualPaths(signal)
+    },
+  }
+}
+
+/**
  * Prompt text for the stage that scores the branch against what was approved.
  *
  * It names the documents rather than quoting them: the obligations are read out
@@ -367,6 +415,10 @@ export function createPluroraWorkflowHandlers(
     },
     task,
     dodObligations: pluroraDodObligations,
+    // Absent rather than present-and-undefined: the runtime tells the two
+    // apart, and a run holding a reader that answers nothing would plan its
+    // certification from a change set nobody read.
+    ...options.changeSet === undefined ? {} : { changeImpact: changeImpactReader(options.changeSet) },
     async loadApprovedArtifacts(objective) {
       const [spec, plan] = await Promise.all([
         readApproved(objective.cwd, objective.approvedArtifacts.spec),

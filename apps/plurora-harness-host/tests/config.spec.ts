@@ -27,6 +27,8 @@ function validConfig(): Record<string, unknown> {
     controlServerUrl: 'http://127.0.0.1:4319',
     environment: 'development',
     database: { strategy: 'shared-cloud-development', projectRef: 'uljaajwwnygopsyvwsre' },
+    project: { protectedBranch: 'main' },
+    projectRepository: 'adsonpatrick/neuro-via',
     modelRegistry: Object.fromEntries(PLURORA_SEMANTIC_TIERS.map(tier => [tier, `model-for-${tier}`])),
   }
 }
@@ -46,6 +48,70 @@ describe('parseDeploymentConfig', () => {
     expect(config.database.strategy).toBe('shared-cloud-development')
     expect(config.database.projectRef).toBe('uljaajwwnygopsyvwsre')
     expect(Object.keys(config.modelRegistry).toSorted()).toEqual([...PLURORA_SEMANTIC_TIERS].toSorted())
+  })
+
+  it('names the product repository whose pull requests this deployment certifies', () => {
+    expect(parseDeploymentConfig(validConfig()).projectRepository).toBe('adsonpatrick/neuro-via')
+  })
+
+  it('refuses a deployment pointed at any other product repository', () => {
+    // The certification is the status a branch-protection rule waits on. A file
+    // that could name a different repository is a file that could point this
+    // deployment's certifications at somebody else's pull requests.
+    const { projectRepository: _repository, ...rest } = validConfig()
+    refuses(rest, 'projectRepository')
+    refuses({ ...validConfig(), projectRepository: 'someone-else/a-fork' }, 'projectRepository')
+    refuses({ ...validConfig(), projectRepository: '' }, 'projectRepository')
+  })
+
+  it('refuses a repository field carrying something credential-shaped', () => {
+    // A config file is read, logged and copied around. A token pasted into a
+    // field that is otherwise a plain string has to be refused where it lands,
+    // not corrected into a valid-looking value further down.
+    refuses({ ...validConfig(), projectRepository: 'ghp_0123456789abcdefghijklmnopqrstuvwxyz' }, 'projectRepository')
+    refuses({ ...validConfig(), certificationToken: 'ghp_0123456789abcdefghij' }, 'credential')
+  })
+
+  it('cannot state what the certification publishes under, or what it certifies into', () => {
+    // The status context is the exact name a branch-protection rule is
+    // configured with, and the base branch is what "certified" is a claim
+    // about. A deployment file able to set either could satisfy a rule by
+    // answering a different question than the one being asked, from a JSON
+    // file nobody reviews.
+    refuses({ ...validConfig(), certificationContext: 'plurora/harness-certification' }, 'not a deployment setting')
+    refuses({ ...validConfig(), certification: { context: 'x' } }, 'not a deployment setting')
+    refuses(
+      { ...validConfig(), project: { protectedBranch: 'main', certificationBaseBranch: 'release' } },
+      'not a deployment setting',
+    )
+    expect(JSON.stringify(parseDeploymentConfig(validConfig()))).not.toContain('plurora/harness-certification')
+  })
+
+  it('reads the branch the change set is measured against', () => {
+    expect(parseDeploymentConfig(validConfig()).project.protectedBranch).toBe('main')
+  })
+
+  it('refuses a deployment that names no protected branch', () => {
+    const { project: _project, ...rest } = validConfig()
+    refuses(rest, 'project')
+    refuses({ ...validConfig(), project: { protectedBranch: '' } }, 'protectedBranch')
+    refuses({ ...validConfig(), project: { protectedBranch: '   ' } }, 'protectedBranch')
+  })
+
+  it('refuses anything but a plain branch name', () => {
+    // The name is pasted into a revision range this host asks Git to resolve.
+    // Every character below means something to Git's revision grammar, so a
+    // name carrying one selects a range nobody configured.
+    for (const branch of [
+      'main branch', 'release..main', 'main~1', 'main^', 'refs:main',
+      'ma?in', 'ma*in', 'ma[in', '-main', 'main@{upstream}', 'main\\x',
+    ]) {
+      refuses({ ...validConfig(), project: { protectedBranch: branch } }, 'protectedBranch')
+    }
+  })
+
+  it('refuses a project block naming a setting the host does not own', () => {
+    refuses({ ...validConfig(), project: { protectedBranch: 'main', remote: 'upstream' } }, 'remote')
   })
 
   it('refuses a document that is not an object', () => {

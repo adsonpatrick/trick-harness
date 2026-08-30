@@ -22,6 +22,8 @@ import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-sub
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import type { PluroraDeploymentConfig } from './config.ts'
 import { loadDeploymentConfig } from './config.ts'
+import type { ProjectChangeSetReader } from './change-set.ts'
+import { createGitChangeSetReader } from './change-set.ts'
 import type { ModelCatalogReader } from './model-registry.ts'
 import { assertModelsAvailable, buildModelRegistry } from './model-registry.ts'
 import { createProjectDatabaseVerifier } from './project-database.ts'
@@ -35,6 +37,18 @@ import { createPluroraWorkflowHandlers } from './workflow-handlers.ts'
  * enough that a stuck one does not hold a disposal open indefinitely.
  */
 export const DEFAULT_DISPOSE_GRACE_MS = 5_000
+
+/**
+ * The status context this deployment's certifications are published under.
+ *
+ * The exact name the branch-protection rule on the product repository is
+ * configured with, owned by the host and by nothing below it. Not a profile
+ * field, not a deployment-config key and not a run input: a certification
+ * published under a name a rule is not watching satisfies nothing, and one
+ * published under a name a run chose satisfies the rule by answering a
+ * different question than the one being asked.
+ */
+const PLURORA_CERTIFICATION_CONTEXT = 'plurora/harness-certification'
 
 /** Raised when the host cannot be started with what it was given. */
 export class PluroraHostError extends Error {
@@ -98,6 +112,15 @@ export interface PluroraHost {
    * the run saying which one it was held to.
    */
   readonly databaseVerification: DatabaseVerificationCapabilityPort
+  /**
+   * What the published branch actually changed.
+   *
+   * Held on the host rather than inside the composition because it is a
+   * project seam, not harness mechanism: the harness knows a delivered change
+   * has an actual write set, and this deployment knows it is read with Git in
+   * this checkout against the branch the deployment file names.
+   */
+  readonly changeSet: ProjectChangeSetReader
   /** The composed harness: the runtime, the policy and the control server. */
   readonly harness: ComposedHarness
   /** Where the control server actually bound, once it was listening. */
@@ -162,6 +185,13 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
     })
     unwind.push(async () => { await durable.dispose() })
 
+    const changeSet = createGitChangeSetReader({
+      projectRoot: options.projectRoot,
+      protectedBranch: config.project.protectedBranch,
+      disposeGraceMs,
+      spawn: options.spawn,
+    })
+
     const databaseVerification = createProjectDatabaseVerifier({
       projectRoot: options.projectRoot,
       projectRef: config.database.projectRef,
@@ -175,7 +205,11 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       registry,
       session: durable.session,
       flush: durable.flush,
-      workflow: createPluroraWorkflowHandlers(),
+      // The change-set reader is handed to the handlers, which is what puts
+      // every run this host serves in its measured form: what the branch is
+      // certified as comes from the approved Plan and this checkout's Git,
+      // rather than from the risk whoever opened the objective typed.
+      workflow: createPluroraWorkflowHandlers({ changeSet }),
       providers: {
         opencode: { adapter: options.opencode },
         codex: { spawn: options.spawn, disposeGraceMs },
@@ -183,7 +217,22 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       },
       // Delivery is the project's own checkout, driven through the same
       // subprocess seam as everything else this host starts.
-      integrations: { github: { cwd: options.projectRoot, spawn: options.spawn, graceMs: disposeGraceMs } },
+      integrations: {
+        github: { cwd: options.projectRoot, spawn: options.spawn, graceMs: disposeGraceMs },
+        // Certification is bound here and nowhere else. The repository comes
+        // from the deployment file, the base branch is the protected branch
+        // that file already names, and the context is this host's own constant
+        // — the three together are the question this capability answers, and
+        // none of them is a run's to change.
+        githubCertification: {
+          cwd: options.projectRoot,
+          repository: config.projectRepository,
+          baseBranch: config.project.protectedBranch,
+          context: PLURORA_CERTIFICATION_CONTEXT,
+          spawn: options.spawn,
+          graceMs: disposeGraceMs,
+        },
+      },
       // This deployment verifies a shared cloud development project through the
       // project's own fixed command, so it supplies this port and configures no
       // Supabase preview: the composition refuses both, since two verifiers is
@@ -228,6 +277,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       config,
       registry,
       databaseVerification,
+      changeSet,
       harness,
       control,
       session: durable.session,

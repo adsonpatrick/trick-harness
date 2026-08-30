@@ -399,6 +399,16 @@ export interface ConformanceManifest {
   readonly planSha256: string
   /** Every obligation this run must answer. */
   readonly obligations: readonly ConformanceObligation[]
+  /**
+   * Delivered paths the approved Plan never committed to writing.
+   *
+   * Deterministic scope evidence, read from the published branch by plain code
+   * rather than reported by the stage that wrote it. It is handed over as a
+   * fact and not as a finding: whether a file the Plan did not name breaks a
+   * Plan obligation is conformance's judgement, and a classifier that decided
+   * it would be inventing a product defect out of a path.
+   */
+  readonly unplannedPaths: readonly string[]
 }
 
 /** One obligation's answer, with what supports it. */
@@ -471,6 +481,121 @@ export interface ConformanceStatusSummary {
   readonly verdict: WorkflowVerdict
 }
 
+/**
+ * The two readings of what a change touches.
+ *
+ * `planned` is derived from the approved Plan before any mutation-capable
+ * stage runs; `actual` is derived from the published branch after delivery.
+ * They are kept apart rather than merged into one number because the gap
+ * between them is itself a fact: work that reached past what was approved
+ * looks exactly like work that did not, once the two are added together.
+ */
+export const CHANGE_IMPACT_SOURCES = ['planned', 'actual'] as const
+
+/** Which of the two readings a set of impact facts came from. */
+export type ChangeImpactSource = typeof CHANGE_IMPACT_SOURCES[number]
+
+/**
+ * What deterministic classification concluded about one set of paths.
+ *
+ * Every field here is produced by code from a profile's declared path rules.
+ * None of it is a model's account of its own change, which is the reason the
+ * type exists: the run's risk, its required stages and its evidence bar are
+ * decided from these facts, and a stage that could write them could lower the
+ * bar it is about to be held to.
+ */
+export interface ChangeImpactFacts {
+  /** Which reading this is. */
+  readonly source: ChangeImpactSource
+  /** How many distinct repository paths were classified. */
+  readonly pathCount: number
+  /** Distinct surfaces the paths fall in, in policy order. */
+  readonly surfaces: readonly string[]
+  /** The highest risk any matched rule requires. */
+  readonly riskFloor: Risk
+  /** How large the change is, scored against the profile's thresholds. */
+  readonly writeVolume: WriteVolume
+  /** Task classes the matched rules name, in policy order. */
+  readonly taskClasses: readonly string[]
+  /** Capabilities the matched rules require of the runtime, in policy order. */
+  readonly requiredCapabilities: readonly string[]
+  /** Evidence profiles the matched rules require, in policy order. */
+  readonly evidenceProfiles: readonly string[]
+  /** Whether any matched rule marks this as touching database state. */
+  readonly databaseMutation: boolean
+  /** Ids of the rules that matched, in policy order, for a reader to trace. */
+  readonly matchedRuleIds: readonly string[]
+  /** Paths present in this reading that the approved plan did not name. */
+  readonly unplannedPaths: readonly string[]
+}
+
+/** How many unplanned paths one bounded record keeps, whatever it was given. */
+export const MAX_RECORDED_UNPLANNED_PATHS = 100
+
+/**
+ * One reading of a change, reduced to what a durable record may hold.
+ *
+ * Everything here is a scalar, a boolean, a count, or a bounded list of
+ * repository paths. There is deliberately no field a diff, a file's contents,
+ * a command's output or a model's reasoning could travel in: this record is
+ * read back by a restart and rendered into a status window, and both are
+ * places where a transcript must never turn up.
+ */
+export interface ChangeImpactStatusSummary {
+  readonly source: ChangeImpactSource
+  readonly effectiveRisk: Risk
+  readonly riskFloor: Risk
+  readonly writeVolume: WriteVolume
+  /** Sorted and deduplicated, so two records of one reading compare equal. */
+  readonly surfaces: readonly string[]
+  readonly taskClasses: readonly string[]
+  readonly requiredCapabilities: readonly string[]
+  readonly evidenceProfiles: readonly string[]
+  readonly matchedRuleIds: readonly string[]
+  readonly databaseMutation: boolean
+  readonly pathCount: number
+  /**
+   * How many paths this reading held that the approved Plan never named.
+   *
+   * Kept apart from the list because the list is capped: a record that carried
+   * only the sample would let a delivery of 150 unapproved files read as 100.
+   */
+  readonly unplannedPathCount: number
+  /** At most {@link MAX_RECORDED_UNPLANNED_PATHS} of them, sorted. */
+  readonly unplannedPaths: readonly string[]
+}
+
+/**
+ * The two readings resolved into the single policy the run is held to.
+ *
+ * Resolution is monotonic in both directions it can move: neither reading can
+ * lower what the other established, and neither can lower the risk the
+ * objective was opened at. A delivered change that turned out to touch
+ * migrations is judged as a database change even though nobody planned it that
+ * way, and a planned database change stays one even if the diff came back
+ * empty.
+ */
+export interface EffectiveChangeImpact {
+  /** What the approved plan said the change would touch. */
+  readonly planned: ChangeImpactFacts
+  /** What the published branch turned out to touch, once there is one. */
+  readonly actual?: ChangeImpactFacts
+  /** `max` of the objective's risk and both readings' floors. */
+  readonly effectiveRisk: Risk
+  /** `max` of both readings' write volumes. */
+  readonly writeVolume: WriteVolume
+  /** Union of both readings' surfaces. */
+  readonly surfaces: readonly string[]
+  /** Union of both readings' task classes. */
+  readonly taskClasses: readonly string[]
+  /** Union of both readings' required capabilities. */
+  readonly requiredCapabilities: readonly string[]
+  /** Union of both readings' evidence profiles. */
+  readonly evidenceProfiles: readonly string[]
+  /** True when either reading found database state in the change. */
+  readonly databaseMutation: boolean
+}
+
 /** What a workflow was asked to accomplish, as approved before it started. */
 export interface WorkflowObjective {
   /** Stable workflow id, durable across restarts. */
@@ -487,6 +612,14 @@ export interface WorkflowObjective {
   readonly profileId: string
   /** The approved documents conformance later judges the implementation against. */
   readonly approvedArtifacts: ApprovedArtifactSet
+  /**
+   * What kind of work this is, when the caller knows it.
+   *
+   * Policy may read it, and classification may add to it, but neither depends
+   * on it: an objective that names nothing is classified from its paths alone.
+   * It is a hint that can raise the bar, never one that can lower it.
+   */
+  readonly taskClass?: string
 }
 
 /**
@@ -509,4 +642,49 @@ export interface StageResult {
   readonly findings: readonly Finding[]
   /** Evidence supporting the verdict. */
   readonly evidence: readonly EvidenceRef[]
+}
+
+/**
+ * Every state a certification may be published in, and nothing else.
+ *
+ * Four states because that is what an external certifier can honestly say: the
+ * run is under way, it finished and the revision is certified, it finished and
+ * the revision is not, or the question could not be answered at all. The last
+ * one matters most — a capability that cannot reach its certifier has not
+ * learned the revision is fine, so it says `error` rather than staying quiet
+ * and leaving a stale `pending` to be read as caution or as neglect depending
+ * on who is reading.
+ *
+ * Stated as a frozen list rather than a bare union so a run can be checked
+ * against it, and so nothing can widen the vocabulary at runtime. It lives here
+ * rather than beside the workflow that publishes it because the durable log
+ * reads it back, and the log may not depend on the runtime that wrote it.
+ */
+export const EXTERNAL_CERTIFICATION_STATES = Object.freeze([
+  'pending',
+  'success',
+  'failure',
+  'error',
+] as const)
+
+/** One of {@link EXTERNAL_CERTIFICATION_STATES}. */
+export type ExternalCertificationState = typeof EXTERNAL_CERTIFICATION_STATES[number]
+
+/**
+ * What a certification amounts to, for anything reading the run from outside.
+ *
+ * Three fields, and the omissions are the design. There is no description here
+ * — the certifier chose that from the state alone and it is already on the pull
+ * request — and no target URL, because a status poll that handed back a link
+ * would be handing a reader somewhere to be sent. What remains is the state a
+ * branch-protection rule acts on, the revision it was published against, and
+ * the certifier's own id for it, which is what a later read finds it by.
+ */
+export interface CertificationStatusSummary {
+  /** The state the certifier reported back after reading its own status. */
+  readonly state: ExternalCertificationState
+  /** The revision certified, as the capability re-read it. */
+  readonly revision: string
+  /** The certifier's id for the published status. */
+  readonly externalId: string
 }

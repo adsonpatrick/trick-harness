@@ -108,23 +108,23 @@ export interface HarnessProfile {
 }
 ```
 
-- [ ] **Step 1: Write RED contract tests** proving `ChangeImpactFacts` vocabulary is exported, `WorkflowObjective.taskClass` accepts only a bounded non-empty string when present, and `EffectiveChangeImpact` cannot be constructed by the parsers with unknown risk/write-volume values.
-- [ ] **Step 2: Write RED profile validation tests** for duplicate rule IDs, empty pattern arrays, absolute patterns, traversal patterns, empty `use`, invalid risk floors, non-positive thresholds and `smallMaxFiles >= mediumMaxFiles`.
-- [ ] **Step 3: Run RED.**
+- [x] **Step 1: Write RED contract tests** proving `ChangeImpactFacts` vocabulary is exported, `WorkflowObjective.taskClass` accepts only a bounded non-empty string when present, and `EffectiveChangeImpact` cannot be constructed by the parsers with unknown risk/write-volume values.
+- [x] **Step 2: Write RED profile validation tests** for duplicate rule IDs, empty pattern arrays, absolute patterns, traversal patterns, empty `use`, invalid risk floors, non-positive thresholds and `smallMaxFiles >= mediumMaxFiles`.
+- [x] **Step 3: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts packages/core/contracts/tests/invariant.spec.ts packages/core/profile/tests/profile.spec.ts
 ```
 
-- [ ] **Step 4: Implement the contracts and validators.** Freeze parsed arrays/objects using the package's existing immutable-return pattern. Profile validation must reject path patterns beginning with `/`, drive-letter prefixes such as `C:`, and any `/../` or leading `../` segment.
-- [ ] **Step 5: Run GREEN + typecheck.**
+- [x] **Step 4: Implement the contracts and validators.** Freeze parsed arrays/objects using the package's existing immutable-return pattern. Profile validation must reject path patterns beginning with `/`, drive-letter prefixes such as `C:`, and any `/../` or leading `../` segment.
+- [x] **Step 5: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run packages/core/contracts/tests/contracts.spec.ts packages/core/contracts/tests/invariant.spec.ts packages/core/profile/tests/profile.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/contracts packages/core/profile
@@ -186,25 +186,25 @@ const RISK_ORDER = ['low', 'medium', 'high', 'critical'] as const
 const WRITE_VOLUME_ORDER = ['none', 'small', 'medium', 'large'] as const
 ```
 
-- [ ] **Step 1: Write RED normalization tests** for `src\\lib\\auth\\route-policy.ts -> src/lib/auth/route-policy.ts`, duplicate slash removal, `./src/x.ts -> src/x.ts`, absolute POSIX refusal, drive-letter refusal, empty path refusal and `../` traversal refusal.
-- [ ] **Step 2: Write RED classifier tests** proving all matching rules accumulate; duplicate surfaces/classes/capabilities/evidence IDs are deduplicated in policy order; dotfiles match; broad UI and specific auth can both survive; and matched-rule IDs are stable.
-- [ ] **Step 3: Write RED write-volume tests** for exactly `0=none`, `1..smallMaxFiles=small`, `smallMaxFiles+1..mediumMaxFiles=medium`, and larger=`large`.
-- [ ] **Step 4: Write RED merge tests** proving effective risk/write volume take the maximum, actual facts cannot lower planned facts, and actual paths absent from `approvedPlannedPaths` populate `unplannedPaths`.
-- [ ] **Step 5: Run RED.**
+- [x] **Step 1: Write RED normalization tests** for `src\\lib\\auth\\route-policy.ts -> src/lib/auth/route-policy.ts`, duplicate slash removal, `./src/x.ts -> src/x.ts`, absolute POSIX refusal, drive-letter refusal, empty path refusal and `../` traversal refusal.
+- [x] **Step 2: Write RED classifier tests** proving all matching rules accumulate; duplicate surfaces/classes/capabilities/evidence IDs are deduplicated in policy order; dotfiles match; broad UI and specific auth can both survive; and matched-rule IDs are stable.
+- [x] **Step 3: Write RED write-volume tests** for exactly `0=none`, `1..smallMaxFiles=small`, `smallMaxFiles+1..mediumMaxFiles=medium`, and larger=`large`.
+- [x] **Step 4: Write RED merge tests** proving effective risk/write volume take the maximum, actual facts cannot lower planned facts, and actual paths absent from `approvedPlannedPaths` populate `unplannedPaths`.
+- [x] **Step 5: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/change-impact/tests/change-impact.spec.ts
 ```
 
-- [ ] **Step 6: Add the package dependency exactly.**
+- [x] **Step 6: Add the package dependency exactly.**
 
 ```bash
 corepack pnpm --filter @trick-harness/change-impact add picomatch@4.0.5
 corepack pnpm --filter @trick-harness/change-impact add -D @types/picomatch@4.0.3 @trick-harness/contracts@workspace:^ @trick-harness/profile@workspace:^
 ```
 
-- [ ] **Step 7: Implement classifier/merge logic** with precompiled matchers per call, stable policy-order accumulation and frozen outputs. Do not use basename matching; rules are repository-relative path rules.
-- [ ] **Step 8: Run GREEN, constraints and typecheck.**
+- [x] **Step 7: Implement classifier/merge logic** with precompiled matchers per call, stable policy-order accumulation and frozen outputs. Do not use basename matching; rules are repository-relative path rules.
+- [x] **Step 8: Run GREEN, constraints and typecheck.**
 
 ```bash
 corepack pnpm vitest run packages/core/change-impact/tests/change-impact.spec.ts
@@ -212,7 +212,7 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
 ```bash
 git add packages/core/change-impact pnpm-lock.yaml
@@ -268,18 +268,18 @@ delivery      -> high, delivery-standard, Security required
 credentials   -> critical, Security required
 ```
 
-- [ ] **Step 1: Write RED profile tests** for each path family above, including `.github/workflows/ci.yml` matching both `dependencies` and `delivery`, and `src/features/auth/signup-form.tsx` matching both `auth` and broad `ui` without losing `auth`.
-- [ ] **Step 2: Write RED risk tests** proving `objective risk=low` plus auth resolves to critical and UI resolves to medium.
-- [ ] **Step 3: Write RED security-trigger tests** proving auth/dependencies/delivery/credentials resolve Security as required independently of the caller risk.
-- [ ] **Step 4: Implement the policy and add it to `pluroraProfile`.** Keep NeuroVia product ref/database name out of this file.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 1: Write RED profile tests** for each path family above, including `.github/workflows/ci.yml` matching both `dependencies` and `delivery`, and `src/features/auth/signup-form.tsx` matching both `auth` and broad `ui` without losing `auth`.
+- [x] **Step 2: Write RED risk tests** proving `objective risk=low` plus auth resolves to critical and UI resolves to medium.
+- [x] **Step 3: Write RED security-trigger tests** proving auth/dependencies/delivery/credentials resolve Security as required independently of the caller risk.
+- [x] **Step 4: Implement the policy and add it to `pluroraProfile`.** Keep NeuroVia product ref/database name out of this file.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run profiles/plurora/tests/change-impact.spec.ts profiles/plurora/tests/profile.spec.ts profiles/plurora/tests/routing.spec.ts
 corepack pnpm run constraints
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add profiles/plurora
@@ -314,23 +314,23 @@ export function extractApprovedPlanWriteSet(planText: string): readonly string[]
 
 The parser only reads entries inside a `**Files:**` block belonging to a `### Task N:` section. It strips a trailing source-line locator such as `:120-145` only after the closing repository path has been identified. Paths containing glob metacharacters `* ? [ ] { }` are refused: the approved Plan is expected to name concrete write/test files.
 
-- [ ] **Step 1: Write RED tests** using a two-task Superpowers fixture with Create/Modify/Test/Delete rows, duplicate paths, prose outside `**Files:**`, and line-range suffixes.
-- [ ] **Step 2: Write adversarial RED tests** for zero file rows, absolute paths, `../`, glob patterns, Windows drive paths, malformed backticks and a fake `- Modify:` line outside a Files block.
-- [ ] **Step 3: Run RED.**
+- [x] **Step 1: Write RED tests** using a two-task Superpowers fixture with Create/Modify/Test/Delete rows, duplicate paths, prose outside `**Files:**`, and line-range suffixes.
+- [x] **Step 2: Write adversarial RED tests** for zero file rows, absolute paths, `../`, glob patterns, Windows drive paths, malformed backticks and a fake `- Modify:` line outside a Files block.
+- [x] **Step 3: Run RED.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts
 ```
 
-- [ ] **Step 4: Implement the deterministic parser** by reusing `normalizeRepositoryPath` from `@trick-harness/change-impact`; return sorted first-seen unique paths and no document content beyond the path list.
-- [ ] **Step 5: Run GREEN + typecheck.**
+- [x] **Step 4: Implement the deterministic parser** by reusing `normalizeRepositoryPath` from `@trick-harness/change-impact`; return sorted first-seen unique paths and no document content beyond the path list.
+- [x] **Step 5: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/conformance.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
@@ -379,24 +379,32 @@ export function createGitChangeSetReader(input: {
 
 ```text
 git merge-base HEAD origin/<protectedBranch>
--> git diff --name-status -z --diff-filter=ACMRTUXB <mergeBase>..HEAD
--> for A/M/T/U/X/B retain path
+-> git diff --name-status -z --diff-filter=ACDMRTUXB <mergeBase>..HEAD
+-> for A/D/M/T/U/X/B retain path
 -> for R/C retain both old and new path
 -> normalize/dedupe
 ```
 
-- [ ] **Step 1: Write RED parser tests** for add/modify/rename/copy records, NUL separation, malformed status records and secret-safe bounded errors.
-- [ ] **Step 2: Write RED subprocess tests** proving argv-array/no-shell execution, project cwd only, configured branch only, abort propagation and whole-tree `waitForExit()` before completion.
-- [ ] **Step 3: Write RED config tests** requiring non-empty simple branch names and rejecting refs containing whitespace, `..`, `~`, `^`, `:`, `?`, `*`, `[` or a leading `-`.
-- [ ] **Step 4: Implement the reader.** It may read Git state only; it must not fetch, checkout, reset, merge or modify refs.
-- [ ] **Step 5: Run GREEN.**
+> **Amendment, 2026-08-30, owner-approved.** The filter above originally read
+> `ACMRTUXB`, excluding `D`. Deleting a file is a change to the surface that
+> file was on, so a delivery that removed an auth guard, an RLS policy or a
+> workflow file scored as a change touching nothing — the lowest risk floor and
+> the thinnest evidence bar. Renames already contributed the path they left
+> behind, so the exclusion also made a file's disappearance count or not
+> depending on whether something took its place. Deletions are now read.
+
+- [x] **Step 1: Write RED parser tests** for add/modify/rename/copy records, NUL separation, malformed status records and secret-safe bounded errors.
+- [x] **Step 2: Write RED subprocess tests** proving argv-array/no-shell execution, project cwd only, configured branch only, abort propagation and whole-tree `waitForExit()` before completion.
+- [x] **Step 3: Write RED config tests** requiring non-empty simple branch names and rejecting refs containing whitespace, `..`, `~`, `^`, `:`, `?`, `*`, `[` or a leading `-`.
+- [x] **Step 4: Implement the reader.** It may read Git state only; it must not fetch, checkout, reset, merge or modify refs.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm --filter @trick-harness/plurora-host test
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add apps/plurora-harness-host
@@ -457,20 +465,20 @@ implement
 -> verify-final
 ```
 
-- [ ] **Step 1: Write RED policy-resolution tests** proving all matching `qaPolicy.rules` and `securityPolicy.rules` are accumulated across all impact surfaces rather than first-match-only.
-- [ ] **Step 2: Write RED lifecycle tests** where `objective.risk='low'` plus actual auth surface still produces `review -> qa -> security -> conformance -> verify-final`.
-- [ ] **Step 3: Write RED UI tests** where low objective plus UI produces QA but not Security.
-- [ ] **Step 4: Write RED low-risk docs-only fixture** proving it does not gain QA/Security when no policy requires them, while still retaining review/conformance/final verification.
-- [ ] **Step 5: Refactor the runner into implementation and certification phases.** Planned impact is computed before `implement`; actual impact is computed only after successful delivery and before any certifying review.
-- [ ] **Step 6: Preserve assurance monotonicity.** If planned impact already required Security, actual impact may not remove it even if the final diff no longer matches the sensitive path; the approved/planned requirement remains part of the effective impact for that run.
-- [ ] **Step 7: Run GREEN.**
+- [x] **Step 1: Write RED policy-resolution tests** proving all matching `qaPolicy.rules` and `securityPolicy.rules` are accumulated across all impact surfaces rather than first-match-only.
+- [x] **Step 2: Write RED lifecycle tests** where `objective.risk='low'` plus actual auth surface still produces `review -> qa -> security -> conformance -> verify-final`.
+- [x] **Step 3: Write RED UI tests** where low objective plus UI produces QA but not Security.
+- [x] **Step 4: Write RED low-risk docs-only fixture** proving it does not gain QA/Security when no policy requires them, while still retaining review/conformance/final verification.
+- [x] **Step 5: Refactor the runner into implementation and certification phases.** Planned impact is computed before `implement`; actual impact is computed only after successful delivery and before any certifying review.
+- [x] **Step 6: Preserve assurance monotonicity.** If planned impact already required Security, actual impact may not remove it even if the final diff no longer matches the sensitive path; the approved/planned requirement remains part of the effective impact for that run.
+- [x] **Step 7: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/impact-policy.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts packages/core/engineering-workflow/tests/workflow.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
@@ -506,19 +514,19 @@ function routingContextFor(stage: StageSpec, impact: EffectiveChangeImpact): Rou
 
 Classifier-produced task classes are ordered by profile rule order and therefore precede the optional objective task class.
 
-- [ ] **Step 1: Write RED tests** proving auth impact feeds `taskClass='auth'`, critical risk and `xhigh` Codex judgement routes where applicable.
-- [ ] **Step 2: Write RED write-volume tests** proving a 13-file implementation/repair routes through existing `large-write-implementation` / `large-write-repair` to `opencode.workhorse`.
-- [ ] **Step 3: Write RED fallback test** proving factual large/heavy implementation still cannot fall through to a non-MiMo route except an explicit human run override permitted by the existing hard-invariant contract.
-- [ ] **Step 4: Write RED capability test** proving database impact puts `database-verification` in `requiredCapabilities` and the durable route reason remains explainable.
-- [ ] **Step 5: Replace role-shaped write-volume construction** with impact-aware construction while preserving `none` for every read-only role.
-- [ ] **Step 6: Run GREEN.**
+- [x] **Step 1: Write RED tests** proving auth impact feeds `taskClass='auth'`, critical risk and `xhigh` Codex judgement routes where applicable.
+- [x] **Step 2: Write RED write-volume tests** proving a 13-file implementation/repair routes through existing `large-write-implementation` / `large-write-repair` to `opencode.workhorse`.
+- [x] **Step 3: Write RED fallback test** proving factual large/heavy implementation still cannot fall through to a non-MiMo route except an explicit human run override permitted by the existing hard-invariant contract.
+- [x] **Step 4: Write RED capability test** proving database impact puts `database-verification` in `requiredCapabilities` and the durable route reason remains explainable.
+- [x] **Step 5: Replace role-shaped write-volume construction** with impact-aware construction while preserving `none` for every read-only role.
+- [x] **Step 6: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts profiles/plurora/tests/routing.spec.ts packages/core/routing/tests/routing.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow packages/core/routing profiles/plurora/tests/routing.spec.ts
@@ -557,19 +565,19 @@ const databaseRequired =
 
 There is no inverse caller field that can force this false.
 
-- [ ] **Step 1: Write RED DB test** where objective/caller omits `databaseChange`, planned path includes `supabase/migrations/20260828090000_example.sql`, and delivery is BLOCKED when no database verification capability exists.
-- [ ] **Step 2: Write RED DB-positive test** proving the same classified migration runs the deterministic `databaseVerification.verify` capability before delivery can succeed.
-- [ ] **Step 3: Write RED evidence-profile tests** proving `ui-standard` is carried to QA for UI and `auth-standard` is carried to QA/Security/conformance-relevant stage facts for auth.
-- [ ] **Step 4: Implement impact-driven DB requirement and immutable evidence-profile arrays** on certification stages. Do not put concrete npm commands into StageSpec.
-- [ ] **Step 5: Ensure composition supplies the Plan E generic DB verifier unchanged.** Plan G must not reintroduce Preview-only semantics.
-- [ ] **Step 6: Run GREEN.**
+- [x] **Step 1: Write RED DB test** where objective/caller omits `databaseChange`, planned path includes `supabase/migrations/20260828090000_example.sql`, and delivery is BLOCKED when no database verification capability exists.
+- [x] **Step 2: Write RED DB-positive test** proving the same classified migration runs the deterministic `databaseVerification.verify` capability before delivery can succeed.
+- [x] **Step 3: Write RED evidence-profile tests** proving `ui-standard` is carried to QA for UI and `auth-standard` is carried to QA/Security/conformance-relevant stage facts for auth.
+- [x] **Step 4: Implement impact-driven DB requirement and immutable evidence-profile arrays** on certification stages. Do not put concrete npm commands into StageSpec.
+- [x] **Step 5: Ensure composition supplies the Plan E generic DB verifier unchanged.** Plan G must not reintroduce Preview-only semantics.
+- [x] **Step 6: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/lifecycle.spec.ts packages/composition/runtime/tests/harness.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow packages/composition/runtime
@@ -600,19 +608,19 @@ confirmed repair
 -> rerun required review/QA/Security/conformance/final verify
 ```
 
-- [ ] **Step 1: Write RED adversarial test** starting from a medium UI change where repair unexpectedly adds `src/lib/auth/access-decision.ts`; the second certification pass must become critical and include Security.
-- [ ] **Step 2: Write RED scope-drift test** where the approved Plan write set contains two files and actual diff contains a third; the actual impact must retain the normalized third path in `unplannedPaths`.
-- [ ] **Step 3: Write RED non-downgrade test** where a repair removes the sensitive file from the final diff; certification must still retain the stronger planned/previous requirement for that workflow rather than downgrade.
-- [ ] **Step 4: Wire `unplannedPaths` into the Plan F conformance input/evidence** as deterministic scope evidence. Conformance remains responsible for deciding whether the mismatch fails a Plan obligation; the classifier does not invent a product finding.
-- [ ] **Step 5: Implement recomputation after every successful redelivery** before the next certifying stage is planned.
-- [ ] **Step 6: Run GREEN.**
+- [x] **Step 1: Write RED adversarial test** starting from a medium UI change where repair unexpectedly adds `src/lib/auth/access-decision.ts`; the second certification pass must become critical and include Security.
+- [x] **Step 2: Write RED scope-drift test** where the approved Plan write set contains two files and actual diff contains a third; the actual impact must retain the normalized third path in `unplannedPaths`.
+- [x] **Step 3: Write RED non-downgrade test** where a repair removes the sensitive file from the final diff; certification must still retain the stronger planned/previous requirement for that workflow rather than downgrade.
+- [x] **Step 4: Wire `unplannedPaths` into the Plan F conformance input/evidence** as deterministic scope evidence. Conformance remains responsible for deciding whether the mismatch fails a Plan obligation; the classifier does not invent a product finding.
+- [x] **Step 5: Implement recomputation after every successful redelivery** before the next certifying stage is planned.
+- [x] **Step 6: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/engineering-workflow/tests/workflow.spec.ts packages/core/engineering-workflow/tests/repair.spec.ts packages/core/engineering-workflow/tests/conformance.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow
@@ -640,18 +648,18 @@ journal.changeImpact(facts: ChangeImpactFacts & { readonly effectiveRisk: Risk }
 
 **Bound:** store at most the first 100 normalized `unplannedPaths`; store total `unplannedPathCount` separately so truncation is observable.
 
-- [ ] **Step 1: Write RED journal tests** for one planned and two actual impact facts, restart projection ordering, sorted/deduped scalar arrays and no duplicate file contents/diff payload fields.
-- [ ] **Step 2: Write RED redaction/bounds test** with 150 unplanned paths; projection exposes count=150 and only 100 bounded path strings.
-- [ ] **Step 3: Write RED control-status test** proving status exposes the latest planned/actual impact summary, effective risk, evidence-profile IDs and DB mutation flag without raw diff text.
-- [ ] **Step 4: Implement durable event/projection support** using the existing journal checkpoint semantics; impact fact must be flushed before the mutating/certifying phase whose policy depends on it begins.
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 1: Write RED journal tests** for one planned and two actual impact facts, restart projection ordering, sorted/deduped scalar arrays and no duplicate file contents/diff payload fields.
+- [x] **Step 2: Write RED redaction/bounds test** with 150 unplanned paths; projection exposes count=150 and only 100 bounded path strings.
+- [x] **Step 3: Write RED control-status test** proving status exposes the latest planned/actual impact summary, effective risk, evidence-profile IDs and DB mutation flag without raw diff text.
+- [x] **Step 4: Implement durable event/projection support** using the existing journal checkpoint semantics; impact fact must be flushed before the mutating/certifying phase whose policy depends on it begins.
+- [x] **Step 5: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run packages/core/journal/tests/journal.spec.ts packages/core/control-server/tests/server.spec.ts packages/composition/runtime/tests/harness.spec.ts
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add packages/core/journal packages/core/control-server packages/composition/runtime/tests/harness.spec.ts
@@ -684,12 +692,12 @@ verified approved Plan bytes
 -> policy-driven certification
 ```
 
-- [ ] **Step 1: Add a host integration fixture** with an approved two-file Plan and a low-risk objective whose actual diff contains `src/lib/auth/route-policy.ts`; assert effective risk becomes critical and Security is scheduled.
-- [ ] **Step 2: Add a DB fixture** where the Plan contains a migration but no explicit `databaseChange`; assert missing verifier BLOCKS and injected verifier permits continuation.
-- [ ] **Step 3: Add a repair fixture** where the first published diff is UI-only and the repaired diff introduces auth; assert recertification strengthens to Security/cross-executor-required.
-- [ ] **Step 4: Add a large-write fixture** with 13 changed files and prove implementation/repair route to `opencode.workhorse` under the existing Plurora hard invariant.
-- [ ] **Step 5: Add a scope-drift fixture** proving one unplanned file reaches status and Conformance evidence and prevents the file from disappearing from the final certification record.
-- [ ] **Step 6: Run focused package gates.**
+- [x] **Step 1: Add a host integration fixture** with an approved two-file Plan and a low-risk objective whose actual diff contains `src/lib/auth/route-policy.ts`; assert effective risk becomes critical and Security is scheduled.
+- [x] **Step 2: Add a DB fixture** where the Plan contains a migration but no explicit `databaseChange`; assert missing verifier BLOCKS and injected verifier permits continuation.
+- [x] **Step 3: Add a repair fixture** where the first published diff is UI-only and the repaired diff introduces auth; assert recertification strengthens to Security/cross-executor-required.
+- [x] **Step 4: Add a large-write fixture** with 13 changed files and prove implementation/repair route to `opencode.workhorse` under the existing Plurora hard invariant.
+- [x] **Step 5: Add a scope-drift fixture** proving one unplanned file reaches status and Conformance evidence and prevents the file from disappearing from the final certification record.
+- [x] **Step 6: Run focused package gates.**
 
 ```bash
 corepack pnpm vitest run packages/core/change-impact/tests/change-impact.spec.ts
@@ -698,7 +706,7 @@ corepack pnpm vitest run profiles/plurora/tests/change-impact.spec.ts profiles/p
 corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
-- [ ] **Step 7: Run full deterministic gates.**
+- [x] **Step 7: Run full deterministic gates.**
 
 ```bash
 corepack pnpm run constraints
@@ -708,11 +716,11 @@ corepack pnpm run build
 corepack pnpm run test:trick
 ```
 
-- [ ] **Step 8: Run fresh real-product smoke** from the Plurora host using the already authenticated OpenCode/Codex catalogues from Plan E. Use a disposable Git fixture/worktree for path-impact verification; do not mutate NeuroVia or a live database in Plan G verification.
-- [ ] **Step 9: Perform an independent read-only Codex Engineering Guardrails review** against CI1-CI15. Treat any policy-declared-but-unenforced row, downgrade path, caller-only DB bypass or sensitive-surface omission as merge-blocking.
-- [ ] **Step 10: Fix confirmed defects and rerun every affected focused gate plus `test:trick`.**
-- [ ] **Step 11: Record evidence** in `docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md`, including exact head SHA, commands, exit statuses, CI1-CI15 matrix, known limitations and independent-review verdict.
-- [ ] **Step 12: Update README** only with implemented/proven behavior and commit.
+- [x] **Step 8: Run fresh real-product smoke** from the Plurora host using the already authenticated OpenCode/Codex catalogues from Plan E. Use a disposable Git fixture/worktree for path-impact verification; do not mutate NeuroVia or a live database in Plan G verification.
+- [x] **Step 9: Perform an independent read-only Codex Engineering Guardrails review** against CI1-CI15. Treat any policy-declared-but-unenforced row, downgrade path, caller-only DB bypass or sensitive-surface omission as merge-blocking.
+- [x] **Step 10: Fix confirmed defects and rerun every affected focused gate plus `test:trick`.**
+- [x] **Step 11: Record evidence** in `docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md`, including exact head SHA, commands, exit statuses, CI1-CI15 matrix, known limitations and independent-review verdict.
+- [x] **Step 12: Update README** only with implemented/proven behavior and commit.
 
 ```bash
 git add apps/plurora-harness-host profiles/plurora README.trick-harness.md docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md

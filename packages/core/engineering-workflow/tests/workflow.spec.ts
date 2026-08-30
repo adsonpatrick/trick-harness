@@ -12,13 +12,21 @@ import type { HarnessProfile } from '@trick-harness/profile'
 import type { RoutingPolicy } from '@trick-harness/routing'
 import type { ConformanceManifest, DiagnosisContract, Finding, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import {
+  EXTERNAL_CERTIFICATION_STATES,
   WorkflowError,
+  assessPullRequest,
   WorkflowRunner,
   assessRestart,
   permissionModeFor,
   planStages,
 } from '../src/index.ts'
-import type { DatabaseVerificationCapabilityPort, DeliveryCapabilityPort, StageSpec } from '../src/index.ts'
+import type {
+  CertificationCapabilityPort,
+  DatabaseVerificationCapabilityPort,
+  DeliveryCapabilityPort,
+  StageSpec,
+  WorkflowOutcome,
+} from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
   policyVersion: 'test-v1.0.0',
@@ -62,6 +70,10 @@ const PROFILE: HarnessProfile = Object.freeze({
   }),
   integrationPolicy: Object.freeze({ enabled: Object.freeze([]), rules: Object.freeze([]) }),
   trustedComposition: Object.freeze({ excludedPluginIds: Object.freeze([]) }),
+  changeImpactPolicy: Object.freeze({
+    rules: Object.freeze([]),
+    writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+  }),
 })
 
 const OBJECTIVE: WorkflowObjective = Object.freeze({
@@ -1544,5 +1556,1084 @@ describe('a run that changes a database', () => {
     expect(names.length).toBeGreaterThan(0)
     expect(names).toContain('database-verification')
     expect(names).not.toContain('supabase-preview')
+  })
+})
+
+describe('splitting a pull-request run at delivery', () => {
+  /** A profile whose paths mean something and whose surfaces cost something. */
+  const IMPACT_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    qaPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', when: Object.freeze({ surface: 'auth' }), use: Object.freeze({ evidence: 'security-review', independentReview: true, risk: 'critical' }) }),
+        Object.freeze({ id: 'ui', when: Object.freeze({ surface: 'ui' }), use: Object.freeze({ evidence: 'visual-regression', independentReview: true, risk: 'medium' }) }),
+      ]),
+    }),
+    securityPolicy: Object.freeze({
+      ...PROFILE.securityPolicy,
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth-flow', when: Object.freeze({ surface: 'auth' }), use: Object.freeze({ review: 'security', independence: 'cross-executor-required', blocking: true }) }),
+      ]),
+    }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', paths: Object.freeze(['src/auth/**']), use: Object.freeze({ surface: 'auth', riskFloor: 'critical' }) }),
+        Object.freeze({ id: 'ui', paths: Object.freeze(['src/ui/**']), use: Object.freeze({ surface: 'ui', riskFloor: 'medium' }) }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  /** A reader that answers with `planned` before the work and `actual` after. */
+  function reader(planned: readonly string[], actual: readonly string[]): {
+    plannedPaths: () => Promise<readonly string[]>
+    actualPaths: () => Promise<readonly string[]>
+  } {
+    return { plannedPaths: async () => planned, actualPaths: async () => actual }
+  }
+
+  /** Run one objective to completion and hand back the roles it ran, in order. */
+  async function rolesFor(
+    changeImpact: ReturnType<typeof reader>,
+    objective: WorkflowObjective = OBJECTIVE,
+  ): Promise<readonly string[]> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective, interpret: interpretAllPass, task: taskFor, changeImpact, ...CONFORMS,
+    })
+    expect(outcome.state).toBe('completed')
+    return outcome.stages.map(stage => stage.role)
+  }
+
+  it('certifies against what was delivered, not against the risk it was opened at', async () => {
+    // A low-risk objective that turned out to touch auth is an auth change. The
+    // caller's own word about its risk is the one thing that cannot settle this.
+    const roles = await rolesFor(reader([], ['src/auth/session.ts']))
+
+    expect(roles).toStrictEqual([
+      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
+    ])
+  })
+
+  it('buys the QA a surface asks for without buying a security reading nobody asked for', async () => {
+    const roles = await rolesFor(reader([], ['src/ui/button.tsx']))
+
+    expect(roles).toStrictEqual(['implement', 'verify', 'delivery', 'review', 'qa', 'conformance', 'verify'])
+  })
+
+  it('still reads and verifies a change no rule spoke about', async () => {
+    const roles = await rolesFor(reader(['docs/readme.md'], ['docs/readme.md']))
+
+    expect(roles).toStrictEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
+  })
+
+  it('keeps what the approved plan already bought when the diff no longer shows it', async () => {
+    // The planned reading is part of the effective impact for the whole run. A
+    // delivery that ended up not touching the auth file it was approved to
+    // touch does not get to hand back the security reading that bought.
+    const roles = await rolesFor(reader(['src/auth/session.ts'], ['src/ui/button.tsx']))
+
+    expect(roles).toContain('security')
+  })
+
+  it('reads the delivered change set only after the branch is published', async () => {
+    const seen: string[] = []
+    const changeImpact = {
+      plannedPaths: async (): Promise<readonly string[]> => { seen.push('planned'); return [] },
+      actualPaths: async (): Promise<readonly string[]> => { seen.push('actual'); return ['src/ui/x.tsx'] },
+    }
+    await rolesFor(changeImpact)
+
+    expect(seen).toStrictEqual(['planned', 'actual'])
+  })
+
+  it('stops rather than certifying a change it could not measure', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: {
+        plannedPaths: async () => [],
+        actualPaths: async () => { throw new Error('git said no') },
+      },
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    // The reader's own text can name a path or a provider payload, and this
+    // summary reaches the journal.
+    expect(outcome.summary).not.toContain('git said no')
+  })
+
+  it('runs the fixed plan when the deployment supplied no reader', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.stages.map(stage => stage.role)).toStrictEqual(planStages(OBJECTIVE).map(stage => stage.role))
+  })
+})
+
+describe('routing a stage as what the change turned out to be', () => {
+  /** A table with rows only an impact-derived fact can reach. */
+  const IMPACT_POLICY: RoutingPolicy = Object.freeze({
+    ...POLICY,
+    rules: Object.freeze([
+      Object.freeze({ id: 'large-write-implementation', when: Object.freeze({ role: 'implement', writeVolume: 'large' }), use: Object.freeze({ executor: 'workhorse', tier: 'implementation' }) }),
+      Object.freeze({ id: 'auth-implementation', when: Object.freeze({ role: 'implement', taskClass: 'auth-change' }), use: Object.freeze({ executor: 'auditor', tier: 'implementation' }) }),
+      ...POLICY.rules,
+    ]),
+  })
+
+  const ROUTED_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    routingPolicy: Object.freeze({ rules: IMPACT_POLICY.rules, fallbackRules: IMPACT_POLICY.fallbackRules }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', paths: Object.freeze(['src/auth/**']), use: Object.freeze({ surface: 'auth', taskClass: 'auth-change', riskFloor: 'critical' }) }),
+        Object.freeze({ id: 'bulk', paths: Object.freeze(['src/bulk/**']), use: Object.freeze({ surface: 'bulk' }) }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  /** The routes the run recorded, in the order they were taken. */
+  async function routesFor(planned: readonly string[]): Promise<readonly { role: string; executor: string }[]> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: ROUTED_PROFILE, policy: IMPACT_POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    for (const name of ['builder', 'reviewer', 'workhorse', 'auditor']) {
+      executors.register(provider(name, async () => passing(name)))
+    }
+
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => planned, actualPaths: async () => planned },
+      ...CONFORMS,
+    })
+    return projectWorkflow(session.events, 'wf-1').routes.map(route => ({ role: route.role, executor: route.executor }))
+  }
+
+  it('routes the implementation on the class the paths named', async () => {
+    const routes = await routesFor(['src/auth/session.ts'])
+
+    expect(routes.find(route => route.role === 'implement')?.executor).toBe('auditor')
+  })
+
+  it('routes a large write on the volume the change actually has', async () => {
+    const paths = Array.from({ length: 13 }, (_, index) => `src/bulk/file-${index}.ts`)
+    const routes = await routesFor(paths)
+
+    expect(routes.find(route => route.role === 'implement')?.executor).toBe('workhorse')
+  })
+
+  it('leaves a change no rule spoke about on the table it always used', async () => {
+    const routes = await routesFor(['docs/readme.md'])
+
+    expect(routes.find(route => route.role === 'implement')?.executor).toBe('builder')
+  })
+})
+
+describe('a database change nobody declared', () => {
+  /** A profile whose migration paths mean what they say. */
+  const DB_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({
+          id: 'database-migrations',
+          paths: Object.freeze(['supabase/migrations/**']),
+          use: Object.freeze({
+            surface: 'database',
+            riskFloor: 'critical',
+            requiredCapability: 'database-verification',
+            evidenceProfile: 'db-standard',
+            databaseMutation: true,
+          }),
+        }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  const MIGRATION = 'supabase/migrations/20260828090000_example.sql'
+
+  /** A run whose planned paths include a migration and which declares nothing. */
+  async function runUndeclared(options: {
+    databaseVerification?: DatabaseVerificationCapabilityPort
+    delivered?: string[]
+  } = {}): Promise<WorkflowOutcome> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: DB_PROFILE, policy: POLICY, executors, journal,
+      capabilities: {
+        delivery: deliveryStub(options.delivered ?? []),
+        ...options.databaseVerification === undefined
+          ? {}
+          : { databaseVerification: options.databaseVerification },
+      },
+    })
+
+    return await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => [MIGRATION], actualPaths: async () => [MIGRATION] },
+      ...CONFORMS,
+    })
+  }
+
+  it('blocks before publishing a classified migration with no verifier composed', async () => {
+    // The caller said nothing about a database. The paths did, and the paths
+    // are the half of this that cannot be talked out of what it found.
+    const delivered: string[] = []
+    const outcome = await runUndeclared({ delivered })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.summary).toContain('no database verification capability')
+    expect(delivered).toEqual([])
+  })
+
+  it('runs the deterministic verifier before a classified migration is published', async () => {
+    const delivered: string[] = []
+    const order: string[] = []
+    const outcome = await runUndeclared({
+      delivered,
+      databaseVerification: {
+        verify: async () => {
+          order.push('verify')
+          return {
+            status: 'PASSED', summary: 'the schema applied and the gates passed', evidence: [], findings: [],
+          }
+        },
+      },
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(order).toStrictEqual(['verify'])
+    expect(delivered).toHaveLength(1)
+  })
+})
+
+describe('what evidence a certifying stage is told to produce', () => {
+  const EVIDENCE_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    qaPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'ui', when: Object.freeze({ surface: 'ui' }), use: Object.freeze({ evidence: 'visual-regression', independentReview: true, risk: 'medium' }) }),
+      ]),
+    }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'ui', paths: Object.freeze(['src/ui/**']), use: Object.freeze({ surface: 'ui', evidenceProfile: 'ui-standard', riskFloor: 'medium' }) }),
+        Object.freeze({ id: 'auth', paths: Object.freeze(['src/auth/**']), use: Object.freeze({ surface: 'auth', evidenceProfile: 'auth-standard', riskFloor: 'critical' }) }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  /** The stage specs the run handed to the task builder, by role. */
+  async function stageSpecsFor(paths: readonly string[]): Promise<Map<string, StageSpec>> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: EVIDENCE_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    const seen = new Map<string, StageSpec>()
+
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: (stage, objective) => { seen.set(stage.role, stage); return taskFor(stage, objective) },
+      changeImpact: { plannedPaths: async () => paths, actualPaths: async () => paths },
+      ...CONFORMS,
+    })
+    return seen
+  }
+
+  it('tells the QA stage which evidence profile the change owes', async () => {
+    const specs = await stageSpecsFor(['src/ui/button.tsx'])
+
+    expect(specs.get('qa')?.requiredEvidenceProfiles).toContain('ui-standard')
+    expect(specs.get('qa')?.requiredEvidenceProfiles).toContain('visual-regression')
+  })
+
+  it('carries an auth change onto every stage that certifies it', async () => {
+    const specs = await stageSpecsFor(['src/auth/session.ts'])
+
+    for (const role of ['review', 'qa', 'security', 'conformance']) {
+      expect(specs.get(role)?.requiredEvidenceProfiles, role).toContain('auth-standard')
+    }
+  })
+
+  it('tells an implementation stage nothing about evidence it does not owe', async () => {
+    // The bar is a fact about certifying the change, not about producing it.
+    const specs = await stageSpecsFor(['src/ui/button.tsx'])
+
+    expect(specs.get('implement')?.requiredEvidenceProfiles).toBeUndefined()
+  })
+
+  it('hands back a list a stage cannot edit', async () => {
+    const specs = await stageSpecsFor(['src/auth/session.ts'])
+
+    expect(Object.isFrozen(specs.get('qa')?.requiredEvidenceProfiles)).toBe(true)
+  })
+})
+
+describe('recertifying what a repair turned the change into', () => {
+  const DRIFT_PROFILE: HarnessProfile = Object.freeze({
+    ...PROFILE,
+    qaPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', when: Object.freeze({ surface: 'auth' }), use: Object.freeze({ evidence: 'security-review', independentReview: true, risk: 'critical' }) }),
+        Object.freeze({ id: 'ui', when: Object.freeze({ surface: 'ui' }), use: Object.freeze({ evidence: 'visual-regression', independentReview: true, risk: 'medium' }) }),
+      ]),
+    }),
+    securityPolicy: Object.freeze({
+      ...PROFILE.securityPolicy,
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth-flow', when: Object.freeze({ surface: 'auth' }), use: Object.freeze({ review: 'security', independence: 'cross-executor-required', blocking: true }) }),
+      ]),
+    }),
+    changeImpactPolicy: Object.freeze({
+      rules: Object.freeze([
+        Object.freeze({ id: 'auth', paths: Object.freeze(['src/lib/auth/**']), use: Object.freeze({ surface: 'auth', riskFloor: 'critical' }) }),
+        Object.freeze({ id: 'ui', paths: Object.freeze(['src/ui/**']), use: Object.freeze({ surface: 'ui', riskFloor: 'medium' }) }),
+      ]),
+      writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+    }),
+  })
+
+  const UI = 'src/ui/cart-total.tsx'
+  const AUTH = 'src/lib/auth/access-decision.ts'
+
+  /** A reader whose actual answer changes between deliveries. */
+  function drifting(planned: readonly string[], ...actual: readonly (readonly string[])[]): {
+    plannedPaths: () => Promise<readonly string[]>
+    actualPaths: () => Promise<readonly string[]>
+  } {
+    let call = 0
+    return {
+      plannedPaths: async () => planned,
+      actualPaths: async () => {
+        const answer = actual[Math.min(call, actual.length - 1)] as readonly string[]
+        call += 1
+        return answer
+      },
+    }
+  }
+
+  /**
+   * Run one objective whose QA fails exactly once, and report what ran.
+   *
+   * @param changeImpact - the reader the run classifies itself from.
+   * @param manifests - collects the manifest each conformance reading was given.
+   * @returns the outcome, so a test can read the stages off it.
+   */
+  async function runWithOneQaDefect(
+    changeImpact: ReturnType<typeof drifting>,
+    manifests: ConformanceManifest[] = [],
+  ): Promise<WorkflowOutcome> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    const runner = new WorkflowRunner('wf-1', {
+      profile: DRIFT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    let qaRuns = 0
+
+    return await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => {
+        if (stage.role !== 'qa') return interpretAllPass(stage, executor)
+        qaRuns += 1
+        return qaRuns > 1
+          ? interpretAllPass(stage, executor)
+          : { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug('f-1')], evidence: [] }
+      },
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      changeImpact,
+      loadApprovedArtifacts: CONFORMS.loadApprovedArtifacts,
+      conformance: (stage, executor, result, manifest) => {
+        manifests.push(manifest)
+        return CONFORMS.conformance(stage, executor, result, manifest)
+      },
+    })
+  }
+
+  it('recertifies a repair that quietly widened the change into auth', async () => {
+    // The first pass was a medium UI change and bought QA. The repair reached
+    // into an access decision, and the branch a person would now review is a
+    // critical auth change — so the second pass has to buy what that costs,
+    // rather than finishing the plan the smaller change had been given.
+    const outcome = await runWithOneQaDefect(drifting([UI], [UI], [UI, AUTH]))
+
+    expect(outcome.state).toBe('completed')
+    const after = outcome.stages.map(stage => stage.role).slice(outcome.stages.findLastIndex(s => s.role === 'delivery'))
+    expect(after).toContain('security')
+    expect(after).toContain('review')
+    expect(after).toContain('conformance')
+  })
+
+  it('never buys less on the second pass than the first pass already bought', async () => {
+    // The repair took the access decision back out. What the branch touched at
+    // any point in this run is still what a person is being asked to trust, and
+    // a security reading that was owed is not unowed by a later, smaller diff.
+    const outcome = await runWithOneQaDefect(drifting([UI], [UI, AUTH], [UI]))
+
+    expect(outcome.state).toBe('completed')
+    const after = outcome.stages.map(stage => stage.role).slice(outcome.stages.findLastIndex(s => s.role === 'delivery'))
+    expect(after).toContain('security')
+  })
+
+  it('hands conformance the paths the delivery touched that the Plan never approved', async () => {
+    const manifests: ConformanceManifest[] = []
+    await runWithOneQaDefect(drifting([UI], [UI, AUTH]), manifests)
+
+    // Normalized, relative, and reported rather than judged: whether a third
+    // file breaks a Plan obligation is conformance's call, not the classifier's.
+    expect(manifests.at(-1)?.unplannedPaths).toStrictEqual([AUTH])
+  })
+
+  it('tells conformance nothing drifted when the delivery stayed inside the Plan', async () => {
+    const manifests: ConformanceManifest[] = []
+    await runWithOneQaDefect(drifting([UI], [UI]), manifests)
+
+    expect(manifests.at(-1)?.unplannedPaths).toStrictEqual([])
+  })
+})
+
+describe('when the run writes down what it thinks the change is', () => {
+  /** The harness event types one classified run appended, in order. */
+  async function eventOrder(): Promise<readonly string[]> {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+
+    await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => ['src/a.ts'], actualPaths: async () => ['src/a.ts', 'src/b.ts'] },
+      ...CONFORMS,
+    })
+    return session.events.map(event => event.type).filter(type => type.startsWith('harness/'))
+  }
+
+  it('records the planned reading before it hands anything a writable tree', async () => {
+    // The order is the point. A run that started an implementation and then
+    // wrote down what it believed the change was could not say, after a
+    // restart, on what authority that tree was ever written to.
+    const order = await eventOrder()
+
+    expect(order.indexOf('harness/change-impact')).toBeLessThan(order.indexOf('harness/executor-start'))
+  })
+
+  it('records the delivered reading before anything certifies it', async () => {
+    const order = await eventOrder()
+    const lastImpact = order.lastIndexOf('harness/change-impact')
+
+    expect(lastImpact).toBeGreaterThan(order.indexOf('harness/delivery'))
+    expect(order.slice(lastImpact)).toContain('harness/verdict')
+  })
+
+  it('carries what it resolved out with the outcome', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => ['src/a.ts'], actualPaths: async () => ['src/a.ts', 'src/b.ts'] },
+      ...CONFORMS,
+    })
+
+    expect(outcome.changeImpact?.source).toBe('actual')
+    expect(outcome.changeImpact?.unplannedPaths).toStrictEqual(['src/b.ts'])
+  })
+
+  it('leaves a run that classified nothing saying nothing about it', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.changeImpact).toBeUndefined()
+  })
+})
+
+describe('the external certification contract', () => {
+  it('bounds the states a certification may ever be published in', () => {
+    expect(EXTERNAL_CERTIFICATION_STATES).toEqual([
+      'pending', 'success', 'failure', 'error',
+    ])
+  })
+
+  it('freezes that vocabulary, so nothing can widen it at runtime', () => {
+    expect(Object.isFrozen(EXTERNAL_CERTIFICATION_STATES)).toBe(true)
+  })
+
+  it('leaves a supplied certification capability untouched by a run that publishes nothing', async () => {
+    // The capability is the runtime's to call. A working-tree run delivers
+    // nothing, so there is no revision to certify and nothing may reach GitHub
+    // on its behalf — not the executors, and not the runner either.
+    const publish = vi.fn()
+    const executors = createExecutorRuntime()
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    const runner = new WorkflowRunner('wf-cert', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal: new WorkflowJournal(Session.create(SessionId('s')), 'wf-cert', async () => true),
+      capabilities: { certification: { publish } satisfies CertificationCapabilityPort },
+    })
+
+    await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(publish).not.toHaveBeenCalled()
+  })
+})
+
+/** Two revisions, so a redelivery can be told apart from the branch it replaced. */
+const FIRST_REVISION = '1'.repeat(40)
+const SECOND_REVISION = '2'.repeat(40)
+
+/**
+ * A certification capability that records what it was asked to publish.
+ *
+ * It reports a fresh revision per publication, because that is what a real one
+ * does after a repair pushes a second branch: the run does not tell it which
+ * commit to certify, it asks it which commit is there.
+ */
+function certificationStub(
+  log: string[],
+  revisions: readonly string[] = [FIRST_REVISION],
+): CertificationCapabilityPort {
+  let published = 0
+  return {
+    publish: async (input) => {
+      const revision = revisions[Math.min(published, revisions.length - 1)] ?? FIRST_REVISION
+      published += 1
+      log.push(`${input.state}(${revision})`)
+      return {
+        revision,
+        externalId: `status-${String(published)}`,
+        context: 'a-namespace/a-certification',
+        url: 'https://github.com/an-owner/a-product/pull/7',
+        evidence: [],
+      }
+    },
+  }
+}
+
+/** Interpret every stage as a pass, recording the order the roles were asked in. */
+function loggingInterpret(log: string[]): (stage: StageSpec, executor: string) => StageResult {
+  return (stage, executor) => {
+    log.push(stage.role)
+    return interpretAllPass(stage, executor)
+  }
+}
+
+describe('marking a delivered revision as pending certification', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  })
+
+  it('publishes pending once, after the branch exists and before anyone reviews it', async () => {
+    const log: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: { delivery: DELIVERY, certification: certificationStub(log) },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: loggingInterpret(log), task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).toBe('completed')
+    expect(log.filter(entry => entry.startsWith('pending'))).toEqual([`pending(${FIRST_REVISION})`])
+    // Before the review, not merely somewhere in the run: a reviewer opening
+    // the pull request is the first person who could act on a status, and an
+    // absent status is the one thing a branch-protection rule cannot see.
+    expect(log.indexOf(`pending(${FIRST_REVISION})`)).toBeLessThan(log.indexOf('review'))
+    // And after delivery, because before it there is no revision to name.
+    expect(log.indexOf(`pending(${FIRST_REVISION})`)).toBeGreaterThan(log.indexOf('implement'))
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+    expect(JSON.stringify(session.events)).toContain('github-certification')
+  })
+
+  it('publishes pending again for the branch a repair replaced the first one with', async () => {
+    const log: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: {
+        delivery: DELIVERY,
+        certification: certificationStub(log, [FIRST_REVISION, SECOND_REVISION]),
+      },
+    })
+
+    let qaRuns = 0
+    const outcome = await runner.run({
+      objective: { ...OBJECTIVE, risk: 'medium' },
+      interpret: (stage, executor) => {
+        log.push(stage.role)
+        if (stage.role !== 'qa') return interpretAllPass(stage, executor)
+        qaRuns += 1
+        return {
+          role: stage.role,
+          executor,
+          verdict: qaRuns === 1 ? 'FAIL' : 'PASS',
+          summary: qaRuns === 1 ? 'negative path throws' : 'negative path handled',
+          findings: qaRuns === 1 ? [{ ...bug(), raisedBy: 'qa' }] : [],
+          evidence: [],
+        }
+      },
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('completed')
+    // The first revision is marked pending, reviewed, found wanting, repaired,
+    // and the branch that replaces it is marked pending in its own right.
+    expect(log).toEqual([
+      'implement', 'verify', `pending(${FIRST_REVISION})`, 'review', 'qa',
+      'debug', 'repair', 'verify', `pending(${SECOND_REVISION})`, 'qa',
+      'conformance', 'verify', `success(${SECOND_REVISION})`,
+    ])
+    // Two windows opened and both closed: a certification that began and never
+    // reported back is what a restart has to treat as an unknown world.
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+
+  it('marks the same revision pending again on a rerun, whatever it said last time', async () => {
+    const runs: string[][] = []
+    for (const _pass of [1, 2]) {
+      const log: string[] = []
+      const fresh = Session.create(SessionId('s'))
+      const runner = new WorkflowRunner('wf-1', {
+        profile: PROFILE,
+        policy: POLICY,
+        executors,
+        journal: new WorkflowJournal(fresh, 'wf-1', async () => true),
+        capabilities: { delivery: DELIVERY, certification: certificationStub(log) },
+      })
+      await runner.run({ objective: OBJECTIVE, interpret: loggingInterpret(log), task: taskFor, ...CONFORMS })
+      runs.push(log.filter(entry => entry.startsWith('pending')))
+    }
+
+    // A green tick left over from an earlier run describes an earlier run. The
+    // second one re-opens the question for the same commit rather than
+    // inheriting the answer.
+    expect(runs).toEqual([[`pending(${FIRST_REVISION})`], [`pending(${FIRST_REVISION})`]])
+  })
+
+  it('ends fail-closed when certification is required and this deployment composed none', async () => {
+    const log: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      requireCertification: true,
+      capabilities: { delivery: DELIVERY },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: loggingInterpret(log), task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.verdict).not.toBe('PASS')
+    // Blocked before a certifying stage could claim anything: a run that
+    // reviews and conforms and then discovers it cannot publish a status has
+    // already produced the transcript someone would merge on.
+    expect(log).not.toContain('review')
+    expect(projectWorkflow(session.events, 'wf-1').blockers.at(-1)?.kind).toBe('external')
+  })
+
+  it('does not reach readiness when the pending status could not be published', async () => {
+    const log: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: {
+        delivery: DELIVERY,
+        certification: {
+          publish: async () => {
+            throw new Error('the pull request head moved while the status was being published')
+          },
+        },
+      },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: loggingInterpret(log), task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).not.toBe('completed')
+    expect(outcome.verdict).not.toBe('PASS')
+    expect(log).not.toContain('review')
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+})
+
+/** One publication, as the capability was asked for it. */
+interface CertificationCall {
+  readonly state: string
+  readonly expectedRevision: string | undefined
+}
+
+/**
+ * A certification capability that records every call and can be told to fail.
+ *
+ * `revisions` is what it reports having found on the pull request, publication
+ * by publication, so a head that moved between the pending status and the
+ * terminal one can be described without pretending the run chose either value.
+ */
+function recorder(options: { readonly revisions?: readonly string[]; readonly failOn?: string } = {}): {
+  readonly port: CertificationCapabilityPort
+  readonly calls: readonly CertificationCall[]
+} {
+  const calls: CertificationCall[] = []
+  const revisions = options.revisions ?? [FIRST_REVISION]
+  let published = 0
+  return {
+    calls,
+    port: {
+      publish: async (input) => {
+        calls.push({ state: input.state, expectedRevision: input.expectedRevision })
+        const revision = revisions[Math.min(published, revisions.length - 1)] ?? FIRST_REVISION
+        published += 1
+        if (options.failOn === input.state) {
+          throw new Error('the status could not be published for the revision this run delivered')
+        }
+        return {
+          revision,
+          externalId: `status-${String(published)}`,
+          context: 'a-namespace/a-certification',
+          url: 'https://github.com/an-owner/a-product/pull/7',
+          evidence: [],
+        }
+      },
+    },
+  }
+}
+
+describe('publishing the terminal certification', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+  })
+
+  /** Register the reader every stage but the mutating ones is routed to. */
+  const readsEverything = (): void => {
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  }
+
+  /** Build a runner over one certification capability. */
+  const runnerWith = (certification: CertificationCapabilityPort): WorkflowRunner => new WorkflowRunner('wf-1', {
+    profile: PROFILE,
+    policy: POLICY,
+    executors,
+    journal,
+    capabilities: { delivery: DELIVERY, certification },
+  })
+
+  it('certifies success only for the revision it had already marked pending', async () => {
+    readsEverything()
+    const certification = recorder()
+    const outcome = await runnerWith(certification.port)
+      .run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).toBe('completed')
+    expect(assessPullRequest(outcome).state).toBe('PR_READY')
+    // The terminal call names the revision the pending one established, so a
+    // capability that finds a different head has something to refuse against.
+    expect(certification.calls).toEqual([
+      { state: 'pending', expectedRevision: undefined },
+      { state: 'success', expectedRevision: FIRST_REVISION },
+    ])
+  })
+
+  it('publishes failure, never success, for a run that ended without readiness', async () => {
+    readsEverything()
+    const certification = recorder()
+    const outcome = await runnerWith(certification.port).run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'conformance'
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'an obligation is unmet', findings: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(assessPullRequest(outcome).state).not.toBe('PR_READY')
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'failure'])
+  })
+
+  it('publishes failure, never success, for a run that ended blocked', async () => {
+    readsEverything()
+    const certification = recorder()
+    const outcome = await runnerWith(certification.port).run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'review'
+        ? {
+          role: stage.role,
+          executor,
+          verdict: 'BLOCKED',
+          summary: 'this needs a person',
+          findings: [],
+          evidence: [],
+        }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    // Blocked is a statement about the work — it was looked at and it stopped —
+    // so it is `failure` rather than `error`. The distinction matters to whoever
+    // reads the pull request: `error` says nothing was established.
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'failure'])
+  })
+
+  it('publishes error when the run is canceled after the branch was marked pending', async () => {
+    const certification = recorder()
+    const runner = runnerWith(certification.port)
+    executors.register(provider('reviewer', async (request) => {
+      if (!request.task.startsWith('review:')) return passing('reviewer')
+      runner.cancel('caller asked')
+      return { status: 'aborted', output: '' }
+    }))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).toBe('canceled')
+    // A canceled run knows nothing about the branch. That is a different
+    // statement from "the work failed", and the status says so.
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'error'])
+  })
+
+  it('publishes error when the run ends by throwing', async () => {
+    readsEverything()
+    const certification = recorder()
+    const runner = runnerWith(certification.port)
+
+    await expect(runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => {
+        if (stage.role === 'review') throw new Error('the interpreter itself came apart')
+        return interpretAllPass(stage, executor)
+      },
+      task: taskFor,
+      ...CONFORMS,
+    })).rejects.toThrow()
+
+    // A pending status nobody ever came back to is the one outcome a
+    // branch-protection rule cannot distinguish from work still in progress.
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'error'])
+  })
+
+  it('refuses readiness when the head moved between pending and terminal', async () => {
+    readsEverything()
+    const certification = recorder({ revisions: [FIRST_REVISION, SECOND_REVISION] })
+    const outcome = await runnerWith(certification.port)
+      .run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'success'])
+    // Everything this run read was about the revision it delivered. The branch
+    // it would now be certifying is one nothing here has looked at.
+    expect(outcome.state).not.toBe('completed')
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(assessPullRequest(outcome).state).not.toBe('PR_READY')
+  })
+
+  it('refuses readiness when the terminal success could not be published', async () => {
+    readsEverything()
+    const certification = recorder({ failOn: 'success' })
+    const outcome = await runnerWith(certification.port)
+      .run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'success'])
+    // The repository is left holding the pending status, which is exactly the
+    // state that keeps the merge button off. A run may not answer its own
+    // inability to publish by declaring itself ready.
+    expect(outcome.state).not.toBe('completed')
+    expect(assessPullRequest(outcome).state).not.toBe('PR_READY')
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+})
+
+
+describe('the durable record of what was certified', () => {
+  it('flushes the capability window before publishing and the record after', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    /** The harness event types the log held at each durable checkpoint. */
+    const checkpoints: string[][] = []
+    const types = (): string[] => session.events
+      .filter(event => event.type.startsWith('harness/'))
+      .map(event => event.type)
+    const journal = new WorkflowJournal(session, 'wf-1', async () => {
+      checkpoints.push(types())
+      return true
+    })
+    /** What the log held at the moment each publication was asked for. */
+    const atPublish: string[][] = []
+    let published = 0
+    const certification: CertificationCapabilityPort = {
+      publish: async () => {
+        atPublish.push(types())
+        published += 1
+        return {
+          revision: FIRST_REVISION,
+          externalId: `status-${String(published)}`,
+          context: 'a-namespace/a-certification',
+          url: 'https://github.com/an-owner/a-product/pull/7',
+          evidence: [],
+        }
+      },
+    }
+    await new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: { delivery: DELIVERY, certification },
+    }).run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    // The window is what a restart reads to know a status may be standing on
+    // the pull request. Recorded after the request would leave the one case it
+    // exists for — a process that died mid-publication — looking like a run
+    // that never asked.
+    for (const snapshot of atPublish) {
+      expect(snapshot.at(-1)).toBe('harness/capability-start')
+      expect(checkpoints.some(done => done.length === snapshot.length)).toBe(true)
+    }
+    const certified = checkpoints.filter(done => done.includes('harness/certification'))
+    expect(certified.length).toBeGreaterThan(0)
+    const projection = projectWorkflow(session.events, 'wf-1')
+    expect(projection.certifications.map(record => record.state)).toEqual(['pending', 'success'])
+    expect(projection.latestCertification?.revision).toBe(FIRST_REVISION)
+    expect(projection.latestCertification?.context).toBe('a-namespace/a-certification')
+  })
+
+  it('demands a world check when a pending certification was never answered', () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    void journal.certification({
+      revision: FIRST_REVISION,
+      externalId: 'status-1',
+      state: 'pending',
+      context: 'a-namespace/a-certification',
+      summary: 'certification in progress',
+      evidence: [],
+    })
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    // A pending status is a mark this run left on a pull request, and a retry
+    // that treated the log as untouched would publish over it without ever
+    // having read what the branch now is.
+    expect(assessment.requiresWorldVerification).toBe(true)
+    expect(assessment.summary).toContain('certification')
+  })
+
+  it('stops demanding one once the certification was answered', () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    for (const state of ['pending', 'failure'] as const) {
+      void journal.certification({
+        revision: FIRST_REVISION,
+        externalId: 'status-1',
+        state,
+        context: 'a-namespace/a-certification',
+        summary: 'certification finished',
+        evidence: [],
+      })
+    }
+
+    expect(assessRestart(projectWorkflow(session.events, 'wf-1')).requiresWorldVerification).toBe(false)
   })
 })

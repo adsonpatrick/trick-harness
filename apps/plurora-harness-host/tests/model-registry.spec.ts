@@ -32,7 +32,9 @@ function deploymentFor(tiers: readonly string[]): PluroraDeploymentConfig {
     policyVersion: pluroraProfile.policyVersion,
     controlServerUrl: 'http://127.0.0.1:4319',
     environment: 'development',
+    projectRepository: 'adsonpatrick/neuro-via',
     database: { strategy: 'shared-cloud-development', projectRef: 'ref' },
+    project: { protectedBranch: 'main' },
     modelRegistry: Object.fromEntries(tiers.map(tier => [tier, `model-for-${tier}`])),
   }
 }

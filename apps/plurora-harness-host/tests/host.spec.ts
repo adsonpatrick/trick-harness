@@ -38,6 +38,8 @@ function deployment(overrides: Record<string, unknown> = {}): Record<string, unk
     controlServerUrl: 'http://127.0.0.1:0',
     environment: 'development',
     database: { strategy: 'shared-cloud-development', projectRef: 'uljaajwwnygopsyvwsre' },
+    project: { protectedBranch: 'main' },
+    projectRepository: 'adsonpatrick/neuro-via',
     modelRegistry: Object.fromEntries(PLURORA_SEMANTIC_TIERS.map(tier => [tier, `model-for-${tier}`])),
     ...overrides,
   }
@@ -127,9 +129,25 @@ function compose(
       task: stage => `${stage.role}: do the work`,
     },
     capabilities: { databaseVerification },
+    integrations: {
+      githubCertification: {
+        cwd: '/repo',
+        repository: 'adsonpatrick/neuro-via',
+        baseBranch: 'main',
+        context: 'plurora/harness-certification',
+        spawn: unusedSpawn,
+      },
+    },
     ...withSupabase
       ? {
         integrations: {
+          githubCertification: {
+            cwd: '/repo',
+            repository: 'adsonpatrick/neuro-via',
+            baseBranch: 'main',
+            context: 'plurora/harness-certification',
+            spawn: unusedSpawn,
+          },
           supabase: {
             cwd: '/repo', spawn: unusedSpawn, projectRef: 'uljaajwwnygopsyvwsre',
             pollIntervalMs: 1, readyTimeoutMs: 50,
@@ -274,6 +292,48 @@ describe('startPluroraHost', () => {
     }, AbortSignal.timeout(1_000))
     expect(specs[0]?.cwd).toBe(root)
     expect(result.status).toBe('BLOCKED')
+    await host.dispose()
+  })
+
+  it('binds certification to this checkout, the product repository and the fixed Plurora context', async () => {
+    const specs: SubprocessSpawnSpec[] = []
+    await writeFile(join(root, 'plurora-harness.json'), JSON.stringify(deployment()), 'utf8')
+    const host = await startPluroraHost({
+      projectRoot: root,
+      controlToken: 'control-token',
+      signal: controller.signal,
+      catalogue: servingCatalogue(),
+      spawn: (spec) => { specs.push(spec); throw new Error('not run') },
+      opencode: untouchedOpencode().adapter,
+    })
+    const certification = host.harness.integrations.githubCertification
+
+    expect(certification).toBeDefined()
+    // What this capability is for is fixed by the deployment, not by a run: one
+    // repository, one base branch, and the exact context a branch-protection
+    // rule is configured with. The context is the host's own constant, so a
+    // deployment file cannot answer a different question than the one asked.
+    expect(certification?.scope).toStrictEqual({
+      repository: 'adsonpatrick/neuro-via',
+      baseBranch: 'main',
+      context: 'plurora/harness-certification',
+    })
+
+    // And it reaches GitHub through the one managed seam this host starts
+    // everything else through: a capability handed its own spawn would be one
+    // exempt from whatever that seam enforces.
+    await expect(certification?.publish({
+      objective: {
+        id: 'obj-1', cwd: root, requirement: 'certify the branch',
+        risk: 'medium', workload: 'light', profileId: 'plurora',
+        approvedArtifacts: {
+          spec: { path: 'docs/spec.md', sha256: 'a'.repeat(64) },
+          plan: { path: 'docs/plan.md', sha256: 'b'.repeat(64) },
+        },
+      },
+      state: 'pending',
+    })).rejects.toThrow()
+    expect(specs.at(-1)?.cwd).toBe(root)
     await host.dispose()
   })
 

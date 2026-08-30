@@ -11,6 +11,7 @@
  */
 
 import type { HarnessProfile } from '@trick-harness/profile'
+import { changeImpactPolicy } from './change-impact-policy.ts'
 import { integrationPolicy } from './integrations.ts'
 import { qaPolicy } from './qa-policy.ts'
 import { routingPolicy } from './routing-policy.ts'
@@ -28,6 +29,7 @@ export const pluroraProfile: HarnessProfile = {
   securityPolicy,
   integrationPolicy,
   trustedComposition,
+  changeImpactPolicy,
 }
 
 /**

@@ -4,13 +4,21 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 import {
   AUTO_REPAIRABLE_FINDINGS,
+  CHANGE_IMPACT_SOURCES,
   CONFORMANCE_ITEM_STATUSES,
   CONFORMANCE_SOURCES,
+  CONFIDENCE_LEVELS,
+  EVIDENCE_KINDS,
   FINDING_CLASSES,
+  INDEPENDENCE_REQUIREMENTS,
   READ_ONLY_ROLES,
+  RISKS,
+  SECURITY_RELEVANCES,
   ROLES,
   ROUTED_PERMISSION_MODES,
   WORKFLOW_VERDICTS,
+  WORKLOADS,
+  WRITE_VOLUMES,
 } from './index.ts'
 
 const PACKAGE_NAME = '@trick-harness/contracts'
@@ -74,6 +82,30 @@ const EXPECTED_CONFORMANCE_SOURCES = ['spec', 'plan', 'dod']
 /** Restated conformance item statuses; see {@link EXPECTED_ROLES}. */
 const EXPECTED_CONFORMANCE_STATUSES = ['PASS', 'MISSING', 'PARTIAL', 'FAIL', 'BLOCKED', 'INCONCLUSIVE']
 
+/** Restated impact readings; see {@link EXPECTED_ROLES}. */
+const EXPECTED_CHANGE_IMPACT_SOURCES = ['planned', 'actual']
+
+/** Restated risk ladder; see {@link EXPECTED_ROLES}. */
+const EXPECTED_RISKS = ['low', 'medium', 'high', 'critical']
+
+/** Restated write-volume ladder; see {@link EXPECTED_ROLES}. */
+const EXPECTED_WRITE_VOLUMES = ['none', 'small', 'medium', 'large']
+
+/** Restated workloads; see {@link EXPECTED_ROLES}. */
+const EXPECTED_WORKLOADS = ['light', 'medium', 'heavy']
+
+/** Restated independence requirements; see {@link EXPECTED_ROLES}. */
+const EXPECTED_INDEPENDENCE = ['fresh-context', 'cross-executor-preferred', 'cross-executor-required']
+
+/** Restated evidence kinds; see {@link EXPECTED_ROLES}. */
+const EXPECTED_EVIDENCE_KINDS = ['test', 'diff', 'log', 'file', 'pr', 'commit', 'gate']
+
+/** Restated confidence levels; see {@link EXPECTED_ROLES}. */
+const EXPECTED_CONFIDENCE_LEVELS = ['low', 'medium', 'high']
+
+/** Restated security relevances; see {@link EXPECTED_ROLES}. */
+const EXPECTED_SECURITY_RELEVANCES = ['none', 'possible', 'confirmed']
+
 /** Roles that may never hold write authority, restated; see {@link EXPECTED_ROLES}. */
 const EXPECTED_WRITING_ROLES = ['implement', 'repair', 'delivery']
 
@@ -98,6 +130,17 @@ const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
   pin(fail, 'ROUTED_PERMISSION_MODES', ROUTED_PERMISSION_MODES, EXPECTED_PERMISSION_MODES)
   pin(fail, 'CONFORMANCE_SOURCES', CONFORMANCE_SOURCES, EXPECTED_CONFORMANCE_SOURCES)
   pin(fail, 'CONFORMANCE_ITEM_STATUSES', CONFORMANCE_ITEM_STATUSES, EXPECTED_CONFORMANCE_STATUSES)
+  // Risk and write volume are ordered ladders, and both change impact and
+  // routing take a maximum over them. A value inserted in the middle silently
+  // reorders every comparison already recorded against the old ladder.
+  pin(fail, 'RISKS', RISKS, EXPECTED_RISKS)
+  pin(fail, 'WRITE_VOLUMES', WRITE_VOLUMES, EXPECTED_WRITE_VOLUMES)
+  pin(fail, 'CHANGE_IMPACT_SOURCES', CHANGE_IMPACT_SOURCES, EXPECTED_CHANGE_IMPACT_SOURCES)
+  pin(fail, 'WORKLOADS', WORKLOADS, EXPECTED_WORKLOADS)
+  pin(fail, 'INDEPENDENCE_REQUIREMENTS', INDEPENDENCE_REQUIREMENTS, EXPECTED_INDEPENDENCE)
+  pin(fail, 'EVIDENCE_KINDS', EVIDENCE_KINDS, EXPECTED_EVIDENCE_KINDS)
+  pin(fail, 'CONFIDENCE_LEVELS', CONFIDENCE_LEVELS, EXPECTED_CONFIDENCE_LEVELS)
+  pin(fail, 'SECURITY_RELEVANCES', SECURITY_RELEVANCES, EXPECTED_SECURITY_RELEVANCES)
 
   // The separation these two lists express is the reason the read-only set
   // exists at all: a stage that judges work must not be able to change it.

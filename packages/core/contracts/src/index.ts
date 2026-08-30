@@ -17,6 +17,8 @@
  */
 
 import {
+  CHANGE_IMPACT_SOURCES,
+  MAX_RECORDED_UNPLANNED_PATHS,
   CONFIDENCE_LEVELS,
   CONFORMANCE_ITEM_STATUSES,
   CONFORMANCE_SOURCES,
@@ -28,15 +30,20 @@ import {
   SECURITY_RELEVANCES,
   WORKFLOW_VERDICTS,
   WORKLOADS,
+  WRITE_VOLUMES,
 } from './types.ts'
 import type {
   ApprovedArtifactRef,
   ApprovedArtifactSet,
+  ChangeImpactFacts,
+  ChangeImpactStatusSummary,
   ConformanceContract,
   ConformanceItem,
   DiagnosisContract,
+  EffectiveChangeImpact,
   EvidenceRef,
   Finding,
+  Risk,
   RouteDecision,
   StageResult,
   StageRouteOverride,
@@ -84,6 +91,15 @@ function text(source: Record<string, unknown>, key: string, path: string): strin
   return value
 }
 
+/** Read a bounded classification label: non-blank and short enough to be one. */
+function label(source: Record<string, unknown>, key: string, path: string): string {
+  const value = source[key]
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > LABEL_MAX_LENGTH) {
+    throw new ContractError(`${path}.${key}`, `must be a non-empty string of at most ${LABEL_MAX_LENGTH} characters`)
+  }
+  return value
+}
+
 /** Read a required boolean field. */
 function flag(source: Record<string, unknown>, key: string, path: string): boolean {
   const value = source[key]
@@ -116,6 +132,23 @@ function list<T>(
   if (!Array.isArray(value)) throw new ContractError(`${path}.${key}`, 'must be an array')
   return Object.freeze(value.map((item, index) => parse(item, `${path}.${key}[${index}]`)))
 }
+
+/** Read a required count: a whole number that cannot be negative. */
+function count(source: Record<string, unknown>, key: string, path: string): number {
+  const value = source[key]
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new ContractError(`${path}.${key}`, 'must be a whole number that is not negative')
+  }
+  return value
+}
+
+/**
+ * Longest a free-form classification label may be.
+ *
+ * These labels are written into durable facts and read back by processes that
+ * budget for them. An unbounded one is a place to put a document.
+ */
+const LABEL_MAX_LENGTH = 64
 
 /** Parse one element that must itself be a non-empty string. */
 function textItem(item: unknown, path: string): string {
@@ -344,6 +377,65 @@ export function parseApprovedArtifactRef(value: unknown, path = 'artifact'): App
 }
 
 /**
+ * Read one set of change-impact facts back.
+ *
+ * Everything here was produced by deterministic classification, and this parser
+ * is what keeps it that way across a durable boundary: a producer that attached
+ * its reasoning, its own path list, or a field the classifier has no name for
+ * finds none of it on the far side.
+ *
+ * @param value - The serialized facts.
+ * @param path - Field path to report a rejection under.
+ * @returns The facts, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing or outside its vocabulary.
+ */
+export function parseChangeImpactFacts(value: unknown, path = 'impact'): ChangeImpactFacts {
+  const source = asRecord(value, path)
+  return Object.freeze({
+    source: member(source, 'source', CHANGE_IMPACT_SOURCES, path),
+    pathCount: count(source, 'pathCount', path),
+    surfaces: list(source, 'surfaces', path, textItem),
+    riskFloor: member(source, 'riskFloor', RISKS, path),
+    writeVolume: member(source, 'writeVolume', WRITE_VOLUMES, path),
+    taskClasses: list(source, 'taskClasses', path, textItem),
+    requiredCapabilities: list(source, 'requiredCapabilities', path, textItem),
+    evidenceProfiles: list(source, 'evidenceProfiles', path, textItem),
+    databaseMutation: flag(source, 'databaseMutation', path),
+    matchedRuleIds: list(source, 'matchedRuleIds', path, textItem),
+    unplannedPaths: list(source, 'unplannedPaths', path, textItem),
+  })
+}
+
+/**
+ * Read the resolved impact of a change back.
+ *
+ * `planned` is required because it exists before the first mutation-capable
+ * stage runs; `actual` is optional because before delivery there is no
+ * published branch to read, and a reading invented to fill the field would be
+ * an unearned claim that nothing was touched.
+ *
+ * @param value - The serialized resolution.
+ * @param path - Field path to report a rejection under.
+ * @returns The resolution, rebuilt from declared fields only.
+ * @throws {ContractError} when a field is missing or outside its vocabulary.
+ */
+export function parseEffectiveChangeImpact(value: unknown, path = 'effectiveImpact'): EffectiveChangeImpact {
+  const source = asRecord(value, path)
+  const actual = source['actual']
+  return Object.freeze({
+    planned: parseChangeImpactFacts(source['planned'], `${path}.planned`),
+    ...actual === undefined ? {} : { actual: parseChangeImpactFacts(actual, `${path}.actual`) },
+    effectiveRisk: member(source, 'effectiveRisk', RISKS, path),
+    writeVolume: member(source, 'writeVolume', WRITE_VOLUMES, path),
+    surfaces: list(source, 'surfaces', path, textItem),
+    taskClasses: list(source, 'taskClasses', path, textItem),
+    requiredCapabilities: list(source, 'requiredCapabilities', path, textItem),
+    evidenceProfiles: list(source, 'evidenceProfiles', path, textItem),
+    databaseMutation: flag(source, 'databaseMutation', path),
+  })
+}
+
+/**
  * Read the approved artifact set back.
  *
  * @param value - The serialized set.
@@ -428,5 +520,55 @@ export function parseWorkflowObjective(value: unknown, path = 'objective'): Work
     workload: member(source, 'workload', WORKLOADS, path),
     profileId: text(source, 'profileId', path),
     approvedArtifacts: parseApprovedArtifactSet(source['approvedArtifacts'], `${path}.approvedArtifacts`),
+    // Absent stays absent. Reading a missing class as `''` would put a label
+    // nobody chose into durable facts, and policy would then match on it.
+    ...source['taskClass'] === undefined ? {} : { taskClass: label(source, 'taskClass', path) },
+  })
+}
+
+/**
+ * One list, said once and in one order.
+ *
+ * @param values - Whatever produced the list.
+ * @returns The distinct values, sorted.
+ */
+function distinct(values: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(values)].sort())
+}
+
+/**
+ * Reduce one reading of a change to what a durable record may hold.
+ *
+ * The single place this reduction happens, so the fact the journal writes, the
+ * fact a restart reads back and the fact a status window renders are the same
+ * fact. Rebuilt field by field: the reading came from a reader that ran a Git
+ * command, and a spread would carry whatever else travelled back with it —
+ * a diff, a stderr line — into every one of those places at once.
+ *
+ * @param facts - One reading, as the classifier produced it.
+ * @param effectiveRisk - The risk the run resolved to on it.
+ * @returns The bounded summary, frozen.
+ */
+export function summarizeChangeImpact(
+  facts: ChangeImpactFacts,
+  effectiveRisk: Risk,
+): ChangeImpactStatusSummary {
+  const unplanned = distinct(facts.unplannedPaths)
+  return Object.freeze({
+    source: facts.source,
+    effectiveRisk,
+    riskFloor: facts.riskFloor,
+    writeVolume: facts.writeVolume,
+    surfaces: distinct(facts.surfaces),
+    taskClasses: distinct(facts.taskClasses),
+    requiredCapabilities: distinct(facts.requiredCapabilities),
+    evidenceProfiles: distinct(facts.evidenceProfiles),
+    matchedRuleIds: distinct(facts.matchedRuleIds),
+    databaseMutation: facts.databaseMutation,
+    pathCount: facts.pathCount,
+    // The count is taken before the cap, because the cap is a limit on what a
+    // record holds and never a claim about what the delivery did.
+    unplannedPathCount: unplanned.length,
+    unplannedPaths: Object.freeze(unplanned.slice(0, MAX_RECORDED_UNPLANNED_PATHS)),
   })
 }

@@ -62,6 +62,10 @@ const PROFILE: HarnessProfile = Object.freeze({
   securityPolicy: Object.freeze({ rules: Object.freeze([]) }),
   integrationPolicy: Object.freeze({ enabled: Object.freeze(['control-server']), rules: Object.freeze([]) }),
   trustedComposition: Object.freeze({ excludedPluginIds: Object.freeze([]) }),
+  changeImpactPolicy: Object.freeze({
+    rules: Object.freeze([]),
+    writeVolume: Object.freeze({ smallMaxFiles: 3, mediumMaxFiles: 12 }),
+  }),
 })
 
 const REGISTRY = Object.freeze({ implementation: 'mimo-v2.5', reasoning: 'deepseek-v4-flash' })

@@ -379,6 +379,7 @@ describe('reading a conformance result back', () => {
     obligations: Object.freeze([
       { id: 'ND1', source: 'spec', requirement: 'the column is nullable', required: true },
     ] as const),
+    unplannedPaths: Object.freeze([]),
   })
 
   /** A conformance envelope answering the fixture manifest. */

@@ -122,6 +122,68 @@ export interface TrustedCompositionDefinition {
   readonly excludedPluginIds: readonly string[]
 }
 
+/**
+ * Risk levels a path rule may raise a run to.
+ *
+ * Restated here rather than imported from `@trick-harness/contracts`, which
+ * this package deliberately does not depend on: a profile is policy data a
+ * runtime reads, and the seam stays one-directional. The two statements are
+ * held together by the contracts invariant, which pins the ladder itself.
+ */
+export type ChangeImpactRiskFloor = 'low' | 'medium' | 'high' | 'critical'
+
+/**
+ * One path rule: what a repository path means for the run that touches it.
+ *
+ * Rules accumulate rather than winning outright, which is the difference
+ * between this and routing. A file under `src/features/auth/` is both an auth
+ * surface and a UI surface, and a policy that had to pick one would drop the
+ * half that matters.
+ */
+export interface ChangeImpactRuleDefinition {
+  /** Stable identifier, unique within the policy, recorded in durable facts. */
+  readonly id: string
+  /**
+   * Repository-relative glob patterns this rule matches.
+   *
+   * Relative and POSIX-formed. A pattern rooted at a filesystem or a Windows
+   * volume can only ever match nothing, so it is refused rather than accepted
+   * as a surface that silently never applies.
+   */
+  readonly paths: readonly string[]
+  /** What matching contributes; an empty row would contribute nothing. */
+  readonly use: Readonly<{
+    /** The surface these paths belong to, e.g. `auth`, `database`. */
+    surface?: string
+    /** The lowest risk a run touching these paths may be judged at. */
+    riskFloor?: ChangeImpactRiskFloor
+    /** The kind of work touching these paths is. */
+    taskClass?: string
+    /** A capability the runtime must hold to verify this change. */
+    requiredCapability?: string
+    /** The evidence bar a change touching these paths has to clear. */
+    evidenceProfile?: string
+    /** Whether touching these paths changes database state. */
+    databaseMutation?: boolean
+  }>
+}
+
+/** Path rules plus the thresholds that score how large a change is. */
+export interface ChangeImpactPolicyDefinition {
+  readonly rules: readonly ChangeImpactRuleDefinition[]
+  /**
+   * File-count bands.
+   *
+   * `smallMaxFiles` must be below `mediumMaxFiles`: equal bounds make the
+   * medium band unreachable while the policy still reads as having three, which
+   * is a policy nobody wrote, arrived at by arithmetic.
+   */
+  readonly writeVolume: Readonly<{
+    smallMaxFiles: number
+    mediumMaxFiles: number
+  }>
+}
+
 /** One project's complete, validated policy set. */
 export interface HarnessProfile {
   /** Lowercase kebab-case project id, recorded in durable workflow-start facts. */
@@ -135,6 +197,16 @@ export interface HarnessProfile {
   readonly securityPolicy: SecurityPolicyDefinition
   readonly integrationPolicy: IntegrationPolicyDefinition
   readonly trustedComposition: TrustedCompositionDefinition
+  /**
+   * What the project's repository paths mean for risk, stages and evidence.
+   *
+   * Required rather than optional, and required even when its rule list is
+   * empty. An absent block would classify a migration and a README the same
+   * way, and the run would proceed at whatever risk its caller asked for —
+   * which is the thing deterministic classification exists to stop being
+   * possible.
+   */
+  readonly changeImpactPolicy: ChangeImpactPolicyDefinition
 }
 
 /** Registration handle scoped to the caller that registered the profile. */

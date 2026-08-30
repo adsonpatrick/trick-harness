@@ -235,3 +235,38 @@ describe('conformance routing under the approved table', () => {
     expect(decision.reasonCodes).not.toContain('independence:unsatisfied')
   })
 })
+
+describe('routing a change classified from its own paths', () => {
+  it('keeps a classified large write on the workhorse whatever the change is about', () => {
+    // What a stage is for outranks what it is about. A large auth
+    // implementation is still an implementation, and a task-class row sitting
+    // above the volume rows would send it to the reviewing executor — which is
+    // exactly the fall-through the table's ordering exists to prevent.
+    for (const taskClass of ['auth-change', 'refactor', 'test-generation', 'ui-change']) {
+      const decision = route(context({ role: 'implement', writeVolume: 'large', taskClass }), policy)
+      expect(decision.resolvedModel, taskClass).toBe('MiMo V2.5')
+      expect(decision.executor, taskClass).toBe('opencode')
+    }
+  })
+
+  it('keeps heavy classified work on the workhorse at every risk the paths can raise it to', () => {
+    for (const risk of ['low', 'medium', 'high', 'critical'] as const) {
+      const decision = route(context({ role: 'implement', workload: 'heavy', risk }), policy)
+      expect(decision.resolvedModel, risk).toBe('MiMo V2.5')
+    }
+  })
+
+  it('routes a capability-carrying change on the same explainable reasons', () => {
+    // The capability the classifier attached travels with the context; it does
+    // not silently become a routing fact, and the decision stays traceable to
+    // one named rule and one named tier.
+    const decision = route(
+      context({ role: 'implement', risk: 'critical', requiredCapabilities: ['database-verification'] }),
+      policy,
+    )
+
+    expect(decision.reasonCodes.some(code => code.startsWith('rule:'))).toBe(true)
+    expect(decision.reasonCodes.some(code => code.startsWith('tier:'))).toBe(true)
+    expect(decision.resolvedModel).toBe('MiMo V2.5')
+  })
+})
