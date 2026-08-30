@@ -92,6 +92,14 @@ describe('reading a name-status record stream', () => {
     expect(parseNameStatus(text)).toStrictEqual(['src/added.ts', 'src/changed.ts', 'src/retyped.ts'])
   })
 
+  it('reads the path a deletion names', () => {
+    // Deleting a file is a change to the surface that file was on. A reader
+    // that skipped deletions would score removing an auth guard, an RLS policy
+    // or a workflow file as a change touching nothing, and a change touching
+    // nothing carries the lowest risk floor and the thinnest evidence bar.
+    expect(parseNameStatus(record('D', 'src/lib/auth/session.ts'))).toStrictEqual(['src/lib/auth/session.ts'])
+  })
+
   it('reads both paths a rename or a copy names', () => {
     // A rename touches two paths and Git prints them as one record. Reading
     // only the new one would leave the old path looking untouched, which for a
@@ -172,7 +180,7 @@ describe('asking Git what the branch changed', () => {
     }
     expect(git.specs[0]?.argv).toStrictEqual(['git', 'merge-base', 'HEAD', `origin/${BRANCH}`])
     expect(git.specs[1]?.argv).toStrictEqual([
-      'git', 'diff', '--name-status', '-z', '--diff-filter=ACMRTUXB', `${MERGE_BASE}..HEAD`,
+      'git', 'diff', '--name-status', '-z', '--diff-filter=ACDMRTUXB', `${MERGE_BASE}..HEAD`,
     ])
   })
 

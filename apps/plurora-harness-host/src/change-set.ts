@@ -37,8 +37,16 @@ const COMMIT = /^[0-9a-f]{40}$/
  * `R`/`C` carry a similarity score and name two paths; the rest name one.
  * Anything else — including `U` from an unfinished merge — is refused, because
  * a token this reader guessed at is a path it may have mis-assigned.
+ *
+ * `D` is here deliberately. Deleting a file is a change to the surface that
+ * file was on, and a reader that dropped deletions would score removing an
+ * auth guard, an RLS policy or a workflow file as a change that touched
+ * nothing — which is the lowest risk floor and the thinnest evidence bar there
+ * is. Renames already contribute the path they left behind, so excluding
+ * deletions would also have made a file's disappearance count or not depending
+ * on whether something took its place.
  */
-const STATUS = /^(?:[AMTUXB]|[RC]\d{1,3})$/
+const STATUS = /^(?:[ADMTUXB]|[RC]\d{1,3})$/
 
 /** Statuses whose record names an old path and a new one. */
 const TWO_PATH_STATUS = /^[RC]\d{1,3}$/
@@ -214,7 +222,7 @@ export function createGitChangeSetReader(options: GitChangeSetReaderOptions): Pr
 
       const diff = await git(
         options,
-        ['git', 'diff', '--name-status', '-z', '--diff-filter=ACMRTUXB', `${base}..HEAD`],
+        ['git', 'diff', '--name-status', '-z', '--diff-filter=ACDMRTUXB', `${base}..HEAD`],
         signal,
         'read the published diff',
       )

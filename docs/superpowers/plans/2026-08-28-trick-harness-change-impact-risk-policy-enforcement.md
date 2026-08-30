@@ -379,11 +379,19 @@ export function createGitChangeSetReader(input: {
 
 ```text
 git merge-base HEAD origin/<protectedBranch>
--> git diff --name-status -z --diff-filter=ACMRTUXB <mergeBase>..HEAD
--> for A/M/T/U/X/B retain path
+-> git diff --name-status -z --diff-filter=ACDMRTUXB <mergeBase>..HEAD
+-> for A/D/M/T/U/X/B retain path
 -> for R/C retain both old and new path
 -> normalize/dedupe
 ```
+
+> **Amendment, 2026-08-30, owner-approved.** The filter above originally read
+> `ACMRTUXB`, excluding `D`. Deleting a file is a change to the surface that
+> file was on, so a delivery that removed an auth guard, an RLS policy or a
+> workflow file scored as a change touching nothing — the lowest risk floor and
+> the thinnest evidence bar. Renames already contributed the path they left
+> behind, so the exclusion also made a file's disappearance count or not
+> depending on whether something took its place. Deletions are now read.
 
 - [x] **Step 1: Write RED parser tests** for add/modify/rename/copy records, NUL separation, malformed status records and secret-safe bounded errors.
 - [x] **Step 2: Write RED subprocess tests** proving argv-array/no-shell execution, project cwd only, configured branch only, abort propagation and whole-tree `waitForExit()` before completion.
