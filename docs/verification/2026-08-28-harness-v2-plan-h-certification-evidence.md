@@ -1,7 +1,7 @@
 # Plan H evidence — GitHub certification gate for pull-request readiness
 
 Recorded 2026-08-30 for the Trick Harness working tree at
-`353697dca90ffa0802be8858da317a2395e29470`, branch
+`23fc7b3c342770ad5bd476df19ffe65044707253`, branch
 `feat/harness-v2-plan-h-github-certification`.
 
 This file supersedes `docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md`
@@ -18,7 +18,7 @@ All run fresh on the recorded source. Every one exited 0.
 | `corepack pnpm run typecheck` | pass |
 | `corepack pnpm run lint` | pass |
 | `corepack pnpm run build` | pass |
-| `corepack pnpm run test:trick` | pass — 102 files, 2494 tests |
+| `corepack pnpm run test:trick` | pass — 102 files, 2495 tests |
 | `corepack pnpm --filter @trick-harness/plurora-host test` | pass — 10 files, 186 tests |
 
 ## 2. Real authenticated certification canary
@@ -181,10 +181,24 @@ noted here as an assumption open to correction, not as a Plan H regression.
 
 ## 5. Fixes
 
-One: the target-URL repository binding described in section 4. Written
-test-first — three failing tests, then the fix — and every deterministic gate
-in section 1 was rerun on the result, all exiting 0, with `test:trick` moving
-from 2491 to 2494 tests. Nothing else was changed.
+Two, both written test-first and both with every deterministic gate in section
+1 rerun on the result, all exiting 0.
+
+**The target-URL repository binding** described in section 4. Three failing tests, then the fix; `test:trick`
+moved from 2491 to 2494 tests.
+
+**Deletions missing from the delivered change set.** Reviewing the same pull
+request's Plan G half, `apps/plurora-harness-host/src/change-set.ts` ran
+`git diff --name-status -z --diff-filter=ACMRTUXB` — the filter the Plan G
+document states verbatim — which excludes `D`. A delivery that *deleted* an
+auth guard, an RLS policy or a workflow file contributed no path, so it
+classified as a change touching nothing: no sensitive surface, the `low` risk
+floor, and the thinnest evidence bar — where the same file modified would have
+raised the floor to `critical`. It was recorded as an observation rather than
+changed, because the filter was the approved plan's own wording; the owner
+then decided it should be fixed. The filter now reads `ACDMRTUXB`, the record
+parser accepts `D`, and the Plan G document carries a dated amendment. One new
+test; `test:trick` moved from 2494 to 2495.
 
 The two test failures encountered while building the Task 7 matrix were
 incorrect assertions in the new tests, corrected there; neither was a product
@@ -193,15 +207,15 @@ defect.
 ## 6. Head SHA
 
 ```text
-353697dca90ffa0802be8858da317a2395e29470
+23fc7b3c342770ad5bd476df19ffe65044707253
 ```
 
-Its parent is `f05546eee7` (`docs(trick): record Plan H certification
-evidence`), and the source it fixes is `953e286ed4`, the revision sections 2
-and 3 certified against real GitHub. Every gate in section 1 was rerun on the
-source this commit records; the canary and the re-read were performed on its
-grandparent, before the fix, and the fix narrows what may be published without
-changing the path they exercised. The only thing added after the last of
+Its parent is `353697dca9` (the target-URL fix), whose own parent chain
+reaches `953e286ed4`, the revision sections 2 and 3 certified against real
+GitHub. Every gate in section 1 was rerun on the source this commit records.
+The canary and the re-read were performed before both fixes: the first narrows
+what may be published without changing the path they exercised, and the second
+does not touch the certification capability at all. The only thing added after the last of
 them is documentation — this file, the README paragraph and the plan's
 checkboxes — so no runtime, profile or test file differs between what was
 gated and what is recorded here.

@@ -137,6 +137,27 @@ Fixed by two rules in `profiles/plurora/change-impact-policy.ts`: `credential-ma
 - The Supabase Preview Branch path remains unproven for want of an organization entitlement.
 - Merge, release and deploy remain human-controlled. Nothing here changes that.
 
+## 6a. Amendment, 2026-08-30: deletions are part of the change set
+
+Found by the Plan H pull-request review and fixed there, with the owner's
+decision to change the behavior rather than record it.
+
+The delivered reading ran `git diff --name-status -z --diff-filter=ACMRTUXB`,
+the filter this plan's Task 5 states verbatim. `D` is absent from it, so a
+delivery that *deleted* a file contributed no path at all. Removing an auth
+guard, an RLS policy or a `.github/workflows` file therefore classified as a
+change touching nothing: no sensitive surface, the `low` risk floor, and the
+evidence bar that goes with it — while the same file *modified* would have
+raised the floor to `critical`. Renames already contribute the path they left
+behind, so the exclusion also made a file's disappearance count or not
+depending on whether something took its place.
+
+The filter now reads `ACDMRTUXB` and the record parser accepts `D` as a
+one-path status. Written test-first in
+`apps/plurora-harness-host/tests/change-set.spec.ts`; the plan carries a dated
+amendment recording the deviation. Every deterministic gate was rerun on the
+result, all exiting 0, `test:trick` moving from 2494 to 2495 tests.
+
 ## 7. Head SHA
 
 ```text
@@ -144,3 +165,9 @@ Fixed by two rules in `profiles/plurora/change-impact-policy.ts`: `credential-ma
 ```
 
 Its parent is `a1a81e726b043f4abdc8752cc5b3d56e17b4b2dc`. Every gate, lifecycle and smoke in sections 1 through 6 was run on the source this commit records. The only thing added after the last of them was documentation — this file, the README paragraph and the plan's checkboxes — so no runtime, profile or test file differs between what was gated and what is recorded here.
+
+**Superseded for installation, 2026-08-30.** The amendment in section 6a
+changed runtime source after this SHA was recorded. The revision a deployment
+pins is the one in
+`docs/verification/2026-08-28-harness-v2-plan-h-certification-evidence.md`,
+which carries both this fix and the Plan H review's.
