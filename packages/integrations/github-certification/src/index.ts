@@ -402,6 +402,7 @@ export class GitHubCertification implements CertificationCapabilityPort {
     return Object.freeze({
       revision: target.revision,
       externalId: mine.id,
+      context: this.#context,
       url: target.pullRequestUrl,
       evidence: Object.freeze([
         {

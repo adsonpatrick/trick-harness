@@ -16,6 +16,7 @@ import type {
   ConformanceStatusSummary,
   DiagnosisContract,
   EvidenceRef,
+  ExternalCertificationState,
   Finding,
   Risk,
   Role,
@@ -186,6 +187,25 @@ declare module '@deepseek-ai/dsh-session/types' {
       commitSha?: string
       prNumber?: number
       prUrl?: string
+    }
+    /**
+     * One certification published against one revision, as it read back.
+     *
+     * Written after the certifier confirmed its own status, not after the
+     * request was sent: what a reviewer sees is the fact worth keeping, and a
+     * POST that exited zero is not that fact. `summary` is generated from the
+     * state by the runtime and never copied from a model or from command
+     * output, and no target URL, description or credential is carried here —
+     * this log is read back by people and by other processes.
+     */
+    'harness/certification': {
+      workflowId: string
+      revision: string
+      externalId: string
+      state: ExternalCertificationState
+      context: string
+      summary: string
+      evidence: EvidenceRef[]
     }
     /** Something a person has to decide, recorded instead of guessed at. */
     'harness/blocker': {

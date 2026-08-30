@@ -643,3 +643,48 @@ export interface StageResult {
   /** Evidence supporting the verdict. */
   readonly evidence: readonly EvidenceRef[]
 }
+
+/**
+ * Every state a certification may be published in, and nothing else.
+ *
+ * Four states because that is what an external certifier can honestly say: the
+ * run is under way, it finished and the revision is certified, it finished and
+ * the revision is not, or the question could not be answered at all. The last
+ * one matters most — a capability that cannot reach its certifier has not
+ * learned the revision is fine, so it says `error` rather than staying quiet
+ * and leaving a stale `pending` to be read as caution or as neglect depending
+ * on who is reading.
+ *
+ * Stated as a frozen list rather than a bare union so a run can be checked
+ * against it, and so nothing can widen the vocabulary at runtime. It lives here
+ * rather than beside the workflow that publishes it because the durable log
+ * reads it back, and the log may not depend on the runtime that wrote it.
+ */
+export const EXTERNAL_CERTIFICATION_STATES = Object.freeze([
+  'pending',
+  'success',
+  'failure',
+  'error',
+] as const)
+
+/** One of {@link EXTERNAL_CERTIFICATION_STATES}. */
+export type ExternalCertificationState = typeof EXTERNAL_CERTIFICATION_STATES[number]
+
+/**
+ * What a certification amounts to, for anything reading the run from outside.
+ *
+ * Three fields, and the omissions are the design. There is no description here
+ * — the certifier chose that from the state alone and it is already on the pull
+ * request — and no target URL, because a status poll that handed back a link
+ * would be handing a reader somewhere to be sent. What remains is the state a
+ * branch-protection rule acts on, the revision it was published against, and
+ * the certifier's own id for it, which is what a later read finds it by.
+ */
+export interface CertificationStatusSummary {
+  /** The state the certifier reported back after reading its own status. */
+  readonly state: ExternalCertificationState
+  /** The revision certified, as the capability re-read it. */
+  readonly revision: string
+  /** The certifier's id for the published status. */
+  readonly externalId: string
+}

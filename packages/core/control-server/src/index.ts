@@ -25,6 +25,7 @@ import {
   ContractError, RISKS, WORKLOADS, parseApprovedArtifactSet, parseStageRouteOverride,
 } from '@trick-harness/contracts'
 import type {
+  CertificationStatusSummary,
   ChangeImpactStatusSummary,
   ConformanceStatusSummary,
   StageRouteOverride,
@@ -181,6 +182,7 @@ function statusOfOutcome(outcome: WorkflowOutcome): ControlWorkflowStatus {
     // travelled with it into a status a bridge shows people.
     ...outcome.conformance === undefined ? {} : { conformance: conformanceOf(outcome.conformance) },
     ...outcome.changeImpact === undefined ? {} : { changeImpact: changeImpactOf(outcome.changeImpact) },
+    ...outcome.certification === undefined ? {} : { certification: certificationOf(outcome.certification) },
   })
 }
 
@@ -209,6 +211,25 @@ function changeImpactOf(summary: ChangeImpactStatusSummary): ChangeImpactStatusS
     pathCount: summary.pathCount,
     unplannedPathCount: summary.unplannedPathCount,
     unplannedPaths: Object.freeze([...summary.unplannedPaths]),
+  })
+}
+
+/**
+ * Reduce a certification to the fields this surface may say out loud.
+ *
+ * Rebuilt field by field like the readings above, and for a sharper reason: the
+ * certification came back from a capability that talked to GitHub, and the one
+ * thing that must never reach a status window is what authenticated it. The
+ * target URL is dropped here too — a poller that renders a link is a poller
+ * that can be steered.
+ * @param summary - What the run last published about the branch.
+ * @returns The three fields, rebuilt.
+ */
+function certificationOf(summary: CertificationStatusSummary): CertificationStatusSummary {
+  return Object.freeze({
+    state: summary.state,
+    revision: summary.revision,
+    externalId: summary.externalId,
   })
 }
 

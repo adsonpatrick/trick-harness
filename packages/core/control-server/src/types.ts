@@ -5,6 +5,7 @@
  */
 
 import type {
+  CertificationStatusSummary,
   ChangeImpactStatusSummary,
   ConformanceStatusSummary,
   StageRouteOverride,
@@ -79,6 +80,14 @@ export interface ControlWorkflowStatus {
    * a diff could travel in.
    */
   readonly changeImpact?: ChangeImpactStatusSummary
+  /**
+   * What the run last published about the branch outside the harness.
+   *
+   * Absent when it certified nothing. Three fields, and the omissions are the
+   * point: no target URL for a reader to be sent to, and no description — that
+   * is already on the pull request, chosen there by the certifier.
+   */
+  readonly certification?: CertificationStatusSummary
 }
 
 /** One workflow the Harness has started and this server now owns. */

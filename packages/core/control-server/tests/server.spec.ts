@@ -655,3 +655,53 @@ describe('what a status poll may say about the change itself', () => {
     expect(Object.keys(status.changeImpact ?? {})).not.toContain('stderr')
   })
 })
+
+describe('what a status poll may say about the certification', () => {
+  const CERTIFICATION = {
+    state: 'success' as const,
+    revision: 'c'.repeat(40),
+    externalId: '4815162342',
+  }
+
+  it('reports the state, the revision and the certifier own id', async () => {
+    const { base, auth } = await serve({
+      start: starter(['wf-1'], async record => ({
+        ...outcome(record.workflowId, record.objective.id),
+        certification: CERTIFICATION,
+      })),
+    })
+    await post(base, auth, OBJECTIVE)
+    const status = await readStatus(base, auth, 'wf-1')
+
+    expect(status.certification).toEqual(CERTIFICATION)
+  })
+
+  it('says nothing about a run that certified nothing', async () => {
+    const { base, auth } = await serve({ start: starter(['wf-1']) })
+    await post(base, auth, OBJECTIVE)
+
+    expect((await readStatus(base, auth, 'wf-1')).certification).toBeUndefined()
+  })
+
+  it('carries no target url, description or token into a status a bridge may render', async () => {
+    // Everything the certification published outside the harness is already
+    // public on the pull request. What must not travel here is the transport:
+    // the URL a poller could be steered to, and whatever authenticated it.
+    const { base, auth } = await serve({
+      start: starter(['wf-1'], async record => ({
+        ...outcome(record.workflowId, record.objective.id),
+        certification: {
+          ...CERTIFICATION,
+          url: 'https://github.invalid/an-owner/a-product/pull/7',
+          description: 'Harness engineering certification passed',
+          token: 'ghp_0123456789abcdefghijklmnopqrstuvwxyz',
+        },
+      } as never)),
+    })
+    await post(base, auth, OBJECTIVE)
+    const status = await readStatus(base, auth, 'wf-1')
+
+    expect(Object.keys(status.certification ?? {})).toEqual(['state', 'revision', 'externalId'])
+    expect(JSON.stringify(status)).not.toContain('ghp_')
+  })
+})

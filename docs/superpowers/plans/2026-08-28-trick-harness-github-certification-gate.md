@@ -421,11 +421,11 @@ export interface CertificationRecord {
 
 Projection exposes ordered records and `latestCertification` only. It does not persist PR HTML, command output, tokens or model content beyond bounded evidence locators. `summary` is generated deterministically from state, not copied from model output.
 
-- [ ] **Step 1: Write RED journal tests** proving certification records round-trip, revision is 40-hex, state is bounded, context/summary are length-bounded and raw credential-shaped fields are rejected by parser/invariant checks.
-- [ ] **Step 2: Write RED durability test** proving capability-start is flushed before the POST seam is invoked and the confirmed certification record is flushed after publication.
-- [ ] **Step 3: Write RED crash-window restart test**: journal has an open certification capability but no terminal certification record; `assessRestart` requires world verification and retry may not blindly publish success.
-- [ ] **Step 4: Write RED control-server test** proving status returns only bounded certification state/revision/external id plus existing workflow fields.
-- [ ] **Step 5: Run RED.**
+- [x] **Step 1: Write RED journal tests** proving certification records round-trip, revision is 40-hex, state is bounded, context/summary are length-bounded and raw credential-shaped fields are rejected by parser/invariant checks.
+- [x] **Step 2: Write RED durability test** proving capability-start is flushed before the POST seam is invoked and the confirmed certification record is flushed after publication.
+- [x] **Step 3: Write RED crash-window restart test**: journal has an open certification capability but no terminal certification record; `assessRestart` requires world verification and retry may not blindly publish success.
+- [x] **Step 4: Write RED control-server test** proving status returns only bounded certification state/revision/external id plus existing workflow fields.
+- [x] **Step 5: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -434,8 +434,8 @@ corepack pnpm vitest run \
   packages/core/control-server/tests/server.spec.ts
 ```
 
-- [ ] **Step 6: Implement journal/projection/control status support** using the current capability durability mechanism; do not invent a second persistence backend.
-- [ ] **Step 7: Run GREEN + typecheck.**
+- [x] **Step 6: Implement journal/projection/control status support** using the current capability durability mechanism; do not invent a second persistence backend.
+- [x] **Step 7: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -445,7 +445,7 @@ corepack pnpm vitest run \
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add packages/core/journal packages/core/engineering-workflow packages/core/control-server

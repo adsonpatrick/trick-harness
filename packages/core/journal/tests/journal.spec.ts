@@ -10,6 +10,7 @@ import type {
   RouteDecision,
   WorkflowObjective,
 } from '@trick-harness/contracts'
+import type { CertificationRecord } from '../src/index.ts'
 import {
   HARNESS_EVENT_TYPES,
   JournalError,
@@ -69,7 +70,7 @@ const diagnosis: DiagnosisContract = {
 }
 
 describe('the harness event vocabulary', () => {
-  it('declares the sixteen events the lifecycle needs, in lifecycle order', () => {
+  it('declares the seventeen events the lifecycle needs, in lifecycle order', () => {
     expect([...HARNESS_EVENT_TYPES]).toStrictEqual([
       'harness/workflow-start',
       'harness/route-decision',
@@ -82,6 +83,7 @@ describe('the harness event vocabulary', () => {
       'harness/diagnosis',
       'harness/verdict',
       'harness/delivery',
+      'harness/certification',
       'harness/blocker',
       'harness/conformance',
       'harness/change-impact',
@@ -138,6 +140,14 @@ describe('writing and replaying one workflow', () => {
     await journal.diagnosis('debug-1', diagnosis)
     await journal.verdict('verify-1', 'verify', 'PASS', 'focused suite green', evidence)
     await journal.delivery({ action: 'push', branch: 'feat/x', commitSha: 'abc123' })
+    await journal.certification({
+      revision: 'c'.repeat(40),
+      externalId: '4815162342',
+      state: 'success',
+      context: 'plurora/harness-certification',
+      summary: 'Harness engineering certification passed',
+      evidence: [],
+    })
     await journal.blocker({ stageId: 'refine-1', kind: 'product-decision', summary: 'which branch is protected', evidence })
     journal.conformance({
       specPath: 'docs/spec.md',
@@ -255,6 +265,7 @@ describe('writing and replaying one workflow', () => {
       diagnoses: [],
       verdicts: [],
       deliveries: [],
+      certifications: [],
       blockers: [],
       circuits: {},
       openStages: [],
@@ -695,5 +706,94 @@ describe('recording what the change turned out to be', () => {
 
   it('leaves a workflow that classified nothing with no impact at all', () => {
     expect(projectWorkflow(session.events, 'wf-1').changeImpact).toBeUndefined()
+  })
+})
+
+describe('the certification a run publishes about a revision', () => {
+  let session: Session
+  let flush: Mock<() => Promise<boolean>>
+  let journal: WorkflowJournal
+
+  const REVISION = 'c'.repeat(40)
+
+  /** One well-formed record, which each test below spoils one field of. */
+  const record = (overrides: Partial<CertificationRecord> = {}): CertificationRecord => ({
+    revision: REVISION,
+    externalId: '4815162342',
+    state: 'pending',
+    context: 'plurora/harness-certification',
+    summary: 'Harness engineering certification in progress',
+    evidence: [],
+    ...overrides,
+  })
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s-1'))
+    flush = vi.fn(async () => Promise.resolve(true))
+    journal = new WorkflowJournal(session, 'wf-1', flush)
+  })
+
+  it('round-trips every record and names the latest one', async () => {
+    await journal.certification(record())
+    await journal.certification(record({ state: 'success', externalId: '4815162343', summary: 'Harness engineering certification passed' }))
+
+    const projection = projectWorkflow(session.events, 'wf-1')
+
+    expect(projection.certifications.map(entry => entry.state)).toEqual(['pending', 'success'])
+    // The standing answer for the revision, which is the last thing published
+    // about it and not the first: a pending status a success replaced is
+    // history, and a reader asking what GitHub shows wants the replacement.
+    expect(projection.latestCertification).toStrictEqual(record({
+      state: 'success',
+      externalId: '4815162343',
+      summary: 'Harness engineering certification passed',
+    }))
+  })
+
+  it('is flushed, because a published status outlives the process that published it', async () => {
+    const before = flush.mock.calls.length
+    await journal.certification(record())
+
+    expect(flush.mock.calls.length).toBe(before + 1)
+  })
+
+  it('refuses a revision that is not a full commit id', async () => {
+    for (const revision of ['', 'HEAD', 'c'.repeat(39), 'C'.repeat(40), `${'c'.repeat(39)}/`]) {
+      await expect(journal.certification(record({ revision })))
+        .rejects.toThrow(expect.objectContaining({ code: 'invalid-record' }))
+    }
+    expect(projectWorkflow(session.events, 'wf-1').certifications).toEqual([])
+  })
+
+  it('refuses a state outside the published vocabulary', async () => {
+    await expect(journal.certification(record({ state: 'merged' as CertificationRecord['state'] })))
+      .rejects.toThrow(expect.objectContaining({ code: 'invalid-record' }))
+  })
+
+  it('refuses a context or a summary longer than a status can carry', async () => {
+    await expect(journal.certification(record({ context: 'c'.repeat(256) })))
+      .rejects.toThrow(expect.objectContaining({ code: 'invalid-record' }))
+    await expect(journal.certification(record({ summary: 's'.repeat(256) })))
+      .rejects.toThrow(expect.objectContaining({ code: 'invalid-record' }))
+    await expect(journal.certification(record({ externalId: '9'.repeat(256) })))
+      .rejects.toThrow(expect.objectContaining({ code: 'invalid-record' }))
+  })
+
+  it('refuses a field shaped like a credential, wherever it came from', async () => {
+    // Not a guess about the capability's good behaviour. This log is read back
+    // by people and by other processes, and the one thing that must never be
+    // recoverable from it is the token the publication was authenticated with.
+    for (const secret of [
+      'ghp_0123456789abcdefghijklmnopqrstuvwxyz',
+      'github_pat_11ABCDEFG0123456789',
+      'Bearer abcdef0123456789',
+      'token=abcdef0123456789',
+    ]) {
+      await expect(journal.certification(record({ summary: secret })))
+        .rejects.toThrow(expect.objectContaining({ code: 'invalid-record' }))
+      await expect(journal.certification(record({ context: secret })))
+        .rejects.toThrow(expect.objectContaining({ code: 'invalid-record' }))
+    }
+    expect(JSON.stringify(session.events)).not.toContain('ghp_')
   })
 })

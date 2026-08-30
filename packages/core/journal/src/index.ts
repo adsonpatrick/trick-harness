@@ -11,13 +11,14 @@
  */
 
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { summarizeChangeImpact } from '@trick-harness/contracts'
+import { EXTERNAL_CERTIFICATION_STATES, summarizeChangeImpact } from '@trick-harness/contracts'
 import type {
   ChangeImpactFacts,
   ChangeImpactStatusSummary,
   ConformanceStatusSummary,
   DiagnosisContract,
   EvidenceRef,
+  ExternalCertificationState,
   Finding,
   RouteDecision,
   Risk,
@@ -56,6 +57,7 @@ export const HARNESS_EVENT_TYPES = [
   'harness/diagnosis',
   'harness/verdict',
   'harness/delivery',
+  'harness/certification',
   'harness/blocker',
   'harness/conformance',
   'harness/change-impact',
@@ -69,7 +71,7 @@ export type HarnessEventType = typeof HARNESS_EVENT_TYPES[number]
 /** A journal operation that cannot be completed as asked. */
 export class JournalError extends Error {
   /** Machine-readable cause, so a caller can branch without parsing prose. */
-  readonly code: 'unknown-event' | 'foreign-workflow' | 'flush-failed'
+  readonly code: 'unknown-event' | 'foreign-workflow' | 'flush-failed' | 'invalid-record'
 
   /**
    * @param code - Machine-readable cause.
@@ -121,6 +123,34 @@ export interface DeliveryRecord {
   readonly prUrl?: string
 }
 
+/**
+ * How long a certification's own text may be, in characters.
+ *
+ * The bound is the certifier's, not this log's: a context or a description
+ * longer than a commit status can carry describes a status that was never
+ * published, and a record of one is worse than no record at all.
+ */
+export const CERTIFICATION_TEXT_MAX = 120
+
+/** How many evidence references one certification may carry. */
+export const CERTIFICATION_EVIDENCE_MAX = 8
+
+/** What was published about one revision outside the harness, as it read back. */
+export interface CertificationRecord {
+  /** The full commit id certified — forty hexadecimal characters, never a ref. */
+  readonly revision: string
+  /** The certifier's own id for the status, so a later read can find it. */
+  readonly externalId: string
+  /** The state a branch-protection rule acts on. */
+  readonly state: ExternalCertificationState
+  /** The context the status was published under. */
+  readonly context: string
+  /** Bounded prose the runtime derived from the state, never a model's words. */
+  readonly summary: string
+  /** Bounded locators, never the pull request's HTML or a command's output. */
+  readonly evidence: readonly EvidenceRef[]
+}
+
 /** Something a person has to decide before the run can continue. */
 export interface BlockerRecord {
   readonly stageId?: string
@@ -159,6 +189,18 @@ export interface WorkflowProjection {
   readonly diagnoses: readonly DiagnosisContract[]
   readonly verdicts: readonly VerdictRecord[]
   readonly deliveries: readonly DeliveryRecord[]
+  /** Every certification published for this workflow, in the order it was published. */
+  readonly certifications: readonly CertificationRecord[]
+  /**
+   * The standing answer about the branch, which is the last one published.
+   *
+   * The latest rather than every one for the same reason conformance is: a
+   * `pending` a `success` replaced is history, and a reader asking what the
+   * pull request now shows wants the replacement. Absent when nothing was ever
+   * published, which must stay distinguishable from a run that published
+   * `error`.
+   */
+  readonly latestCertification?: CertificationRecord
   readonly blockers: readonly BlockerRecord[]
   /** Executor to the circuit state its last recorded transition left it in. */
   readonly circuits: Readonly<Record<string, 'AVAILABLE' | 'DEGRADED'>>
@@ -584,6 +626,33 @@ export class WorkflowJournal {
   }
 
   /**
+   * Record one certification, durably, as the certifier read it back.
+   *
+   * Every field is checked before anything is appended, and a record that fails
+   * a check is refused rather than trimmed. This log outlives the run and is
+   * read by people and by other processes: a revision that is not a commit id,
+   * a state outside the published vocabulary, or text long enough to hold
+   * something that was never on a commit status are all evidence that what is
+   * being recorded is not what was published.
+   * @param record - What the certifier confirmed after reading its own status.
+   * @throws {JournalError} when the record is not one a certifier could have published.
+   * @throws {JournalError} when the checkpoint did not happen.
+   */
+  async certification(record: CertificationRecord): Promise<void> {
+    assertCertification(record)
+    this.#session.append('harness/certification', {
+      workflowId: this.#workflowId,
+      revision: record.revision,
+      externalId: record.externalId,
+      state: record.state,
+      context: record.context,
+      summary: record.summary,
+      evidence: record.evidence.map(reference => ({ ...reference })),
+    })
+    await this.#durable()
+  }
+
+  /**
    * Record something a person has to decide, durably.
    * @param record - The blocker and its evidence.
    */
@@ -637,6 +706,68 @@ export class WorkflowJournal {
   }
 }
 
+/** A full commit id, which is the only thing a certification may name. */
+const REVISION_PATTERN = /^[0-9a-f]{40}$/
+
+/**
+ * Shapes a credential takes when it escapes into text.
+ *
+ * Not a guess about a capability's good behaviour, and not a scrubber: a field
+ * matching one of these is refused outright, because a durable record is the
+ * last place a token should be recoverable from, and no certification
+ * legitimately needs one in any of its fields.
+ */
+const CREDENTIAL_PATTERNS: readonly RegExp[] = [
+  /gh[pousr]_[A-Za-z0-9]{16,}/,
+  /github_pat_[A-Za-z0-9_]{16,}/,
+  /\bbearer\s+\S{8,}/i,
+  /\b(?:token|secret|password|api[-_]?key)\s*[=:]\s*\S/i,
+]
+
+/**
+ * Whether one field carries something shaped like a credential.
+ * @param value - The field's text.
+ * @returns True when it must not be written down.
+ */
+function credentialShaped(value: string): boolean {
+  return CREDENTIAL_PATTERNS.some(pattern => pattern.test(value))
+}
+
+/**
+ * Refuse anything that is not a certification a certifier could have published.
+ * @param record - The record as the caller offered it.
+ * @throws {JournalError} naming the field that failed, never the value that failed it.
+ */
+function assertCertification(record: CertificationRecord): void {
+  const refuse = (detail: string): never => {
+    throw new JournalError('invalid-record', `this is not a certification that could have been published: ${detail}`)
+  }
+  if (!REVISION_PATTERN.test(record.revision)) {
+    refuse('a certification names the full commit id it was published against')
+  }
+  if (!(EXTERNAL_CERTIFICATION_STATES as readonly string[]).includes(record.state)) {
+    refuse(`state is one of ${EXTERNAL_CERTIFICATION_STATES.join(', ')}`)
+  }
+  for (const [field, value] of [
+    ['externalId', record.externalId],
+    ['context', record.context],
+    ['summary', record.summary],
+  ] as const) {
+    if (value.trim() === '' || value.length > CERTIFICATION_TEXT_MAX) {
+      refuse(`${field} is between 1 and ${String(CERTIFICATION_TEXT_MAX)} characters`)
+    }
+    if (credentialShaped(value)) refuse(`${field} carries something shaped like a credential`)
+  }
+  if (record.evidence.length > CERTIFICATION_EVIDENCE_MAX) {
+    refuse(`a certification carries at most ${String(CERTIFICATION_EVIDENCE_MAX)} evidence references`)
+  }
+  for (const reference of record.evidence) {
+    if (credentialShaped(reference.locator) || credentialShaped(reference.summary)) {
+      refuse('evidence carries something shaped like a credential')
+    }
+  }
+}
+
 /** A `harness/*` event narrowed to its payload, which always names a workflow. */
 type HarnessPayload = { workflowId: string } & Record<string, unknown>
 
@@ -662,6 +793,7 @@ interface Projected {
   diagnoses: DiagnosisContract[]
   verdicts: VerdictRecord[]
   deliveries: DeliveryRecord[]
+  certifications: CertificationRecord[]
   blockers: BlockerRecord[]
   circuits: Record<string, 'AVAILABLE' | 'DEGRADED'>
   started: string[]
@@ -797,6 +929,20 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
       state.deliveries.push(record as unknown as DeliveryRecord)
       return
     }
+    case 'harness/certification': {
+      const payload = data as unknown as CertificationRecord
+      // Rebuilt field by field rather than carried, like every other record
+      // read back here: an event out of a log is somebody else's object.
+      state.certifications.push({
+        revision: payload.revision,
+        externalId: payload.externalId,
+        state: payload.state,
+        context: payload.context,
+        summary: payload.summary,
+        evidence: Object.freeze(payload.evidence.map(reference => ({ ...reference }))),
+      })
+      return
+    }
     case 'harness/blocker': {
       const { workflowId: _id, ...record } = data
       state.blockers.push(record as unknown as BlockerRecord)
@@ -854,6 +1000,7 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     diagnoses: [],
     verdicts: [],
     deliveries: [],
+    certifications: [],
     blockers: [],
     circuits: {},
     started: [],
@@ -868,6 +1015,7 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
   }
   const openStages = unmatched(state.started, state.ended)
   const openCapabilities = unmatched(state.capabilityStarted, state.capabilityEnded)
+  const latestCertification = state.certifications.at(-1)
   return Object.freeze({
     workflowId,
     routes: Object.freeze(state.routes),
@@ -875,6 +1023,7 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     diagnoses: Object.freeze(state.diagnoses),
     verdicts: Object.freeze(state.verdicts),
     deliveries: Object.freeze(state.deliveries),
+    certifications: Object.freeze(state.certifications),
     blockers: Object.freeze(state.blockers),
     circuits: Object.freeze(state.circuits),
     openStages: Object.freeze(openStages),
@@ -883,6 +1032,7 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     ...state.objective === undefined ? {} : { objective: state.objective },
     ...state.conformance === undefined ? {} : { conformance: state.conformance },
     ...state.changeImpact === undefined ? {} : { changeImpact: Object.freeze(state.changeImpact) },
+    ...latestCertification === undefined ? {} : { latestCertification },
     ...state.end === undefined ? {} : { end: state.end },
   })
 }

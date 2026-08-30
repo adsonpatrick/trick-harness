@@ -1,5 +1,6 @@
 import type {
   EvidenceRef,
+  ExternalCertificationState,
   Finding,
   Role,
   RoutedPermissionMode,
@@ -9,6 +10,7 @@ import type {
   WorkflowVerdict,
 } from '@trick-harness/contracts'
 import type {
+  CertificationStatusSummary,
   ChangeImpactStatusSummary,
   ConformanceManifest,
   ConformanceObligation,
@@ -89,6 +91,15 @@ export interface WorkflowOutcome {
    * from a change that classified to nothing.
    */
   readonly changeImpact?: ChangeImpactStatusSummary
+  /**
+   * What this run last published about the branch, bounded.
+   *
+   * Absent when nothing was certified, which a reader must be able to tell
+   * apart from a certification that published `error`. Three fields only: the
+   * description and the target URL belong on the pull request, where the
+   * certifier put them.
+   */
+  readonly certification?: CertificationStatusSummary
 }
 
 /** What a restart may conclude about a workflow it finds in a durable log. */
@@ -323,28 +334,14 @@ export type WorkflowDatabasePreviewResult = WorkflowDatabaseVerificationResult
 export type DatabasePreviewCapabilityPort = DatabaseVerificationCapabilityPort
 
 /**
- * Every state a certification may be published in, and nothing else.
+ * The certification vocabulary, owned by the contracts package.
  *
- * Four states because that is what an external certifier can honestly say: the
- * run is under way, it finished and the revision is certified, it finished and
- * the revision is not, or the question could not be answered at all. The last
- * one matters most — a capability that cannot reach its certifier has not
- * learned the revision is fine, so it says `error` rather than staying quiet
- * and leaving a stale `pending` to be read as caution or as neglect depending
- * on who is reading.
- *
- * Stated as a frozen list rather than a bare union so a run can be checked
- * against it, and so nothing can widen the vocabulary at runtime.
+ * Re-exported rather than restated: the durable journal reads these states back
+ * and cannot depend on the runtime that wrote them, so one definition upstream
+ * of both is the only arrangement in which the two cannot drift apart.
  */
-export const EXTERNAL_CERTIFICATION_STATES = Object.freeze([
-  'pending',
-  'success',
-  'failure',
-  'error',
-] as const)
-
-/** One of {@link EXTERNAL_CERTIFICATION_STATES}. */
-export type ExternalCertificationState = typeof EXTERNAL_CERTIFICATION_STATES[number]
+export { EXTERNAL_CERTIFICATION_STATES } from '@trick-harness/contracts'
+export type { ExternalCertificationState } from '@trick-harness/contracts'
 
 /**
  * What the runtime tells a certification capability, and nothing more.
@@ -376,6 +373,14 @@ export interface WorkflowCertificationResult {
   readonly revision: string
   /** The certifier's own id for the status, so a later read can find it. */
   readonly externalId: string
+  /**
+   * The context the status was published under.
+   *
+   * Reported by the capability rather than assumed by the runtime: the context
+   * is what a branch-protection rule names, and a durable record that guessed
+   * it would be evidence about a check nobody is actually required to pass.
+   */
+  readonly context: string
   /** Where a person can see it. */
   readonly url?: string
   readonly evidence: readonly EvidenceRef[]

@@ -32,6 +32,7 @@ const EXPECTED_EVENTS = [
   'harness/diagnosis',
   'harness/verdict',
   'harness/delivery',
+  'harness/certification',
   'harness/blocker',
   'harness/conformance',
   'harness/change-impact',

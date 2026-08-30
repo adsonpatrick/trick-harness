@@ -441,7 +441,7 @@ Source: [`packages/goal/goal/src/domain.ts:66`](../packages/goal/goal/src/domain
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:177`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:211`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscapability-end--log-only"></a>
 
@@ -459,7 +459,7 @@ Source: [`packages/core/journal/src/types.ts:177`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:141`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:156`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscapability-start--log-only"></a>
 
@@ -483,7 +483,57 @@ Source: [`packages/core/journal/src/types.ts:141`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:134`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:149`](../packages/core/journal/src/types.ts)
+
+<a id="harnesscertification--log-only"></a>
+
+#### `harness/certification` — log-only
+
+```ts persistence-catalog
+/**
+ * One certification published against one revision, as it read back.
+ *
+ * Written after the certifier confirmed its own status, not after the
+ * request was sent: what a reviewer sees is the fact worth keeping, and a
+ * POST that exited zero is not that fact. `summary` is generated from the
+ * state by the runtime and never copied from a model or from command
+ * output, and no target URL, description or credential is carried here —
+ * this log is read back by people and by other processes.
+ */
+'harness/certification': {
+  workflowId: string
+  revision: string
+  externalId: string
+  state: ExternalCertificationState
+  context: string
+  summary: string
+  evidence: EvidenceRef[]
+}
+```
+
+Source: [`packages/core/journal/src/types.ts:201`](../packages/core/journal/src/types.ts)
+
+<a id="harnesschange-impact--log-only"></a>
+
+#### `harness/change-impact` — log-only
+
+```ts persistence-catalog
+/**
+ * One reading of what the change turned out to be, bounded.
+ *
+ * Two of these are written per delivery cycle: what the approved Plan
+ * committed to writing, and what the published branch turned out to hold.
+ * Neither carries a diff — what survives is which surfaces were touched,
+ * what that made the run's risk, what evidence it owes, whether it moves
+ * database state, and how far outside the Plan it reached.
+ *
+ * Written once per reading, so a repair that forced a second delivery
+ * leaves both and the later one is the branch's standing.
+ */
+'harness/change-impact': { workflowId: string } & ChangeImpactStatusSummary
+```
+
+Source: [`packages/core/journal/src/types.ts:87`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscircuit-breaker--log-only"></a>
 
@@ -500,7 +550,7 @@ Source: [`packages/core/journal/src/types.ts:134`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:185`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:219`](../packages/core/journal/src/types.ts)
 
 <a id="harnessconformance--log-only"></a>
 
@@ -521,7 +571,7 @@ Source: [`packages/core/journal/src/types.ts:185`](../packages/core/journal/src/
 'harness/conformance': { workflowId: string } & ConformanceStatusSummary
 ```
 
-Source: [`packages/core/journal/src/types.ts:72`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:74`](../packages/core/journal/src/types.ts)
 
 <a id="harnessdelivery--log-only"></a>
 
@@ -543,7 +593,7 @@ Source: [`packages/core/journal/src/types.ts:72`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:168`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:183`](../packages/core/journal/src/types.ts)
 
 <a id="harnessdiagnosis--log-only"></a>
 
@@ -554,7 +604,7 @@ Source: [`packages/core/journal/src/types.ts:168`](../packages/core/journal/src/
 'harness/diagnosis': { workflowId: string; stageId: string; diagnosis: DiagnosisContract }
 ```
 
-Source: [`packages/core/journal/src/types.ts:152`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:167`](../packages/core/journal/src/types.ts)
 
 <a id="harnessexecutor-end--log-only"></a>
 
@@ -572,7 +622,7 @@ Source: [`packages/core/journal/src/types.ts:152`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:117`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:132`](../packages/core/journal/src/types.ts)
 
 <a id="harnessexecutor-start--log-only"></a>
 
@@ -590,7 +640,7 @@ Source: [`packages/core/journal/src/types.ts:117`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:108`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:123`](../packages/core/journal/src/types.ts)
 
 <a id="harnessfinding--log-only"></a>
 
@@ -601,7 +651,7 @@ Source: [`packages/core/journal/src/types.ts:108`](../packages/core/journal/src/
 'harness/finding': { workflowId: string; stageId: string; finding: Finding }
 ```
 
-Source: [`packages/core/journal/src/types.ts:150`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:165`](../packages/core/journal/src/types.ts)
 
 <a id="harnessroute-decision--log-only"></a>
 
@@ -627,7 +677,7 @@ Source: [`packages/core/journal/src/types.ts:150`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:78`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:93`](../packages/core/journal/src/types.ts)
 
 <a id="harnessroute-fallback--log-only"></a>
 
@@ -653,7 +703,7 @@ Source: [`packages/core/journal/src/types.ts:78`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:96`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:111`](../packages/core/journal/src/types.ts)
 
 <a id="harnessverdict--log-only"></a>
 
@@ -672,7 +722,7 @@ Source: [`packages/core/journal/src/types.ts:96`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:154`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:169`](../packages/core/journal/src/types.ts)
 
 <a id="harnessworkflow-end--log-only"></a>
 
@@ -688,7 +738,7 @@ Source: [`packages/core/journal/src/types.ts:154`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:193`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:227`](../packages/core/journal/src/types.ts)
 
 <a id="harnessworkflow-start--log-only"></a>
 
@@ -715,7 +765,7 @@ Source: [`packages/core/journal/src/types.ts:193`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:44`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:46`](../packages/core/journal/src/types.ts)
 
 ### `hook/*`
 

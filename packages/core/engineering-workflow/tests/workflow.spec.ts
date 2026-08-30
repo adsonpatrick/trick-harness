@@ -2177,6 +2177,7 @@ function certificationStub(
       return {
         revision,
         externalId: `status-${String(published)}`,
+        context: 'a-namespace/a-certification',
         url: 'https://github.com/an-owner/a-product/pull/7',
         evidence: [],
       }
@@ -2380,6 +2381,7 @@ function recorder(options: { readonly revisions?: readonly string[]; readonly fa
         return {
           revision,
           externalId: `status-${String(published)}`,
+          context: 'a-namespace/a-certification',
           url: 'https://github.com/an-owner/a-product/pull/7',
           evidence: [],
         }
@@ -2510,5 +2512,102 @@ describe('publishing the terminal certification', () => {
     expect(outcome.state).not.toBe('completed')
     expect(assessPullRequest(outcome).state).not.toBe('PR_READY')
     expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+})
+
+
+describe('the durable record of what was certified', () => {
+  it('flushes the capability window before publishing and the record after', async () => {
+    const session = Session.create(SessionId('s'))
+    const executors = createExecutorRuntime()
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    /** The harness event types the log held at each durable checkpoint. */
+    const checkpoints: string[][] = []
+    const types = (): string[] => session.events
+      .filter(event => event.type.startsWith('harness/'))
+      .map(event => event.type)
+    const journal = new WorkflowJournal(session, 'wf-1', async () => {
+      checkpoints.push(types())
+      return true
+    })
+    /** What the log held at the moment each publication was asked for. */
+    const atPublish: string[][] = []
+    let published = 0
+    const certification: CertificationCapabilityPort = {
+      publish: async () => {
+        atPublish.push(types())
+        published += 1
+        return {
+          revision: FIRST_REVISION,
+          externalId: `status-${String(published)}`,
+          context: 'a-namespace/a-certification',
+          url: 'https://github.com/an-owner/a-product/pull/7',
+          evidence: [],
+        }
+      },
+    }
+    await new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: { delivery: DELIVERY, certification },
+    }).run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    // The window is what a restart reads to know a status may be standing on
+    // the pull request. Recorded after the request would leave the one case it
+    // exists for — a process that died mid-publication — looking like a run
+    // that never asked.
+    for (const snapshot of atPublish) {
+      expect(snapshot.at(-1)).toBe('harness/capability-start')
+      expect(checkpoints.some(done => done.length === snapshot.length)).toBe(true)
+    }
+    const certified = checkpoints.filter(done => done.includes('harness/certification'))
+    expect(certified.length).toBeGreaterThan(0)
+    const projection = projectWorkflow(session.events, 'wf-1')
+    expect(projection.certifications.map(record => record.state)).toEqual(['pending', 'success'])
+    expect(projection.latestCertification?.revision).toBe(FIRST_REVISION)
+    expect(projection.latestCertification?.context).toBe('a-namespace/a-certification')
+  })
+
+  it('demands a world check when a pending certification was never answered', () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    void journal.certification({
+      revision: FIRST_REVISION,
+      externalId: 'status-1',
+      state: 'pending',
+      context: 'a-namespace/a-certification',
+      summary: 'certification in progress',
+      evidence: [],
+    })
+
+    const assessment = assessRestart(projectWorkflow(session.events, 'wf-1'))
+
+    // A pending status is a mark this run left on a pull request, and a retry
+    // that treated the log as untouched would publish over it without ever
+    // having read what the branch now is.
+    expect(assessment.requiresWorldVerification).toBe(true)
+    expect(assessment.summary).toContain('certification')
+  })
+
+  it('stops demanding one once the certification was answered', () => {
+    const session = Session.create(SessionId('s'))
+    const journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    journal.start(OBJECTIVE)
+    for (const state of ['pending', 'failure'] as const) {
+      void journal.certification({
+        revision: FIRST_REVISION,
+        externalId: 'status-1',
+        state,
+        context: 'a-namespace/a-certification',
+        summary: 'certification finished',
+        evidence: [],
+      })
+    }
+
+    expect(assessRestart(projectWorkflow(session.events, 'wf-1')).requiresWorldVerification).toBe(false)
   })
 })

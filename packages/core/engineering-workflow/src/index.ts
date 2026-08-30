@@ -85,6 +85,7 @@ import {
 import type { ApprovedArtifactTexts } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
+import type { CertificationStatusSummary } from '@trick-harness/contracts'
 import type {
   CertificationCapabilityPort,
   ChangeImpactReader,
@@ -187,7 +188,11 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
   // stage: the difference between the two is who was holding the tool, not
   // whether the world may have moved while nobody was recording it.
   const interrupted = projection.openStages.length > 0 || projection.openCapabilities.length > 0
-  const mutated = projection.deliveries.length > 0
+  // A certification is a mark on a pull request, so a `pending` nobody came
+  // back to is world state this run left behind exactly as a push is. A retry
+  // that read the log as untouched would publish over a branch it has not read.
+  const standingCertification = projection.latestCertification?.state === 'pending'
+  const mutated = projection.deliveries.length > 0 || standingCertification
   // An id, not a fallback to the execution id: a projection with no start
   // event is not a workflow this harness can speak for, and `restartOf` refuses
   // it before ever reaching here.
@@ -211,6 +216,7 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
     reasons.push(`capabilities still open: ${projection.openCapabilities.join(', ')}`)
   }
   for (const delivery of projection.deliveries) reasons.push(`recorded ${delivery.action} on ${delivery.branch}`)
+  if (standingCertification) reasons.push('a certification is standing as pending and was never answered')
   return Object.freeze({
     ...identity,
     state: 'interrupted' as const,
@@ -222,6 +228,21 @@ export function assessRestart(projection: WorkflowProjection): RestartAssessment
       : `workflow was interrupted; verify the world before retrying — ${reasons.join('; ')}`,
   })
 }
+
+/**
+ * What the durable record says about each certification state.
+ *
+ * A fixed sentence per state, selected by the state alone. The certifier writes
+ * its own description on the status, a model writes the stage summaries, and
+ * neither reaches this: a log that quoted either would be a log whose contents
+ * are chosen by whatever produced them.
+ */
+const CERTIFICATION_SUMMARIES: Readonly<Record<ExternalCertificationState, string>> = Object.freeze({
+  pending: 'certification published as pending',
+  success: 'certification published as success',
+  failure: 'certification published as failure',
+  error: 'certification published as error',
+})
 
 /**
  * What one workflow learns about its executors while it runs.
@@ -403,6 +424,9 @@ export class WorkflowRunner {
    * path, and this is what that path reads to know it owes GitHub an answer.
    */
   #pending: PendingCertification | undefined
+
+  /** The last certification this run published, as the outcome reports it. */
+  #certified: CertificationStatusSummary | undefined
   readonly #options: WorkflowRuntimeOptions
   readonly #now: () => number
   #controller: AbortController | undefined
@@ -460,6 +484,7 @@ export class WorkflowRunner {
     const controller = new AbortController()
     this.#controller = controller
     this.#pending = undefined
+    this.#certified = undefined
     try {
       return await this.#drive(request, controller.signal)
     }
@@ -1531,8 +1556,21 @@ export class WorkflowRunner {
           : { objective, state, expectedRevision },
         signal,
       )
+      // Recorded before the window closes, so the durable evidence of what was
+      // published sits inside the window a restart would otherwise have to
+      // reason about. A record the journal refuses is a certification this run
+      // cannot account for, and the catch below treats it as one that failed.
+      await journal.certification({
+        revision: result.revision,
+        externalId: result.externalId,
+        state,
+        context: result.context,
+        summary: CERTIFICATION_SUMMARIES[state],
+        evidence: result.evidence,
+      })
+      this.#certified = { state, revision: result.revision, externalId: result.externalId }
       await journal.endCapability(stageId, name, 'completed', clock() - started)
-      return { revision: result.revision, summary: `certification published as ${state}` }
+      return { revision: result.revision, summary: CERTIFICATION_SUMMARIES[state] }
     }
     catch (error) {
       const canceled = signal.aborted
@@ -1721,6 +1759,7 @@ export class WorkflowRunner {
       executorStarts,
       ...this.#conformance === undefined ? {} : { conformance: this.#conformance },
       ...this.#changeImpact === undefined ? {} : { changeImpact: this.#changeImpact },
+      ...this.#certified === undefined ? {} : { certification: this.#certified },
     })
   }
 }
