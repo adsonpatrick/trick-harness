@@ -14,6 +14,7 @@ import type { ConformanceManifest, DiagnosisContract, Finding, StageResult, Work
 import {
   EXTERNAL_CERTIFICATION_STATES,
   WorkflowError,
+  assessPullRequest,
   WorkflowRunner,
   assessRestart,
   permissionModeFor,
@@ -2269,7 +2270,7 @@ describe('marking a delivered revision as pending certification', () => {
     expect(log).toEqual([
       'implement', 'verify', `pending(${FIRST_REVISION})`, 'review', 'qa',
       'debug', 'repair', 'verify', `pending(${SECOND_REVISION})`, 'qa',
-      'conformance', 'verify',
+      'conformance', 'verify', `success(${SECOND_REVISION})`,
     ])
     // Two windows opened and both closed: a certification that began and never
     // reported back is what a restart has to treat as an unknown world.
@@ -2342,6 +2343,172 @@ describe('marking a delivered revision as pending certification', () => {
     expect(outcome.state).not.toBe('completed')
     expect(outcome.verdict).not.toBe('PASS')
     expect(log).not.toContain('review')
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+})
+
+/** One publication, as the capability was asked for it. */
+interface CertificationCall {
+  readonly state: string
+  readonly expectedRevision: string | undefined
+}
+
+/**
+ * A certification capability that records every call and can be told to fail.
+ *
+ * `revisions` is what it reports having found on the pull request, publication
+ * by publication, so a head that moved between the pending status and the
+ * terminal one can be described without pretending the run chose either value.
+ */
+function recorder(options: { readonly revisions?: readonly string[]; readonly failOn?: string } = {}): {
+  readonly port: CertificationCapabilityPort
+  readonly calls: readonly CertificationCall[]
+} {
+  const calls: CertificationCall[] = []
+  const revisions = options.revisions ?? [FIRST_REVISION]
+  let published = 0
+  return {
+    calls,
+    port: {
+      publish: async (input) => {
+        calls.push({ state: input.state, expectedRevision: input.expectedRevision })
+        const revision = revisions[Math.min(published, revisions.length - 1)] ?? FIRST_REVISION
+        published += 1
+        if (options.failOn === input.state) {
+          throw new Error('the status could not be published for the revision this run delivered')
+        }
+        return {
+          revision,
+          externalId: `status-${String(published)}`,
+          url: 'https://github.com/an-owner/a-product/pull/7',
+          evidence: [],
+        }
+      },
+    },
+  }
+}
+
+describe('publishing the terminal certification', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+  })
+
+  /** Register the reader every stage but the mutating ones is routed to. */
+  const readsEverything = (): void => {
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  }
+
+  /** Build a runner over one certification capability. */
+  const runnerWith = (certification: CertificationCapabilityPort): WorkflowRunner => new WorkflowRunner('wf-1', {
+    profile: PROFILE,
+    policy: POLICY,
+    executors,
+    journal,
+    capabilities: { delivery: DELIVERY, certification },
+  })
+
+  it('certifies success only for the revision it had already marked pending', async () => {
+    readsEverything()
+    const certification = recorder()
+    const outcome = await runnerWith(certification.port)
+      .run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).toBe('completed')
+    expect(assessPullRequest(outcome).state).toBe('PR_READY')
+    // The terminal call names the revision the pending one established, so a
+    // capability that finds a different head has something to refuse against.
+    expect(certification.calls).toEqual([
+      { state: 'pending', expectedRevision: undefined },
+      { state: 'success', expectedRevision: FIRST_REVISION },
+    ])
+  })
+
+  it('publishes failure, never success, for a run that ended without readiness', async () => {
+    readsEverything()
+    const certification = recorder()
+    const outcome = await runnerWith(certification.port).run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'conformance'
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'an obligation is unmet', findings: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(assessPullRequest(outcome).state).not.toBe('PR_READY')
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'failure'])
+  })
+
+  it('publishes error when the run is canceled after the branch was marked pending', async () => {
+    const certification = recorder()
+    const runner = runnerWith(certification.port)
+    executors.register(provider('reviewer', async (request) => {
+      if (!request.task.startsWith('review:')) return passing('reviewer')
+      runner.cancel('caller asked')
+      return { status: 'aborted', output: '' }
+    }))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).toBe('canceled')
+    // A canceled run knows nothing about the branch. That is a different
+    // statement from "the work failed", and the status says so.
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'error'])
+  })
+
+  it('publishes error when the run ends by throwing', async () => {
+    readsEverything()
+    const certification = recorder()
+    const runner = runnerWith(certification.port)
+
+    await expect(runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => {
+        if (stage.role === 'review') throw new Error('the interpreter itself came apart')
+        return interpretAllPass(stage, executor)
+      },
+      task: taskFor,
+      ...CONFORMS,
+    })).rejects.toThrow()
+
+    // A pending status nobody ever came back to is the one outcome a
+    // branch-protection rule cannot distinguish from work still in progress.
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'error'])
+  })
+
+  it('refuses readiness when the head moved between pending and terminal', async () => {
+    readsEverything()
+    const certification = recorder({ revisions: [FIRST_REVISION, SECOND_REVISION] })
+    const outcome = await runnerWith(certification.port)
+      .run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'success'])
+    // Everything this run read was about the revision it delivered. The branch
+    // it would now be certifying is one nothing here has looked at.
+    expect(outcome.state).not.toBe('completed')
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(assessPullRequest(outcome).state).not.toBe('PR_READY')
+  })
+
+  it('refuses readiness when the terminal success could not be published', async () => {
+    readsEverything()
+    const certification = recorder({ failOn: 'success' })
+    const outcome = await runnerWith(certification.port)
+      .run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'success'])
+    // The repository is left holding the pending status, which is exactly the
+    // state that keeps the merge button off. A run may not answer its own
+    // inability to publish by declaring itself ready.
+    expect(outcome.state).not.toBe('completed')
+    expect(assessPullRequest(outcome).state).not.toBe('PR_READY')
     expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
   })
 })

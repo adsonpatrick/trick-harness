@@ -67,7 +67,7 @@ import {
   validateDiagnosis,
 } from './repair.ts'
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
-import { planPullRequestStages } from './lifecycle.ts'
+import { certificationDecision, externalCertificationState, planPullRequestStages } from './lifecycle.ts'
 import {
   impactRoutingFacts,
   planPullRequestCertificationStages,
@@ -293,6 +293,16 @@ interface OverrideBox {
   spent: boolean
 }
 
+/** A certification this run published as pending and has yet to answer. */
+interface PendingCertification {
+  /** The delivery stage that published it, so the terminal window is named for it. */
+  readonly stageId: string
+  /** The revision the capability reported having marked. */
+  readonly revision: string
+  /** The capability that marked it, which is the only one that may answer it. */
+  readonly capability: CertificationCapabilityPort
+}
+
 /** Fresh availability state for one run. */
 function availabilityState(): AvailabilityState {
   return { circuits: new Map(), disabled: new Set(), rerouteStarts: 0 }
@@ -382,6 +392,17 @@ export class WorkflowRunner {
 
   /** The last reading of what this change is, for the outcome to carry out. */
   #changeImpact: ChangeImpactStatusSummary | undefined
+
+  /**
+   * The certification this run has left open on a revision, if any.
+   *
+   * Held on the runner rather than threaded through the terminal paths for one
+   * reason: there are many ways for a run to end and only one of them is the
+   * happy one, and a pending status that is never answered is indistinguishable
+   * from work still in progress. Every ending goes through the same finish
+   * path, and this is what that path reads to know it owes GitHub an answer.
+   */
+  #pending: PendingCertification | undefined
   readonly #options: WorkflowRuntimeOptions
   readonly #now: () => number
   #controller: AbortController | undefined
@@ -438,9 +459,19 @@ export class WorkflowRunner {
     }
     const controller = new AbortController()
     this.#controller = controller
+    this.#pending = undefined
     try {
       return await this.#drive(request, controller.signal)
-    } finally {
+    }
+    catch (error) {
+      // The one ending that does not pass through `#end`. A run that came apart
+      // still marked a revision pending, and leaving that status standing would
+      // hold the pull request in a state that reads as "still working".
+      await this.#answerPending(request.objective, 'error')
+      throw error
+    }
+    finally {
+      this.#pending = undefined
       this.#controller = undefined
     }
   }
@@ -640,7 +671,7 @@ export class WorkflowRunner {
           )
         }
         if (certifier !== undefined) {
-          const pending = await this.#certify(stage, objective, signal, certifier, 'pending')
+          const pending = await this.#certify(stage.stageId, objective, signal, certifier, 'pending')
           if (pending.revision === undefined) {
             // Not a softer verdict and not a warning. A run that could not say
             // "not yet" cannot later be trusted to have said "yes", so it stops
@@ -652,6 +683,7 @@ export class WorkflowRunner {
           }
           certificationStarted = true
           certifiedRevision = pending.revision
+          this.#pending = { stageId: stage.stageId, revision: pending.revision, capability: certifier }
         }
         if (measured) {
           // Only now: what the branch turned out to touch is a fact about a
@@ -1479,7 +1511,7 @@ export class WorkflowRunner {
    * is a state and a revision the capability read for itself.
    */
   async #certify(
-    stage: StageSpec,
+    owner: string,
     objective: WorkflowObjective,
     signal: AbortSignal,
     capability: CertificationCapabilityPort,
@@ -1489,7 +1521,7 @@ export class WorkflowRunner {
     const { journal } = this.#options
     const clock = this.#options.now ?? Date.now
     const name = 'github-certification'
-    const stageId = `${stage.stageId}-certification`
+    const stageId = `${owner}-certification`
     await journal.beginCapability(stageId, name, true)
     const started = clock()
     try {
@@ -1605,7 +1637,79 @@ export class WorkflowRunner {
     verdict: WorkflowVerdict,
     summary: string,
   ): Promise<WorkflowOutcome> {
-    await this.#options.journal.end(state, verdict, summary)
+    let endState = state
+    let endVerdict = verdict
+    let endSummary = summary
+    const pending = this.#pending
+    if (pending !== undefined) {
+      // Built before anything is published, because what is published is a
+      // projection of it: readiness is the existing predicate's answer about
+      // this exact run, not a second opinion assembled here.
+      const candidate = this.#outcome(objective, stages, repairCycles, executorStarts, state, verdict, summary)
+      const published = await this.#answerPending(objective, externalCertificationState({
+        ready: certificationDecision(candidate).ready,
+        verdict,
+        operationalFailure: false,
+        canceled: state === 'canceled',
+      }))
+      if (published !== undefined) {
+        // A success this run could not publish, or published against a head it
+        // never read, is not a success. The verdict a person reads is lowered
+        // to match what the repository will actually show them.
+        endState = 'failed'
+        endVerdict = 'INCONCLUSIVE'
+        endSummary = published
+      }
+    }
+    await this.#options.journal.end(endState, endVerdict, endSummary)
+    return this.#outcome(objective, stages, repairCycles, executorStarts, endState, endVerdict, endSummary)
+  }
+
+  /**
+   * Answer the pending certification this run left open, if it left one.
+   *
+   * The publication is attempted on a fresh signal rather than the run's own.
+   * A canceled run is exactly the case where the status most needs replacing,
+   * and a terminal publication that inherits the cancellation would abandon the
+   * pull request holding the pending status the cancellation was supposed to
+   * clear.
+   * @param objective - The objective, which the capability re-reads its target from.
+   * @param state - The state this run's ending maps to.
+   * @returns Why the run's own verdict must be lowered, or undefined when it need not be.
+   */
+  async #answerPending(
+    objective: WorkflowObjective,
+    state: ExternalCertificationState,
+  ): Promise<string | undefined> {
+    const pending = this.#pending
+    if (pending === undefined) return undefined
+    // Cleared first: one terminal answer per run, whatever happens below.
+    this.#pending = undefined
+    const result = await this.#certify(
+      `${pending.stageId}-final`, objective, new AbortController().signal, pending.capability, state,
+      pending.revision,
+    )
+    if (state !== 'success') return undefined
+    if (result.revision === undefined) {
+      return 'this run could not publish the certification for the revision it delivered, so nothing here says '
+        + 'the branch is ready'
+    }
+    if (result.revision !== pending.revision) {
+      return 'the pull request head moved after this run certified it, so what was reviewed is not what is there'
+    }
+    return undefined
+  }
+
+  /** Assemble the outcome record, so every ending reports the same shape. */
+  #outcome(
+    objective: WorkflowObjective,
+    stages: readonly StageFacts[],
+    repairCycles: number,
+    executorStarts: number,
+    state: WorkflowEndState,
+    verdict: WorkflowVerdict,
+    summary: string,
+  ): WorkflowOutcome {
     return Object.freeze({
       workflowId: this.#workflowId,
       objectiveId: objective.id,

@@ -351,7 +351,7 @@ function externalCertificationState(input: {
 
 Every terminal path that occurs after a `pending` status was published must pass through one helper that attempts terminal certification before the workflow writes its final terminal outcome. No early return may bypass it.
 
-- [ ] **Step 1: Write RED success test** proving call order ends:
+- [x] **Step 1: Write RED success test** proving call order ends:
 
 ```text
 conformance PASS
@@ -361,11 +361,11 @@ certification.publish(success, expectedRevision=latestPendingRevision)
 workflow terminal PR_READY
 ```
 
-- [ ] **Step 2: Write RED non-ready matrix test** covering `FAIL`, `PARTIAL`, `BLOCKED` and terminal `INCONCLUSIVE`; each publishes `failure`, never success.
-- [ ] **Step 3: Write RED cancel/runtime-error tests** proving they publish `error` when a pending certification exists.
-- [ ] **Step 4: Write RED stale-revision test** where the capability reports the PR head moved between pending and terminal; workflow must end `INCONCLUSIVE`/not-ready and never emit `PR_READY`.
-- [ ] **Step 5: Write RED publisher-failure test** proving inability to publish terminal success cannot be converted to `PR_READY`; the repository remains blocked by pending/absent/error status.
-- [ ] **Step 6: Run RED.**
+- [x] **Step 2: Write RED non-ready matrix test** covering `FAIL`, `PARTIAL`, `BLOCKED` and terminal `INCONCLUSIVE`; each publishes `failure`, never success.
+- [x] **Step 3: Write RED cancel/runtime-error tests** proving they publish `error` when a pending certification exists.
+- [x] **Step 4: Write RED stale-revision test** where the capability reports the PR head moved between pending and terminal; workflow must end `INCONCLUSIVE`/not-ready and never emit `PR_READY`.
+- [x] **Step 5: Write RED publisher-failure test** proving inability to publish terminal success cannot be converted to `PR_READY`; the repository remains blocked by pending/absent/error status.
+- [x] **Step 6: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -374,8 +374,8 @@ corepack pnpm vitest run \
   packages/core/engineering-workflow/tests/repair.spec.ts
 ```
 
-- [ ] **Step 7: Refactor terminal outcome construction through one internal finish helper** and implement the mapping above. Preserve user-facing `WorkflowVerdict`; external GitHub state is a separate projection.
-- [ ] **Step 8: Run GREEN + typecheck.**
+- [x] **Step 7: Refactor terminal outcome construction through one internal finish helper** and implement the mapping above. Preserve user-facing `WorkflowVerdict`; external GitHub state is a separate projection.
+- [x] **Step 8: Run GREEN + typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -385,7 +385,7 @@ corepack pnpm vitest run \
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow

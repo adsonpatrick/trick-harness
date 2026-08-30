@@ -11,7 +11,13 @@ import { WorkflowJournal } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
 import type { RoutingPolicy } from '@trick-harness/routing'
 import type { ConformanceManifest, DiagnosisContract, Finding, StageResult, WorkflowObjective, WorkflowVerdict } from '@trick-harness/contracts'
-import { WorkflowRunner, assessPullRequest, certificationDecision, planPullRequestStages } from '../src/index.ts'
+import {
+  WorkflowRunner,
+  assessPullRequest,
+  certificationDecision,
+  externalCertificationState,
+  planPullRequestStages,
+} from '../src/index.ts'
 import type { DeliveryCapabilityPort, PullRequestOutcome, StageFacts, StageSpec, WorkflowOutcome } from '../src/index.ts'
 
 /**
@@ -697,5 +703,39 @@ describe('deciding whether a run may be certified outside the harness', () => {
       { ...PASSING, stageId: 'conformance-1', role: 'conformance' },
       { ...PASSING, stageId: 'verify-final', role: 'verify' },
     ])).summary)
+  })
+})
+
+describe('what a run says on GitHub about itself', () => {
+  it('says success only for a run the readiness predicate called ready', () => {
+    expect(externalCertificationState({
+      ready: true, verdict: 'PASS', operationalFailure: false, canceled: false,
+    })).toBe('success')
+  })
+
+  it('says failure for every verdict a not-ready run can end on', () => {
+    for (const verdict of ['FAIL', 'PARTIAL', 'BLOCKED', 'INCONCLUSIVE'] as const) {
+      expect(externalCertificationState({
+        ready: false, verdict, operationalFailure: false, canceled: false,
+      })).toBe('failure')
+    }
+  })
+
+  it('says error, not failure, when the run could not answer at all', () => {
+    // The distinction is the point: `failure` is a statement about the work,
+    // and a run that was canceled or came apart has made no such statement.
+    expect(externalCertificationState({
+      ready: false, verdict: 'INCONCLUSIVE', operationalFailure: false, canceled: true,
+    })).toBe('error')
+    expect(externalCertificationState({
+      ready: false, verdict: 'INCONCLUSIVE', operationalFailure: true, canceled: false,
+    })).toBe('error')
+  })
+
+  it('never lets a ready verdict outrank a cancellation or an operational failure', () => {
+    for (const [canceled, operationalFailure] of [[true, false], [false, true], [true, true]] as const) {
+      expect(externalCertificationState({ ready: true, verdict: 'PASS', operationalFailure, canceled }))
+        .toBe('error')
+    }
   })
 })
