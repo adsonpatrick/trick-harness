@@ -215,12 +215,12 @@ interface GitHubCertificationTarget {
 }
 ```
 
-- [ ] **Step 1: Write RED command tests** proving every endpoint/argv is fixed and that repository, PR number and SHA are validated before interpolation. Reject repository strings outside `owner/repo`, non-positive PR numbers and non-40-hex SHAs.
-- [ ] **Step 2: Write RED identity tests** for wrong repository, detached/empty branch, closed PR, wrong base branch, PR head branch mismatch, local HEAD vs PR head mismatch and `expectedRevision` mismatch. Every case must perform zero POST-status calls.
-- [ ] **Step 3: Write RED status tests** proving only `pending|success|failure|error` are accepted, context is the constructor's trusted value, descriptions come only from `STATUS_DESCRIPTIONS`, target URL comes from the verified PR, and raw subprocess/model output is absent from errors/evidence/status fields.
-- [ ] **Step 4: Write RED publication verification tests** proving POST is followed by a bounded GET of statuses and the latest matching context must report the requested state; mismatch produces a certification error.
-- [ ] **Step 5: Write RED subprocess lifecycle tests** proving cancellation still waits for whole-process-tree quiescence and no token/environment credential is constructed/injected by this integration.
-- [ ] **Step 6: Run RED.**
+- [x] **Step 1: Write RED command tests** proving every endpoint/argv is fixed and that repository, PR number and SHA are validated before interpolation. Reject repository strings outside `owner/repo`, non-positive PR numbers and non-40-hex SHAs.
+- [x] **Step 2: Write RED identity tests** for wrong repository, detached/empty branch, closed PR, wrong base branch, PR head branch mismatch, local HEAD vs PR head mismatch and `expectedRevision` mismatch. Every case must perform zero POST-status calls.
+- [x] **Step 3: Write RED status tests** proving only `pending|success|failure|error` are accepted, context is the constructor's trusted value, descriptions come only from `STATUS_DESCRIPTIONS`, target URL comes from the verified PR, and raw subprocess/model output is absent from errors/evidence/status fields.
+- [x] **Step 4: Write RED publication verification tests** proving POST is followed by a bounded GET of statuses and the latest matching context must report the requested state; mismatch produces a certification error.
+- [x] **Step 5: Write RED subprocess lifecycle tests** proving cancellation still waits for whole-process-tree quiescence and no token/environment credential is constructed/injected by this integration.
+- [x] **Step 6: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -228,8 +228,8 @@ corepack pnpm vitest run \
   packages/integrations/github-certification/tests/certification.spec.ts
 ```
 
-- [ ] **Step 7: Implement the package** by following the bounded-output, argv-array and `waitForExit()` pattern already proven in `packages/integrations/github-delivery` rather than importing delivery mutation helpers.
-- [ ] **Step 8: Run GREEN + constraints/typecheck.**
+- [x] **Step 7: Implement the package** by following the bounded-output, argv-array and `waitForExit()` pattern already proven in `packages/integrations/github-delivery` rather than importing delivery mutation helpers.
+- [x] **Step 8: Run GREEN + constraints/typecheck.**
 
 ```bash
 corepack pnpm vitest run \
@@ -239,7 +239,7 @@ corepack pnpm run constraints
 corepack pnpm run typecheck
 ```
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
 ```bash
 git add packages/integrations/github-certification
@@ -277,8 +277,8 @@ delivery confirmed
 
 For redelivery after repair, repeat the sequence and replace `certifiedRevision` with the new published revision.
 
-- [ ] **Step 1: Write RED test** proving normal delivery calls certification exactly once with `pending` before Review is dispatched.
-- [ ] **Step 2: Write RED repair test** where a review finding triggers repair/redelivery; assert call order:
+- [x] **Step 1: Write RED test** proving normal delivery calls certification exactly once with `pending` before Review is dispatched.
+- [x] **Step 2: Write RED repair test** where a review finding triggers repair/redelivery; assert call order:
 
 ```text
 pending(sha1)
@@ -291,9 +291,9 @@ re-review
 ```
 
 and assert `sha2` becomes the only revision eligible for terminal success.
-- [ ] **Step 3: Write RED missing-capability test** for Plurora composition semantics: a workflow that requires certification and has no certification port ends fail-closed before a certifying stage can claim readiness.
-- [ ] **Step 4: Write RED same-SHA rerun test** proving a second certification run publishes `pending` again if it reaches the published certification boundary, even if the previous latest status for that SHA was success.
-- [ ] **Step 5: Run RED.**
+- [x] **Step 3: Write RED missing-capability test** for Plurora composition semantics: a workflow that requires certification and has no certification port ends fail-closed before a certifying stage can claim readiness.
+- [x] **Step 4: Write RED same-SHA rerun test** proving a second certification run publishes `pending` again if it reaches the published certification boundary, even if the previous latest status for that SHA was success.
+- [x] **Step 5: Run RED.**
 
 ```bash
 corepack pnpm vitest run \
@@ -302,8 +302,8 @@ corepack pnpm vitest run \
   packages/core/engineering-workflow/tests/repair.spec.ts
 ```
 
-- [ ] **Step 6: Implement pending publication in the workflow owner**, not in a model stage/interpreter. Treat publish failure as external certification failure and do not continue to an eventual `PR_READY` path.
-- [ ] **Step 7: Run GREEN.**
+- [x] **Step 6: Implement pending publication in the workflow owner**, not in a model stage/interpreter. Treat publish failure as external certification failure and do not continue to an eventual `PR_READY` path.
+- [x] **Step 7: Run GREEN.**
 
 ```bash
 corepack pnpm vitest run \
@@ -312,7 +312,7 @@ corepack pnpm vitest run \
   packages/core/engineering-workflow/tests/repair.spec.ts
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add packages/core/engineering-workflow

@@ -86,7 +86,9 @@ import type { ApprovedArtifactTexts } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type {
+  CertificationCapabilityPort,
   ChangeImpactReader,
+  ExternalCertificationState,
   DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   RestartAssessment,
@@ -311,6 +313,16 @@ export interface WorkflowRuntimeOptions {
    * bound is the reason the capability exists.
    */
   readonly capabilities?: WorkflowCapabilities
+  /**
+   * Whether this deployment's work may only be certified externally.
+   *
+   * Composed here rather than read off a request, a profile field or a project
+   * config, for the same reason the capability itself is: a run able to say it
+   * does not need certifying is a run able to answer a branch-protection rule
+   * by declining to be asked. A deployment that sets this and composes no
+   * certification capability is blocked, not quietly exempted.
+   */
+  readonly requireCertification?: boolean
   /** Executors the breaker has marked degraded for this run. */
   readonly degradedExecutors?: readonly string[]
   /** Injectable clock, so a stage's duration is measurable in a test. */
@@ -464,6 +476,12 @@ export class WorkflowRunner {
     // by a fresh delivery, so the stage that re-reads the work reads the diff a
     // person would now see rather than the one that provoked the repair.
     let delivered = false
+    // The revision this run has marked pending, and may therefore later speak
+    // about. Replaced by each redelivery: a repair publishes a second branch,
+    // and a status about the branch it replaced is a status about work nobody
+    // will merge.
+    let certifiedRevision: string | undefined
+    let certificationStarted = false
     // Whether the isolated preview has already passed for this run. A repair
     // and a fresh delivery do not re-verify a schema nothing touched again.
     let schemaVerified = false
@@ -609,6 +627,32 @@ export class WorkflowRunner {
             published.facts.summary)
         }
         delivered = true
+        // The branch exists now, so there is finally a revision to name, and
+        // nobody has reviewed it yet, so there is still time to say the answer
+        // is not known. Both halves matter: this is the window in which a
+        // pending status is the truth.
+        const certifier = this.#options.capabilities?.certification
+        if (this.#options.requireCertification === true && certifier === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'this deployment requires its work to be certified externally, and composed no certification '
+            + 'capability to certify it with',
+          )
+        }
+        if (certifier !== undefined) {
+          const pending = await this.#certify(stage, objective, signal, certifier, 'pending')
+          if (pending.revision === undefined) {
+            // Not a softer verdict and not a warning. A run that could not say
+            // "not yet" cannot later be trusted to have said "yes", so it stops
+            // here rather than continuing towards a readiness it has no way to
+            // publish.
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external', pending.summary,
+            )
+          }
+          certificationStarted = true
+          certifiedRevision = pending.revision
+        }
         if (measured) {
           // Only now: what the branch turned out to touch is a fact about a
           // branch, and before delivery there is none. The planned reading
@@ -651,6 +695,23 @@ export class WorkflowRunner {
           queue.push(...planPullRequestCertificationStages(requirements, certificationPasses))
         }
         continue
+      }
+
+      // A stage that certifies the work speaks about a revision, and where
+      // certification is required, the only revision it may speak about is the
+      // one this run has already marked pending. Checked per stage rather than
+      // once after delivery: a repair replaces the branch mid-run, and the
+      // stages queued behind it must be answering for the branch that exists.
+      if (
+        this.#options.requireCertification === true
+        && CERTIFYING_ROLES.includes(stage.role)
+        && delivered
+        && (!certificationStarted || certifiedRevision === undefined)
+      ) {
+        return await this.#blocked(
+          objective, stages, repairCycles, executorStarts, 'external',
+          `stage ${stage.stageId} certifies work this run has not marked pending certification`,
+        )
       }
 
       executorStarts += 1
@@ -1401,6 +1462,59 @@ export class WorkflowRunner {
           durationMs,
         },
         canceled,
+      }
+    }
+  }
+
+  /**
+   * Publish one external certification state, with the journal opened around it.
+   *
+   * The `capability-start` record is flushed before the capability may post, so
+   * a run that dies between the POST and its own bookkeeping leaves a window a
+   * restart can see is open. That ordering is the whole point: a status may
+   * exist on GitHub that this run never got to record, and an open window says
+   * so where a silence would not.
+   *
+   * No executor start is counted and no model is consulted. What is published
+   * is a state and a revision the capability read for itself.
+   */
+  async #certify(
+    stage: StageSpec,
+    objective: WorkflowObjective,
+    signal: AbortSignal,
+    capability: CertificationCapabilityPort,
+    state: ExternalCertificationState,
+    expectedRevision?: string,
+  ): Promise<{ readonly revision: string | undefined; readonly summary: string }> {
+    const { journal } = this.#options
+    const clock = this.#options.now ?? Date.now
+    const name = 'github-certification'
+    const stageId = `${stage.stageId}-certification`
+    await journal.beginCapability(stageId, name, true)
+    const started = clock()
+    try {
+      const result = await capability.publish(
+        expectedRevision === undefined
+          ? { objective, state }
+          : { objective, state, expectedRevision },
+        signal,
+      )
+      await journal.endCapability(stageId, name, 'completed', clock() - started)
+      return { revision: result.revision, summary: `certification published as ${state}` }
+    }
+    catch (error) {
+      const canceled = signal.aborted
+      await journal.endCapability(
+        stageId, name, canceled ? 'aborted' : 'error', clock() - started,
+        canceled ? 'canceled' : 'certification-error',
+      )
+      return {
+        revision: undefined,
+        // The capability's own message is bounded by contract and names no
+        // command output, no path and no credential.
+        summary: canceled
+          ? 'the run was canceled before its certification could be published'
+          : error instanceof Error ? error.message : 'the certification ended without saying why',
       }
     }
   }

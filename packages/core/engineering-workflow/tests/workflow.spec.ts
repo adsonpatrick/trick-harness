@@ -2151,3 +2151,197 @@ describe('the external certification contract', () => {
     expect(publish).not.toHaveBeenCalled()
   })
 })
+
+/** Two revisions, so a redelivery can be told apart from the branch it replaced. */
+const FIRST_REVISION = '1'.repeat(40)
+const SECOND_REVISION = '2'.repeat(40)
+
+/**
+ * A certification capability that records what it was asked to publish.
+ *
+ * It reports a fresh revision per publication, because that is what a real one
+ * does after a repair pushes a second branch: the run does not tell it which
+ * commit to certify, it asks it which commit is there.
+ */
+function certificationStub(
+  log: string[],
+  revisions: readonly string[] = [FIRST_REVISION],
+): CertificationCapabilityPort {
+  let published = 0
+  return {
+    publish: async (input) => {
+      const revision = revisions[Math.min(published, revisions.length - 1)] ?? FIRST_REVISION
+      published += 1
+      log.push(`${input.state}(${revision})`)
+      return {
+        revision,
+        externalId: `status-${String(published)}`,
+        url: 'https://github.com/an-owner/a-product/pull/7',
+        evidence: [],
+      }
+    },
+  }
+}
+
+/** Interpret every stage as a pass, recording the order the roles were asked in. */
+function loggingInterpret(log: string[]): (stage: StageSpec, executor: string) => StageResult {
+  return (stage, executor) => {
+    log.push(stage.role)
+    return interpretAllPass(stage, executor)
+  }
+}
+
+describe('marking a delivered revision as pending certification', () => {
+  let session: Session
+  let executors: HarnessExecutorRuntime
+  let journal: WorkflowJournal
+
+  beforeEach(() => {
+    session = Session.create(SessionId('s'))
+    executors = createExecutorRuntime()
+    journal = new WorkflowJournal(session, 'wf-1', async () => true)
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+  })
+
+  it('publishes pending once, after the branch exists and before anyone reviews it', async () => {
+    const log: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: { delivery: DELIVERY, certification: certificationStub(log) },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: loggingInterpret(log), task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).toBe('completed')
+    expect(log.filter(entry => entry.startsWith('pending'))).toEqual([`pending(${FIRST_REVISION})`])
+    // Before the review, not merely somewhere in the run: a reviewer opening
+    // the pull request is the first person who could act on a status, and an
+    // absent status is the one thing a branch-protection rule cannot see.
+    expect(log.indexOf(`pending(${FIRST_REVISION})`)).toBeLessThan(log.indexOf('review'))
+    // And after delivery, because before it there is no revision to name.
+    expect(log.indexOf(`pending(${FIRST_REVISION})`)).toBeGreaterThan(log.indexOf('implement'))
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+    expect(JSON.stringify(session.events)).toContain('github-certification')
+  })
+
+  it('publishes pending again for the branch a repair replaced the first one with', async () => {
+    const log: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: {
+        delivery: DELIVERY,
+        certification: certificationStub(log, [FIRST_REVISION, SECOND_REVISION]),
+      },
+    })
+
+    let qaRuns = 0
+    const outcome = await runner.run({
+      objective: { ...OBJECTIVE, risk: 'medium' },
+      interpret: (stage, executor) => {
+        log.push(stage.role)
+        if (stage.role !== 'qa') return interpretAllPass(stage, executor)
+        qaRuns += 1
+        return {
+          role: stage.role,
+          executor,
+          verdict: qaRuns === 1 ? 'FAIL' : 'PASS',
+          summary: qaRuns === 1 ? 'negative path throws' : 'negative path handled',
+          findings: qaRuns === 1 ? [{ ...bug(), raisedBy: 'qa' }] : [],
+          evidence: [],
+        }
+      },
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('completed')
+    // The first revision is marked pending, reviewed, found wanting, repaired,
+    // and the branch that replaces it is marked pending in its own right.
+    expect(log).toEqual([
+      'implement', 'verify', `pending(${FIRST_REVISION})`, 'review', 'qa',
+      'debug', 'repair', 'verify', `pending(${SECOND_REVISION})`, 'qa',
+      'conformance', 'verify',
+    ])
+    // Two windows opened and both closed: a certification that began and never
+    // reported back is what a restart has to treat as an unknown world.
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+
+  it('marks the same revision pending again on a rerun, whatever it said last time', async () => {
+    const runs: string[][] = []
+    for (const _pass of [1, 2]) {
+      const log: string[] = []
+      const fresh = Session.create(SessionId('s'))
+      const runner = new WorkflowRunner('wf-1', {
+        profile: PROFILE,
+        policy: POLICY,
+        executors,
+        journal: new WorkflowJournal(fresh, 'wf-1', async () => true),
+        capabilities: { delivery: DELIVERY, certification: certificationStub(log) },
+      })
+      await runner.run({ objective: OBJECTIVE, interpret: loggingInterpret(log), task: taskFor, ...CONFORMS })
+      runs.push(log.filter(entry => entry.startsWith('pending')))
+    }
+
+    // A green tick left over from an earlier run describes an earlier run. The
+    // second one re-opens the question for the same commit rather than
+    // inheriting the answer.
+    expect(runs).toEqual([[`pending(${FIRST_REVISION})`], [`pending(${FIRST_REVISION})`]])
+  })
+
+  it('ends fail-closed when certification is required and this deployment composed none', async () => {
+    const log: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      requireCertification: true,
+      capabilities: { delivery: DELIVERY },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: loggingInterpret(log), task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.verdict).not.toBe('PASS')
+    // Blocked before a certifying stage could claim anything: a run that
+    // reviews and conforms and then discovers it cannot publish a status has
+    // already produced the transcript someone would merge on.
+    expect(log).not.toContain('review')
+    expect(projectWorkflow(session.events, 'wf-1').blockers.at(-1)?.kind).toBe('external')
+  })
+
+  it('does not reach readiness when the pending status could not be published', async () => {
+    const log: string[] = []
+    const runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: {
+        delivery: DELIVERY,
+        certification: {
+          publish: async () => {
+            throw new Error('the pull request head moved while the status was being published')
+          },
+        },
+      },
+    })
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: loggingInterpret(log), task: taskFor, ...CONFORMS })
+
+    expect(outcome.state).not.toBe('completed')
+    expect(outcome.verdict).not.toBe('PASS')
+    expect(log).not.toContain('review')
+    expect(projectWorkflow(session.events, 'wf-1').openCapabilities).toEqual([])
+  })
+})
