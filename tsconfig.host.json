@@ -259,6 +259,7 @@
     { "path": "./packages/composition/runtime" },
     { "path": "./packages/providers/codex" },
     { "path": "./packages/providers/opencode" },
+    { "path": "./packages/integrations/github-certification" },
     { "path": "./packages/integrations/github-delivery" },
     { "path": "./packages/integrations/supabase-preview" },
     { "path": "./packages/test-support/agent-loop-testkit" },
