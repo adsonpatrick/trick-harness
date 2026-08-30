@@ -559,8 +559,8 @@ cancellation after pending                         -> error, not success
 model/raw output contains secret/path material      -> status description remains fixed safe text
 ```
 
-- [ ] **Step 1: Implement the adversarial tests using fakes at the subprocess/capability seam**, not by mocking the readiness predicate itself.
-- [ ] **Step 2: Run the focused matrix.**
+- [x] **Step 1: Implement the adversarial tests using fakes at the subprocess/capability seam**, not by mocking the readiness predicate itself.
+- [x] **Step 2: Run the focused matrix.**
 
 ```bash
 corepack pnpm vitest run \
@@ -570,8 +570,8 @@ corepack pnpm vitest run \
   packages/integrations/github-certification/tests/certification.spec.ts
 ```
 
-- [ ] **Step 3: Fix only confirmed Plan H defects and rerun the affected tests.**
-- [ ] **Step 4: Commit.**
+- [x] **Step 3: Fix only confirmed Plan H defects and rerun the affected tests.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add profiles/plurora/tests packages/core/engineering-workflow/tests packages/integrations/github-certification/tests

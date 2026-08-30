@@ -2448,6 +2448,32 @@ describe('publishing the terminal certification', () => {
     expect(certification.calls.map(call => call.state)).toEqual(['pending', 'failure'])
   })
 
+  it('publishes failure, never success, for a run that ended blocked', async () => {
+    readsEverything()
+    const certification = recorder()
+    const outcome = await runnerWith(certification.port).run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'review'
+        ? {
+          role: stage.role,
+          executor,
+          verdict: 'BLOCKED',
+          summary: 'this needs a person',
+          findings: [],
+          evidence: [],
+        }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    // Blocked is a statement about the work — it was looked at and it stopped —
+    // so it is `failure` rather than `error`. The distinction matters to whoever
+    // reads the pull request: `error` says nothing was established.
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(certification.calls.map(call => call.state)).toEqual(['pending', 'failure'])
+  })
+
   it('publishes error when the run is canceled after the branch was marked pending', async () => {
     const certification = recorder()
     const runner = runnerWith(certification.port)

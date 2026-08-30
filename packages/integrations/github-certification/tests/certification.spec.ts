@@ -316,6 +316,25 @@ describe('what the status actually says', () => {
     expect(posted('description')).not.toContain(OBJECTIVE.requirement)
   })
 
+  it('says nothing about the work even when the run is shouting a secret at it', async () => {
+    const secret = 'ghp_0123456789abcdefghijklmnopqrstuvwxyz'
+    const objective = {
+      ...OBJECTIVE,
+      requirement: `rotate ${secret} in ${CWD}/.env`,
+    }
+
+    await certification().publish({ objective, state: 'pending' })
+
+    // Not filtered out of the description: never put in one. Everything a
+    // status carries is chosen from the state, which is why there is no field
+    // for a run to reach a status page through, however it phrases itself.
+    expect(posted('description')).toBe('Harness engineering certification in progress')
+    const everything = JSON.stringify(argvs())
+    expect(everything).not.toContain(secret)
+    expect(everything).not.toContain('.env')
+    expect(everything).not.toContain(CWD)
+  })
+
   it('publishes exactly the state it was asked for', async () => {
     scripts = happyPath('failure')
 
@@ -365,6 +384,28 @@ describe('verifying that the status really landed', () => {
     const result = await certification().publish({ objective: OBJECTIVE, state: 'success' })
 
     expect(result.externalId).toBe('99')
+  })
+
+  it('accepts its own pending as the answer even where an older success is standing on the commit', async () => {
+    // A commit that a previous run already certified green is exactly what a
+    // re-run starts from. The status that decides the branch-protection rule is
+    // the latest one for the context, so publishing pending over a standing
+    // success is the whole of putting the merge button back off.
+    scripts = happyPath()
+    scripts.unshift({
+      match: argv => argv[0] === 'gh' && argv[1] === 'api' && String(argv[2]).includes('/statuses'),
+      respond: () => ({
+        exitCode: 0,
+        stdout: statuses(
+          { state: 'pending', context: CONTEXT, id: 500 },
+          { state: 'success', context: CONTEXT, id: 12 },
+        ),
+      }),
+    })
+
+    const result = await certification().publish({ objective: OBJECTIVE, state: 'pending' })
+
+    expect(result.externalId).toBe('500')
   })
 
   it('fails when the read-back itself cannot be performed', async () => {
