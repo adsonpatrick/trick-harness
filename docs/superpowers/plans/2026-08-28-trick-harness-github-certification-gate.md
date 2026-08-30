@@ -597,13 +597,13 @@ corepack pnpm run test:trick
 corepack pnpm --filter @trick-harness/plurora-host test
 ```
 
-- [ ] **Step 1: Run all deterministic gates fresh** and record command, exit status and material result.
-- [ ] **Step 2: Run a real authenticated read-only GitHub certification canary on the Plan H implementation PR** using native `gh` auth and a dedicated non-required canary context, ending in a non-success state. This proves the real endpoint/identity/read-back path without falsely claiming the Trick PR itself passed Plurora's production certification contract.
-- [ ] **Step 3: Re-read the canary commit statuses** and verify exact SHA/context/latest state through GitHub.
-- [ ] **Step 4: Perform independent code/security review** of endpoint construction, repository/head binding, status-state mapping, fixed safe descriptions, subprocess lifecycle, durability ordering and absence of merge authority.
-- [ ] **Step 5: Fix confirmed defects and rerun all affected gates.**
-- [ ] **Step 6: Record the final reviewed exact Trick Harness SHA.** This SHA supersedes the post-Plan-G intermediate SHA for initial NeuroVia installation.
-- [ ] **Step 7: Update README only with implemented/proven behavior and commit.**
+- [x] **Step 1: Run all deterministic gates fresh** and record command, exit status and material result.
+- [x] **Step 2: Run a real authenticated read-only GitHub certification canary on the Plan H implementation PR** using native `gh` auth and a dedicated non-required canary context, ending in a non-success state. This proves the real endpoint/identity/read-back path without falsely claiming the Trick PR itself passed Plurora's production certification contract.
+- [x] **Step 3: Re-read the canary commit statuses** and verify exact SHA/context/latest state through GitHub.
+- [x] **Step 4: Perform independent code/security review** of endpoint construction, repository/head binding, status-state mapping, fixed safe descriptions, subprocess lifecycle, durability ordering and absence of merge authority.
+- [x] **Step 5: Fix confirmed defects and rerun all affected gates.**
+- [x] **Step 6: Record the final reviewed exact Trick Harness SHA.** This SHA supersedes the post-Plan-G intermediate SHA for initial NeuroVia installation.
+- [x] **Step 7: Update README only with implemented/proven behavior and commit.**
 
 ```bash
 git add README.trick-harness.md docs/verification/2026-08-28-harness-v2-plan-h-certification-evidence.md
