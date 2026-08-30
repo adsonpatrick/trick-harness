@@ -39,6 +39,7 @@ import {
   STATUS_DESCRIPTIONS,
   assertCertificationState,
   assertPullRequestNumber,
+  assertPullRequestUrl,
   assertRepository,
   assertRevision,
   createStatusArgv,
@@ -319,6 +320,11 @@ export class GitHubCertification implements CertificationCapabilityPort {
       throw new CertificationError('no-pull-request', 'the branch has no pull request, so there is nothing to certify')
     }
     const pullRequestNumber = assertPullRequestNumber(number)
+    // The two readings are compared against each other rather than each being
+    // checked for shape. `gh pr view` answers for whichever pull request the
+    // branch belongs to, which in a fork is one in the parent repository, and
+    // that is a pull request this capability is not bound to certify.
+    assertPullRequestUrl(this.#repository, pullRequestNumber, url)
 
     // Read again through the API rather than trusting the branch-relative view:
     // this is the reading that names the repository and the number explicitly,
@@ -356,9 +362,9 @@ export class GitHubCertification implements CertificationCapabilityPort {
         'the branch moved after the run established what it was certifying, so that reading no longer describes it',
       )
     }
-    // Validated separately from the shape check above: the URL is published as
-    // a status field, and `createStatusArgv` refuses anything that is not a
-    // GitHub pull-request URL rather than trusting this one to be.
+    // Checked twice on purpose: above against the number that was read beside
+    // it, and again in `createStatusArgv` against the repository the status is
+    // posted to, because that is the last place it can still be refused.
     return Object.freeze({
       repository: this.#repository,
       pullRequestNumber,

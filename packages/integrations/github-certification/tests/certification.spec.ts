@@ -222,6 +222,29 @@ describe('what stops a publication before it reaches GitHub', () => {
     expect(argvs().some(isPost)).toBe(false)
   })
 
+  it('refuses a pull request that is not in the repository it was bound to', async () => {
+    // `gh pr view` resolves the branch's pull request, and in a fork it names
+    // one in the parent repository. Everything else here still agrees, so the
+    // URL is the only reading that says so.
+    override({
+      match: starts('gh', 'pr', 'view'),
+      respond: () => ({ exitCode: 0, stdout: JSON.stringify({ number: 7, url: 'https://github.com/upstream/repo/pull/7' }) }),
+    })
+
+    expect((await refusal()).code).toBe('invalid-identity')
+    expect(argvs().some(isPost)).toBe(false)
+  })
+
+  it('refuses a pull request whose URL names a different number than the one read', async () => {
+    override({
+      match: starts('gh', 'pr', 'view'),
+      respond: () => ({ exitCode: 0, stdout: JSON.stringify({ number: 7, url: 'https://github.com/owner/repo/pull/9' }) }),
+    })
+
+    expect((await refusal()).code).toBe('invalid-identity')
+    expect(argvs().some(isPost)).toBe(false)
+  })
+
   it('refuses on a detached head, where there is no branch to certify', async () => {
     override({ match: starts('git', 'branch'), respond: () => ({ exitCode: 0, stdout: '\n' }) })
 

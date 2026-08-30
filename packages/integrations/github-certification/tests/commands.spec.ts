@@ -192,6 +192,19 @@ describe('validating identity before it is ever interpolated', () => {
     }
   })
 
+  it('refuses a pull-request URL that belongs to another repository', () => {
+    // The URL is read from `gh pr view`, which resolves a branch's pull request
+    // and will happily name one in a parent repository when the checkout is a
+    // fork. A status carrying that URL points a reviewer at somebody else's
+    // pull request while claiming to certify this one's head.
+    expect(() => createStatusArgv('owner/repo', SHA, {
+      state: 'pending',
+      context: 'c',
+      description: STATUS_DESCRIPTIONS.pending,
+      targetUrl: 'https://github.com/upstream/repo/pull/7',
+    })).toThrow(CertificationError)
+  })
+
   it('bounds the context, because it is what a branch-protection rule names', () => {
     expect(CERTIFICATION_CONTEXT_MAX).toBeLessThanOrEqual(255)
     expect(() => createStatusArgv('owner/repo', SHA, {

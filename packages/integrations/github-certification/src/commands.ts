@@ -54,8 +54,36 @@ const REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/
 /** A full, lowercase, unabbreviated commit id. */
 const REVISION = /^[0-9a-f]{40}$/
 
-/** A pull-request URL on GitHub itself, over TLS. */
-const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\/pull\/[1-9][0-9]*$/
+/** A pull-request URL on GitHub itself, over TLS, in one named repository. */
+const pullRequestUrlOf = (repository: string, number?: number): string =>
+  `https://github.com/${repository}/pull/${number === undefined ? '' : String(number)}`
+
+/** A pull-request number, as the tail of a URL that named one. */
+const PULL_REQUEST_NUMBER = /^[1-9][0-9]*$/
+
+/**
+ * Check that a URL is the pull request it is supposed to be pointing at.
+ *
+ * Shape alone is not enough. The URL is read from `gh pr view`, which resolves
+ * whichever pull request the current branch belongs to — and in a fork that is
+ * one in the parent repository. A status carrying that URL sends a reviewer to
+ * somebody else's pull request under this deployment's own context, so the
+ * repository and the number are both compared rather than merely parsed.
+ * @param repository - Validated `owner/repo` this certification is bound to.
+ * @param number - The pull-request number that was read alongside the URL.
+ * @param url - The URL as `gh` reported it.
+ * @returns The same URL, once it is known to name that pull request.
+ * @throws CertificationError when it names anything else.
+ */
+export function assertPullRequestUrl(repository: string, number: number, url: string): string {
+  if (url !== pullRequestUrlOf(assertRepository(repository), assertPullRequestNumber(number))) {
+    throw new CertificationError(
+      'invalid-identity',
+      'the pull-request URL that was read names a different pull request than the one this capability certifies',
+    )
+  }
+  return url
+}
 
 /** A certification that cannot be published as asked, or cannot be trusted. */
 export class CertificationError extends Error {
@@ -252,10 +280,17 @@ export function createStatusArgv(repository: string, revision: string, body: Sta
       'a status description is one of the fixed strings for its state, and this is not one of them',
     )
   }
-  if (!PULL_REQUEST_URL.test(body.targetUrl)) {
+  // Bound to `owner`, not merely to GitHub: a well-formed URL for another
+  // repository is exactly the value a fork's `gh pr view` hands back, and it
+  // would be published as where to go to read this certification.
+  const prefix = pullRequestUrlOf(owner)
+  if (
+    !body.targetUrl.startsWith(prefix)
+    || !PULL_REQUEST_NUMBER.test(body.targetUrl.slice(prefix.length))
+  ) {
     throw new CertificationError(
       'invalid-identity',
-      'a status points at the pull request it certifies, and that is not a pull-request URL',
+      'a status points at a pull request of the repository it certifies, and that URL does not',
     )
   }
   return [
