@@ -1,7 +1,7 @@
 # Plan H evidence — GitHub certification gate for pull-request readiness
 
 Recorded 2026-08-30 for the Trick Harness working tree at
-`953e286ed495bf913c1c7025aec441953e82f292`, branch
+`353697dca90ffa0802be8858da317a2395e29470`, branch
 `feat/harness-v2-plan-h-github-certification`.
 
 This file supersedes `docs/verification/2026-08-28-change-impact-risk-enforcement-evidence.md`
@@ -18,7 +18,7 @@ All run fresh on the recorded source. Every one exited 0.
 | `corepack pnpm run typecheck` | pass |
 | `corepack pnpm run lint` | pass |
 | `corepack pnpm run build` | pass |
-| `corepack pnpm run test:trick` | pass — 102 files, 2491 tests |
+| `corepack pnpm run test:trick` | pass — 102 files, 2494 tests |
 | `corepack pnpm --filter @trick-harness/plurora-host test` | pass — 10 files, 186 tests |
 
 ## 2. Real authenticated certification canary
@@ -95,7 +95,8 @@ and revision against their own assertions, the state against the closed
 vocabulary, the context against `1..CERTIFICATION_CONTEXT_MAX` (100), the
 description by strict equality with `STATUS_DESCRIPTIONS[state]` and against
 `CERTIFICATION_DESCRIPTION_MAX` (120), and the target URL against a
-pull-request URL pattern. There is no code path that composes a status field
+pull-request URL of the repository being posted to (see the defect below).
+There is no code path that composes a status field
 from a prompt, a model summary, command output, a filesystem path or a
 connection string.
 
@@ -156,7 +157,21 @@ certifier a profile does not enable, and a profile requiring certification with
 nothing composed to certify through. Merge, release and deploy remain
 human-controlled.
 
-**No confirmed defects.** One residual is recorded rather than changed: when
+**One confirmed defect, fixed.** The pull-request URL published as the status
+target is read from `gh pr view`, which resolves whichever pull request the
+current branch belongs to — and in a fork that is one in the *parent*
+repository. It was validated for shape only: any well-formed
+`https://github.com/<owner>/<repo>/pull/<n>` passed, including one naming a
+repository this capability is not bound to. Every other reading could still
+agree, so a status correctly posted to the bound repository's head could carry
+a link sending a reviewer to a foreign pull request, under this deployment's
+own context. Fixed in `fix(trick): bind the certified pull-request URL to its
+repository`: `assertPullRequestUrl` compares the URL against the repository and
+the number read beside it, and `createStatusArgv` independently requires the
+URL to name a pull request of the repository the status is being posted to.
+Three tests cover it — one at the argv seam and two at the capability's.
+
+One residual is recorded rather than changed: when
 the capability throws something that is not a `CertificationError` — a seam
 failure, say — `#certify` returns `error.message` as the run's end summary. The
 journalled certification summary is always the fixed `CERTIFICATION_SUMMARIES`
@@ -166,19 +181,27 @@ noted here as an assumption open to correction, not as a Plan H regression.
 
 ## 5. Fixes
 
-None. The review confirmed no defects, so no gate needed rerunning. Both test
-failures encountered while building the Task 7 matrix were incorrect
-assertions in the new tests, corrected there; neither was a product defect.
+One: the target-URL repository binding described in section 4. Written
+test-first — three failing tests, then the fix — and every deterministic gate
+in section 1 was rerun on the result, all exiting 0, with `test:trick` moving
+from 2491 to 2494 tests. Nothing else was changed.
+
+The two test failures encountered while building the Task 7 matrix were
+incorrect assertions in the new tests, corrected there; neither was a product
+defect.
 
 ## 6. Head SHA
 
 ```text
-953e286ed495bf913c1c7025aec441953e82f292
+353697dca90ffa0802be8858da317a2395e29470
 ```
 
-Its parent is `d0850e5452` (`feat(trick): add external certification capability
-contract`). Every gate, canary, re-read and review in sections 1 through 5 was
-run on the source this commit records. The only thing added after the last of
+Its parent is `f05546eee7` (`docs(trick): record Plan H certification
+evidence`), and the source it fixes is `953e286ed4`, the revision sections 2
+and 3 certified against real GitHub. Every gate in section 1 was rerun on the
+source this commit records; the canary and the re-read were performed on its
+grandparent, before the fix, and the fix narrows what may be published without
+changing the path they exercised. The only thing added after the last of
 them is documentation — this file, the README paragraph and the plan's
 checkboxes — so no runtime, profile or test file differs between what was
 gated and what is recorded here.
