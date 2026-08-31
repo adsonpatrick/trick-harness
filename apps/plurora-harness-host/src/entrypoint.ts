@@ -72,18 +72,23 @@ function refuse(message: string): never {
 /** Parse the only command-line settings the executable accepts. */
 export function parsePluroraHostArgs(argv: readonly string[], cwd: string): PluroraHostInvocation {
   if (!isAbsolute(cwd)) refuse('the current working directory must be absolute')
-  if (argv.length === 1 && argv[0] === '--help') return { help: true, projectRoot: resolve(cwd) }
-  if (argv.includes('--help')) refuse('--help cannot be combined with a host start')
+  // pnpm forwards its conventional argument separator to a workspace script.
+  // It belongs to the package-manager invocation, not to this host's surface.
+  const argumentsAfterSeparator = argv[0] === '--' ? argv.slice(1) : argv
+  if (argumentsAfterSeparator.length === 1 && argumentsAfterSeparator[0] === '--help') {
+    return { help: true, projectRoot: resolve(cwd) }
+  }
+  if (argumentsAfterSeparator.includes('--help')) refuse('--help cannot be combined with a host start')
 
   let projectRoot = resolve(cwd)
   let sessionId: string | undefined
   let sawProjectRoot = false
   let sawSessionId = false
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index]
+  for (let index = 0; index < argumentsAfterSeparator.length; index += 1) {
+    const argument = argumentsAfterSeparator[index]
     if (argument === '--project-root') {
       if (sawProjectRoot) refuse('--project-root was supplied more than once')
-      const value = argv[index + 1]
+      const value = argumentsAfterSeparator[index + 1]
       if (value === undefined || value.trim() === '') refuse('--project-root requires an absolute path')
       if (!isAbsolute(value)) refuse('--project-root requires an absolute path')
       projectRoot = resolve(value)
@@ -93,7 +98,7 @@ export function parsePluroraHostArgs(argv: readonly string[], cwd: string): Plur
     }
     if (argument === '--session-id') {
       if (sawSessionId) refuse('--session-id was supplied more than once')
-      const value = argv[index + 1]
+      const value = argumentsAfterSeparator[index + 1]
       if (value === undefined || value.trim() === '') refuse('--session-id requires a non-blank id')
       sessionId = value
       sawSessionId = true

@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { resolve } from 'node:path'
 import type { PluroraHost, PluroraHostOptions } from '../src/main.ts'
+import { runProcess } from '../src/bin.ts'
 import { parsePluroraHostArgs, runPluroraHost, type PluroraHostRuntime } from '../src/entrypoint.ts'
 
 /** A valid default invocation for a fake NeuroVia checkout. */
@@ -82,6 +83,12 @@ describe('parsePluroraHostArgs', () => {
     })
   })
 
+  it('accepts pnpm’s leading argument separator', () => {
+    expect(parsePluroraHostArgs(['--', '--help'], '/repo')).toStrictEqual({
+      help: true, projectRoot: resolve('/repo'),
+    })
+  })
+
   it.each([
     [['--project-root', 'relative']],
     [['--project-root']],
@@ -136,5 +143,31 @@ describe('runPluroraHost', () => {
     expect(fake.disposal).toEqual(['subprocess'])
     expect(fake.lines).toEqual(['error:plurora-host: Error: catalogue unavailable'])
     expect(fake.lines.join('\n')).not.toContain('redacted')
+  })
+})
+
+describe('runProcess', () => {
+  it('maps Node process input without force-exiting during teardown', async () => {
+    const stdout: string[] = []
+    const stderr: string[] = []
+    const listeners = new Map<string, () => void>()
+    const processLike = {
+      argv: ['node', 'bin.ts', '--help'],
+      cwd: () => '/repo',
+      env: {},
+      stdout: { write: (line: string) => { stdout.push(line) } },
+      stderr: { write: (line: string) => { stderr.push(line) } },
+      on: (event: string, listener: () => void) => { listeners.set(event, listener) },
+      off: (event: string, listener: () => void) => {
+        if (listeners.get(event) === listener) listeners.delete(event)
+      },
+      exitCode: undefined as number | undefined,
+    }
+
+    await expect(runProcess(processLike)).resolves.toBe(0)
+    expect(processLike.exitCode).toBe(0)
+    expect(stdout.join('')).toContain('Usage: plurora-host')
+    expect(stderr).toEqual([])
+    expect(listeners).toEqual(new Map())
   })
 })
