@@ -14,6 +14,7 @@
     "@deepseek-ai/dsh-session-persistence-jsonl": "workspace:^",
     "@deepseek-ai/dsh-subagent-codex": "workspace:^",
     "@deepseek-ai/dsh-subprocess": "workspace:^",
+    "@deepseek-ai/dsh-subprocess-local": "workspace:^",
     "@opencode-ai/sdk": "1.18.23",
     "@trick-harness/change-impact": "workspace:^",
     "@trick-harness/composition": "workspace:^",
