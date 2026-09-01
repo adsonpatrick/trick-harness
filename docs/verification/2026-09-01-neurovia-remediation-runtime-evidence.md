@@ -143,5 +143,5 @@ quiescent in both smokes.
 
 ```text
 1ca7c218b2 feat(trick): expose stable Plurora host CLI        <- installation authority
-<evidence commit> docs(trick): record NeuroVia remediation runtime evidence
+9cecb0658b docs(trick): record NeuroVia remediation runtime evidence
 ```
