@@ -137,6 +137,21 @@ The installation topology deliberately avoids importing private `@trick-harness/
 
 The enablement plan is implemented. `apps/plurora-harness-host` is a runnable Plurora host: it reads `plurora-harness.json`, refuses a policy-version mismatch, resolves every Plurora semantic tier against the native OpenCode and Codex catalogues, opens a durable JSONL session under `.plurora-harness/sessions`, composes the Plurora profile and binds the control server to the configured loopback address with the caller-supplied token. Nothing is ready before every one of those questions has been answered, and `dispose()` unwinds what was opened in reverse.
 
+The host is exposed to consumers through one stable root script — `corepack pnpm run plurora-host` — which is the deployment contract and the only surface a consumer needs to know. It accepts two subcommands:
+
+```text
+corepack pnpm run plurora-host -- validate --project-root <absolute-neurovia-root>
+corepack pnpm run plurora-host -- serve --project-root <absolute-neurovia-root> --ready-file <absolute-json-path>
+```
+
+`validate` runs the same deployment-config and native model-catalogue validation `serve` starts the host on — the two commands share one reading — and changes nothing on the machine: no durable session, no control port, no GitHub or database mutation. `serve` reads the control token only from `PLURORA_HARNESS_TOKEN`, starts the host, binds loopback, and only after the control server is listening atomically publishes a non-secret ready document at `--ready-file`:
+
+```text
+{"schemaVersion":1,"status":"READY","controlUrl":"http://127.0.0.1:<port>"}
+```
+
+The ready document carries no token, credential, database URL or provider output. The legacy bare invocation (`plurora-host --project-root <path> [--session-id <id>]`) remains accepted and starts the host without a ready file. A consumer never needs pnpm filter syntax, workspace package paths, `tsx` invocation details or Corepack cache layout.
+
 Database verification is a capability the deployment supplies rather than a strategy the runtime knows: this host executes one fixed project command and no other, and it configures no Supabase integration, because the composition refuses two owners of one database.
 
 **What is still unproven:** the NeuroVia end-to-end database canary, which waits on the project's own verification command (Plan C), and the Supabase Preview Branch path, which waits on an entitlement the organization does not have.

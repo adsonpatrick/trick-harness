@@ -57,6 +57,7 @@ function fakeRuntime(environment: Record<string, string | undefined> = { PLURORA
       connect: () => { throw new Error('not reached') },
     })),
     start,
+    writeReadyFile: vi.fn(async () => {}),
   }
   return {
     runtime,
@@ -108,7 +109,10 @@ describe('runPluroraHost', () => {
 
     expect(result).toBe(0)
     expect(fake.start).not.toHaveBeenCalled()
-    expect(fake.lines).toEqual(['out:Usage: plurora-host [--project-root <absolute-path>] [--session-id <id>]'])
+    expect(fake.lines).toEqual([
+      'out:Usage: plurora-host <validate|serve> --project-root <absolute-path> [--ready-file <absolute-path>]'
+      + '\n       plurora-host [--project-root <absolute-path>] [--session-id <id>]',
+    ])
   })
 
   it('does not construct a runtime when the inherited token is blank', async () => {
