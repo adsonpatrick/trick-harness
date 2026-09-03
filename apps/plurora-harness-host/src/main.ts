@@ -133,6 +133,52 @@ export interface PluroraHost {
   dispose(): Promise<void>
 }
 
+/** The validated deployment and registry a host start or a CLI validation is built on. */
+export interface PluroraDeploymentValidation {
+  /** The deployment this checkout would run. */
+  readonly config: PluroraDeploymentConfig
+  /** The models behind the profile's semantic tiers. */
+  readonly registry: ModelRegistry
+}
+
+/**
+ * Validate a deployment without changing the machine.
+ *
+ * Everything that can refuse this deployment runs here before anything that
+ * changes the machine: the file is read, the policy version is matched, and
+ * both native catalogues are asked whether the models exist — all of which are
+ * questions. A validation that fails the model gate therefore leaves no
+ * session directory, no registered executor and no open port, which is what
+ * makes "not ready" a state an operator can trust rather than a race they have
+ * to clean up after. `serve` and the stable `validate` CLI command share this
+ * one reading, so the command that checks a deployment and the command that
+ * runs it can never answer the question differently.
+ *
+ * @param options - the project root and read-only access to the native catalogues.
+ * @returns the validated deployment and the registry built for it.
+ * @throws {PluroraHostError} when the deployment pins a policy this checkout
+ *   does not carry.
+ * @throws {DeploymentConfigError} when the deployment file is missing or breaks a rule.
+ * @throws {ModelRegistryError} when a routed tier has no model behind it, or
+ *   names one the relevant native catalogue does not advertise.
+ */
+export async function validatePluroraDeployment(
+  options: { readonly projectRoot: string; readonly catalogue: ModelCatalogReader },
+): Promise<PluroraDeploymentValidation> {
+  const config = await loadDeploymentConfig(options.projectRoot)
+  if (config.policyVersion !== pluroraProfile.policyVersion) {
+    throw new PluroraHostError(
+      `this deployment pins policy ${JSON.stringify(config.policyVersion)} and this checkout carries `
+      + `${JSON.stringify(pluroraProfile.policyVersion)}; the deployment has to be repinned deliberately`,
+    )
+  }
+  const registry = buildModelRegistry(config, pluroraProfile)
+  // The registry being complete says the deployment named a model for every
+  // routed tier. This says the accounts can actually be asked for them.
+  await assertModelsAvailable(registry, pluroraProfile, options.catalogue)
+  return { config, registry }
+}
+
 /**
  * Start the Plurora host.
  *
@@ -162,17 +208,10 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
     throw new PluroraHostError('the start was cancelled before the deployment was read')
   }
 
-  const config = await loadDeploymentConfig(options.projectRoot)
-  if (config.policyVersion !== pluroraProfile.policyVersion) {
-    throw new PluroraHostError(
-      `this deployment pins policy ${JSON.stringify(config.policyVersion)} and this checkout carries `
-      + `${JSON.stringify(pluroraProfile.policyVersion)}; the deployment has to be repinned deliberately`,
-    )
-  }
-  const registry = buildModelRegistry(config, pluroraProfile)
-  // The registry being complete says the deployment named a model for every
-  // routed tier. This says the accounts can actually be asked for them.
-  await assertModelsAvailable(registry, pluroraProfile, options.catalogue)
+  const { config, registry } = await validatePluroraDeployment({
+    projectRoot: options.projectRoot,
+    catalogue: options.catalogue,
+  })
 
   // Past this line the host starts changing the machine, so everything below
   // is unwound in reverse by the disposer it builds as it goes.
