@@ -61,9 +61,17 @@ const EMPTY_CATALOGUE: ModelCatalogReader = {
   async codexModels() { return [] },
 }
 
-/** A child that never runs; the database command is not exercised here. */
-function unusedSpawn(_spec: SubprocessSpawnSpec): SubprocessHandle {
-  throw new Error('the database command was not expected to run')
+/** Only the host's read-only checkout binding is expected during startup. */
+function unusedSpawn(spec: SubprocessSpawnSpec): SubprocessHandle {
+  expect(spec.argv).toEqual(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
+  return {
+    pid: 100,
+    stdin: undefined, stdout: undefined, stderr: undefined,
+    collected: { stdout: { readFrom: () => ({ text: 'test/canary\n', nextOffset: 12, lossy: false }) } },
+    done: Promise.resolve({ exitCode: 0, signal: null }),
+    terminate() {},
+    waitForExit: async () => true,
+  }
 }
 
 /**
@@ -203,6 +211,18 @@ describe('startPluroraHost', () => {
     await host.dispose()
   })
 
+  it('leaves no durable session when Git cannot read the checkout branch', async () => {
+    await writeFile(join(root, 'plurora-harness.json'), JSON.stringify(deployment()), 'utf8')
+    const seam = untouchedOpencode()
+    await expect(startPluroraHost({
+      projectRoot: root, controlToken: 'control-token', signal: controller.signal,
+      catalogue: servingCatalogue(), opencode: seam.adapter,
+      spawn: () => { throw new Error('fixture Git unavailable') },
+    })).rejects.toThrow('git could not be started to read the checkout branch')
+    expect(await entries()).toEqual(['plurora-harness.json'])
+    expect(seam.reached()).toBe(0)
+  })
+
   it('refuses an empty control token rather than starting unauthenticated', async () => {
     await expect(start(deployment(), '  ')).rejects.toThrow(PluroraHostError)
   })
@@ -276,7 +296,11 @@ describe('startPluroraHost', () => {
       controlToken: 'control-token',
       signal: controller.signal,
       catalogue: servingCatalogue(),
-      spawn: (spec) => { specs.push(spec); throw new Error('not run') },
+      spawn: (spec) => {
+        if (specs.length === 0) { specs.push(spec); return unusedSpawn(spec) }
+        specs.push(spec)
+        throw new Error('not run')
+      },
       opencode: untouchedOpencode().adapter,
     })
     const result = await host.databaseVerification.verify({
@@ -290,7 +314,7 @@ describe('startPluroraHost', () => {
         },
       },
     }, AbortSignal.timeout(1_000))
-    expect(specs[0]?.cwd).toBe(root)
+    expect(specs[1]?.cwd).toBe(root)
     expect(result.status).toBe('BLOCKED')
     await host.dispose()
   })
@@ -303,7 +327,11 @@ describe('startPluroraHost', () => {
       controlToken: 'control-token',
       signal: controller.signal,
       catalogue: servingCatalogue(),
-      spawn: (spec) => { specs.push(spec); throw new Error('not run') },
+      spawn: (spec) => {
+        if (specs.length === 0) { specs.push(spec); return unusedSpawn(spec) }
+        specs.push(spec)
+        throw new Error('not run')
+      },
       opencode: untouchedOpencode().adapter,
     })
     const certification = host.harness.integrations.githubCertification

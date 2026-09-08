@@ -1,0 +1,82 @@
+[
+  {
+    "scenario": "feature",
+    "branch": "test/activation-canary",
+    "stages": [
+      {
+        "role": "implement",
+        "verdict": "PASS"
+      },
+      {
+        "role": "verify",
+        "verdict": "PASS"
+      },
+      {
+        "role": "delivery",
+        "verdict": "PASS"
+      }
+    ],
+    "deliverySummary": "delivered 3 operations on test/activation-canary",
+    "pullRequestSimulated": true
+  },
+  {
+    "scenario": "switched",
+    "branch": "test/other",
+    "stages": [
+      {
+        "role": "implement",
+        "verdict": "PASS"
+      },
+      {
+        "role": "verify",
+        "verdict": "PASS"
+      },
+      {
+        "role": "delivery",
+        "verdict": "FAIL"
+      }
+    ],
+    "deliverySummary": "delivery was asked for \"test/activation-canary\" but the workspace has \"test/other\" checked out",
+    "pullRequestSimulated": false
+  },
+  {
+    "scenario": "protected",
+    "branch": "main",
+    "stages": [
+      {
+        "role": "implement",
+        "verdict": "PASS"
+      },
+      {
+        "role": "verify",
+        "verdict": "PASS"
+      },
+      {
+        "role": "delivery",
+        "verdict": "FAIL"
+      }
+    ],
+    "deliverySummary": "\"main\" is protected; an implementation reaches it through a reviewed merge, never through this",
+    "pullRequestSimulated": false
+  },
+  {
+    "scenario": "detached",
+    "branch": "HEAD",
+    "stages": [
+      {
+        "role": "implement",
+        "verdict": "PASS"
+      },
+      {
+        "role": "verify",
+        "verdict": "PASS"
+      },
+      {
+        "role": "delivery",
+        "verdict": "FAIL"
+      }
+    ],
+    "deliverySummary": "the workspace has no branch checked out, so there is nothing to deliver",
+    "pullRequestSimulated": false
+  }
+]

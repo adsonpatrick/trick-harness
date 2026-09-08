@@ -23,7 +23,7 @@ import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import type { PluroraDeploymentConfig } from './config.ts'
 import { loadDeploymentConfig } from './config.ts'
 import type { ProjectChangeSetReader } from './change-set.ts'
-import { createGitChangeSetReader } from './change-set.ts'
+import { createGitChangeSetReader, readCheckoutBranch } from './change-set.ts'
 import type { ModelCatalogReader } from './model-registry.ts'
 import { assertModelsAvailable, buildModelRegistry } from './model-registry.ts'
 import { createProjectDatabaseVerifier } from './project-database.ts'
@@ -190,6 +190,8 @@ export async function validatePluroraDeployment(
  * that fails the model gate therefore leaves no session directory, no
  * registered executor and no open port, which is what makes "not ready" a state
  * an operator can trust rather than a race they have to clean up after.
+ * The checkout branch is read once before opening the session and remains the
+ * delivery target for this host's lifetime; delivery rechecks it before writing.
  *
  * @param options - the project root, the control token, the product seams, and
  *   a cancellation signal.
@@ -199,6 +201,7 @@ export async function validatePluroraDeployment(
  * @throws {DeploymentConfigError} when the deployment file is missing or breaks a rule.
  * @throws {ModelRegistryError} when a routed tier has no model behind it, or
  *   names one the relevant native catalogue does not advertise.
+ * @throws {ChangeSetError} when Git cannot report the checkout branch.
  */
 export async function startPluroraHost(options: PluroraHostOptions): Promise<PluroraHost> {
   if (options.controlToken.trim() === '') {
@@ -216,6 +219,13 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
   // Past this line the host starts changing the machine, so everything below
   // is unwound in reverse by the disposer it builds as it goes.
   const disposeGraceMs = options.disposeGraceMs ?? DEFAULT_DISPOSE_GRACE_MS
+  const checkout = {
+    projectRoot: options.projectRoot,
+    protectedBranch: config.project.protectedBranch,
+    disposeGraceMs,
+    spawn: options.spawn,
+  }
+  const branch = await readCheckoutBranch(checkout, options.signal)
   const unwind: (() => Promise<void>)[] = []
   try {
     const durable = await openDurableSession({
@@ -224,12 +234,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
     })
     unwind.push(async () => { await durable.dispose() })
 
-    const changeSet = createGitChangeSetReader({
-      projectRoot: options.projectRoot,
-      protectedBranch: config.project.protectedBranch,
-      disposeGraceMs,
-      spawn: options.spawn,
-    })
+    const changeSet = createGitChangeSetReader(checkout)
 
     const databaseVerification = createProjectDatabaseVerifier({
       projectRoot: options.projectRoot,
@@ -248,7 +253,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       // every run this host serves in its measured form: what the branch is
       // certified as comes from the approved Plan and this checkout's Git,
       // rather than from the risk whoever opened the objective typed.
-      workflow: createPluroraWorkflowHandlers({ changeSet }),
+      workflow: createPluroraWorkflowHandlers({ branch, baseBranch: config.project.protectedBranch, changeSet }),
       providers: {
         opencode: { adapter: options.opencode },
         codex: { spawn: options.spawn, disposeGraceMs },

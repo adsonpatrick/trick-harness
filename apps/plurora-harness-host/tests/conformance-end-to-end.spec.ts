@@ -228,7 +228,7 @@ async function runLifecycle(
       return { status: 'completed', output: conformanceOutput(manifest, options.answer, options.extra, options.omit) }
     }))
   }
-  const handlers = createPluroraWorkflowHandlers()
+  const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
   // A handler held as `undefined` is a handler the request does not carry, and
   // the run request tells the two apart.
   const present = Object.fromEntries(

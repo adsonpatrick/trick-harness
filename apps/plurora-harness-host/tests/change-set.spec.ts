@@ -9,11 +9,41 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { SubprocessHandle, SubprocessOutcome, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
-import { ChangeSetError, createGitChangeSetReader, parseNameStatus } from '../src/change-set.ts'
+import { ChangeSetError, createGitChangeSetReader, parseNameStatus, readCheckoutBranch } from '../src/change-set.ts'
 
 const PROJECT_ROOT = '/srv/plurora/checkout'
 const BRANCH = 'main'
 const MERGE_BASE = 'a'.repeat(40)
+
+describe('reading the delivery checkout branch', () => {
+  it('reads the actual branch in the project checkout without deriving it from an objective', async () => {
+    const git = fakeGit({ outputs: ['test/canary-rerun\n'] })
+    const signal = new AbortController().signal
+    expect(await readCheckoutBranch({
+      projectRoot: PROJECT_ROOT, protectedBranch: BRANCH, disposeGraceMs: 5000, spawn: git.spawn,
+    }, signal)).toBe('test/canary-rerun')
+    expect(git.specs[0]?.argv).toEqual(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
+    expect(git.specs[0]?.cwd).toBe(PROJECT_ROOT)
+    expect(git.specs[0]?.signal).toBe(signal)
+    expect(git.terminate).toHaveBeenCalledOnce()
+  })
+
+  it.each(['', '\n', 'test/one\ntest/two', 'test/has space'])(
+    'refuses unreadable branch output without inventing a branch: %j', async (output) => {
+      const git = fakeGit({ outputs: [output] })
+      await expect(readCheckoutBranch({
+        projectRoot: PROJECT_ROOT, protectedBranch: BRANCH, disposeGraceMs: 5000, spawn: git.spawn,
+      }, new AbortController().signal)).rejects.toThrow(ChangeSetError)
+    },
+  )
+
+  it('preserves the detached HEAD marker for the delivery refusal', async () => {
+    const git = fakeGit({ outputs: ['HEAD\n'] })
+    expect(await readCheckoutBranch({
+      projectRoot: PROJECT_ROOT, protectedBranch: BRANCH, disposeGraceMs: 5000, spawn: git.spawn,
+    }, new AbortController().signal)).toBe('HEAD')
+  })
+})
 
 /** One `--name-status -z` record: the status token, then its paths. */
 function record(...fields: readonly string[]): string {
