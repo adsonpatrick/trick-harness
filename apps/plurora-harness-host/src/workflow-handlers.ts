@@ -26,7 +26,7 @@ import type { HarnessWorkflowHandlers } from '@trick-harness/composition'
 import type {
   ApprovedArtifactRef, DiagnosisContract, EvidenceRef, StageResult, WorkflowObjective,
 } from '@trick-harness/contracts'
-import { parseConformanceContract, parseDiagnosisContract, parseStageResult } from '@trick-harness/contracts'
+import { ContractError, parseConformanceContract, parseDiagnosisContract, parseStageResult } from '@trick-harness/contracts'
 import { pluroraDodObligations } from '../../../profiles/plurora/profile.ts'
 import { extractApprovedPlanWriteSet } from '@trick-harness/engineering-workflow'
 import type { ChangeImpactReader, StageSpec } from '@trick-harness/engineering-workflow'
@@ -42,6 +42,9 @@ import { looksLikeSecret } from './redaction.ts'
  * envelope whose meaning depends on which one a parser happened to read.
  */
 export const RESULT_MARKER = 'HARNESS-RESULT:'
+
+/** A complete ordinary result shown to stages that must report one. */
+const STAGE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"evidence":[{"kind":"diff","locator":"repository-relative/path","summary":"one line"}]}'
 
 /** How much of a stage's own summary this deployment journals. */
 export const MAX_SUMMARY_CHARS = 400
@@ -212,7 +215,10 @@ function interpret(stage: StageSpec, executor: string, result: ExecutorResult): 
     // that decided which role was allowed to do it.
     parsed = parseStageResult({ ...envelope, role: stage.role, executor })
   }
-  catch {
+  catch (error) {
+    if (error instanceof ContractError) {
+      return unreadable(stage, executor, `the ${RESULT_MARKER} envelope violates the stage-result contract (stage-result-invalid)`)
+    }
     return unreadable(stage, executor, `the ${RESULT_MARKER} envelope was not one this host can read`)
   }
   return {
@@ -378,9 +384,11 @@ function task(stage: StageSpec, objective: WorkflowObjective): string {
     'You may not commit, push, open a pull request, merge, release, or touch a database:'
     + ' those are performed for you once this workflow decides they are warranted.',
     '',
-    `End your final message with one line: ${RESULT_MARKER} followed by JSON with the fields`
-    + ' verdict ("PASS", "FAIL" or "BLOCKED"), summary (one line), findings (array) and'
-    + ' evidence (array of {kind, locator, summary}, kind one of test, diff, log, file, pr, commit, gate).',
+    `End your final message with exactly one final line, with no code fence or text after it: ${RESULT_MARKER} ${STAGE_RESULT_EXAMPLE}`,
+    'Replace the example values, keep every key, and emit valid JSON. Verdict is one of "PASS", "PARTIAL",'
+    + ' "FAIL", "INCONCLUSIVE" or "BLOCKED". Evidence is an array of {kind, locator, summary}, where kind is'
+    + ' one of test, diff, log, file, pr, commit or gate. A non-empty finding has id, class, raisedBy, summary,'
+    + ' confirmed and evidence; use a workflow role for raisedBy. Findings and evidence may be [] when none apply.',
     'Cite every file you changed as evidence of kind "diff" with the repository-relative path as its'
     + ' locator; a path you do not cite is a path this workflow will not publish.',
     'Include no credential, connection string or token in any of those fields.',

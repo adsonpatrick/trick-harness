@@ -121,6 +121,14 @@ describe('the Plurora stage interpreter', () => {
     expect(result.verdict).toBe('BLOCKED')
   })
 
+  it('identifies a parsed but invalid result without journalling the stage output', () => {
+    const result = createPluroraWorkflowHandlers()
+      .interpret(STAGE, 'codex', completed(envelope({ verdict: 'GREAT' })))
+
+    expect(result.summary).toContain('stage-result-invalid')
+    expect(result.summary).not.toContain('GREAT')
+  })
+
   it('takes the role and the executor from the runtime, never from the stage', () => {
     // A stage that could name its own role could route its work past the
     // policy that decided which role was allowed to do it.
@@ -194,6 +202,13 @@ describe('the Plurora task text', () => {
     expect(text).toContain(RESULT_MARKER)
     expect(text).toContain(OBJECTIVE.requirement)
     expect(text).toContain(STAGE.role)
+  })
+
+  it('gives the stage a complete JSON result it can reproduce without guessing fields', () => {
+    const text = createPluroraWorkflowHandlers().task(STAGE, OBJECTIVE)
+
+    expect(text).toContain('exactly one final line')
+    expect(text).toContain(`${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"evidence":[{"kind":"diff","locator":"repository-relative/path","summary":"one line"}]}`)
   })
 
   it('tells the stage the mutations it is not the one performing', () => {
