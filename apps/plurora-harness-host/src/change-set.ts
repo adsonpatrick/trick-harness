@@ -1,5 +1,5 @@
 /**
- * What the published branch actually changed, read from Git.
+ * The checkout branch and its published changes, read from Git.
  *
  * Change impact has two readings. The planned one comes from the Plan a person
  * approved; this is the delivered one, and it is read here by running two Git
@@ -196,6 +196,24 @@ async function git(
     // up on its answer.
     child.terminate()
   }
+}
+
+/**
+ * Read the branch this host is bound to, without moving a ref.
+ *
+ * @param options - the project checkout and managed subprocess service.
+ * @param signal - cancellation carried into Git.
+ * @returns the checked-out branch, or `HEAD` for delivery to refuse when detached.
+ * @throws {ChangeSetError} when Git fails or cannot report one branch.
+ */
+export async function readCheckoutBranch(options: GitChangeSetReaderOptions, signal: AbortSignal): Promise<string> {
+  const branch = (await git(
+    options, ['git', 'rev-parse', '--abbrev-ref', 'HEAD'], signal, 'read the checkout branch',
+  )).trim()
+  if (branch === '' || /\s/.test(branch)) {
+    throw new ChangeSetError('git did not report one checkout branch')
+  }
+  return branch
 }
 
 /**

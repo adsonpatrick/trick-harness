@@ -19,12 +19,9 @@ import type { ConformanceManifest, WorkflowObjective } from '@trick-harness/cont
 import { parseConformanceContract } from '@trick-harness/contracts'
 import { pluroraDodObligations } from '../../../profiles/plurora/profile.ts'
 import {
-  DELIVERY_BRANCH_PREFIX,
-  MAX_BRANCH_NAME_CHARS,
   MAX_SUMMARY_CHARS,
   RESULT_MARKER,
   createPluroraWorkflowHandlers,
-  deliveryBranch,
 } from '../src/workflow-handlers.ts'
 
 const STAGE: StageSpec = { stageId: 'implement-1', role: 'implement' }
@@ -69,60 +66,29 @@ function envelope(overrides: Record<string, unknown> = {}): Record<string, unkno
   }
 }
 
-describe('deliveryBranch', () => {
-  it('derives the branch from the objective, so the run and the operator agree in advance', () => {
-    expect(deliveryBranch('PLU-42')).toBe(`${DELIVERY_BRANCH_PREFIX}plu-42`)
-  })
-
-  it('keeps a branch name to characters a branch may hold', () => {
-    expect(deliveryBranch('feat/thing; rm -rf /')).toBe(`${DELIVERY_BRANCH_PREFIX}feat-thing-rm-rf`)
-  })
-
-  it('never yields the bare prefix, which would be a branch nobody named', () => {
-    expect(deliveryBranch('!!!')).toBe(`${DELIVERY_BRANCH_PREFIX}objective`)
-  })
-
-  it('yields a name git will accept, since a rejected refname explains nothing', () => {
-    // Each of these is an ordinary objective id and an invalid refname: git
-    // refuses `..`, a leading dot, a trailing dot and a `.lock` suffix. A run
-    // that derived one would be refused at delivery with nothing saying why.
-    for (const id of ['a..b', '.hidden', 'x.lock', 'trailing.', '...']) {
-      const branch = deliveryBranch(id)
-      expect(branch).not.toContain('..')
-      expect(branch.startsWith(`${DELIVERY_BRANCH_PREFIX}.`)).toBe(false)
-      expect(branch.endsWith('.')).toBe(false)
-      expect(branch.endsWith('.lock')).toBe(false)
-    }
-  })
-
-  it('bounds the name, because an objective id is not a length git agreed to', () => {
-    expect(deliveryBranch('a'.repeat(300)).length).toBeLessThanOrEqual(MAX_BRANCH_NAME_CHARS)
-  })
-})
-
 describe('the Plurora stage interpreter', () => {
   it('reads a stated envelope as the stage result', () => {
-    const result = createPluroraWorkflowHandlers().interpret(STAGE, 'codex', completed(envelope()))
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', completed(envelope()))
     expect(result.verdict).toBe('PASS')
     expect(result.summary).toBe('added the column and its migration')
     expect(result.evidence).toHaveLength(1)
   })
 
   it('blocks a stage that stated nothing, because prose is not evidence', () => {
-    const result = createPluroraWorkflowHandlers()
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
       .interpret(STAGE, 'codex', { status: 'completed', output: 'Everything looks great! All tests pass.' })
     expect(result.verdict).toBe('BLOCKED')
     expect(result.summary).toContain('established nothing')
   })
 
   it('blocks rather than fails an unreadable envelope, since neither was established', () => {
-    const result = createPluroraWorkflowHandlers()
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
       .interpret(STAGE, 'codex', completed({ verdict: 'GREAT', summary: 'x', findings: [], evidence: [] }))
     expect(result.verdict).toBe('BLOCKED')
   })
 
   it('identifies a parsed but invalid result without journalling the stage output', () => {
-    const result = createPluroraWorkflowHandlers()
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
       .interpret(STAGE, 'codex', completed(envelope({ verdict: 'GREAT' })))
 
     expect(result.summary).toContain('stage-result-invalid')
@@ -132,7 +98,7 @@ describe('the Plurora stage interpreter', () => {
   it('takes the role and the executor from the runtime, never from the stage', () => {
     // A stage that could name its own role could route its work past the
     // policy that decided which role was allowed to do it.
-    const result = createPluroraWorkflowHandlers()
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
       .interpret(STAGE, 'codex', completed(envelope({ role: 'reviewer', executor: 'opencode' })))
     expect(result.role).toBe('implement')
     expect(result.executor).toBe('codex')
@@ -141,18 +107,18 @@ describe('the Plurora stage interpreter', () => {
   it('reads the last envelope, so one quoted inside an explanation cannot stand in', () => {
     const output = `Earlier I wrote ${RESULT_MARKER} ${JSON.stringify(envelope({ verdict: 'PASS' }))}\n`
       + `${RESULT_MARKER} ${JSON.stringify(envelope({ verdict: 'FAIL', summary: 'the column is wrong' }))}`
-    const result = createPluroraWorkflowHandlers().interpret(STAGE, 'codex', { status: 'completed', output })
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', { status: 'completed', output })
     expect(result.verdict).toBe('FAIL')
   })
 
   it('blocks a cancelled stage rather than reading whatever it had said so far', () => {
-    const result = createPluroraWorkflowHandlers()
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
       .interpret(STAGE, 'codex', { status: 'aborted', output: `${RESULT_MARKER} ${JSON.stringify(envelope())}` })
     expect(result.verdict).toBe('BLOCKED')
   })
 
   it('blocks an executor failure, carrying only the diagnostic its own boundary redacted', () => {
-    const result = createPluroraWorkflowHandlers().interpret(STAGE, 'codex', {
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', {
       status: 'error',
       output: '',
       failure: { category: 'transport', availability: true, safeDiagnostic: 'the app-server closed the connection' },
@@ -163,7 +129,7 @@ describe('the Plurora stage interpreter', () => {
 
   it('bounds a stage summary rather than journalling however much it wrote', () => {
     const long = 'x'.repeat(MAX_SUMMARY_CHARS * 3)
-    const result = createPluroraWorkflowHandlers().interpret(STAGE, 'codex', completed(envelope({ summary: long })))
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', completed(envelope({ summary: long })))
     expect(result.summary.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS + 1)
   })
 
@@ -171,7 +137,7 @@ describe('the Plurora stage interpreter', () => {
     // The top-level evidence list is filtered; a finding carries its own, and
     // the promise this host makes is about the journal, not about one field.
     const secret = 'postgresql://user:hunter2@db.example.com:5432/plurora'
-    const result = createPluroraWorkflowHandlers().interpret(STAGE, 'codex', completed(envelope({
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', completed(envelope({
       findings: [{
         id: 'F-1',
         class: 'defect',
@@ -187,7 +153,7 @@ describe('the Plurora stage interpreter', () => {
 
   it('journals no credential a stage put in a field this host keeps', () => {
     const secret = 'postgresql://user:hunter2@db.example.com:5432/plurora'
-    const result = createPluroraWorkflowHandlers().interpret(STAGE, 'codex', completed(envelope({
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', completed(envelope({
       summary: `connected with ${secret}`,
       evidence: [{ kind: 'log', locator: secret, summary: 'the session' }],
     })))
@@ -198,21 +164,21 @@ describe('the Plurora stage interpreter', () => {
 
 describe('the Plurora task text', () => {
   it('states the envelope the stage owes back, since nothing else asks for one', () => {
-    const text = createPluroraWorkflowHandlers().task(STAGE, OBJECTIVE)
+    const text = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)
     expect(text).toContain(RESULT_MARKER)
     expect(text).toContain(OBJECTIVE.requirement)
     expect(text).toContain(STAGE.role)
   })
 
   it('gives the stage a complete JSON result it can reproduce without guessing fields', () => {
-    const text = createPluroraWorkflowHandlers().task(STAGE, OBJECTIVE)
+    const text = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)
 
     expect(text).toContain('exactly one final line')
     expect(text).toContain(`${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"evidence":[{"kind":"diff","locator":"repository-relative/path","summary":"one line"}]}`)
   })
 
   it('tells the stage the mutations it is not the one performing', () => {
-    const text = createPluroraWorkflowHandlers().task(STAGE, OBJECTIVE)
+    const text = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)
     for (const denied of ['commit', 'push', 'pull request', 'merge', 'release', 'database']) {
       expect(text).toContain(denied)
     }
@@ -224,7 +190,7 @@ describe('the Plurora delivery description', () => {
   function describeAfter(result: ExecutorResult): ReturnType<NonNullable<
     ReturnType<typeof createPluroraWorkflowHandlers>['describeDelivery']
   >> {
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     handlers.interpret(STAGE, 'codex', result)
     const describe_ = handlers.describeDelivery
     if (describe_ === undefined) throw new Error('the Plurora handlers must describe a delivery')
@@ -248,13 +214,23 @@ describe('the Plurora delivery description', () => {
     expect(describeAfter(completed(envelope({ evidence: [] }))).files).toEqual([])
   })
 
-  it('publishes on the branch the objective derives, never one a model chose', () => {
-    expect(describeAfter(completed(envelope())).branch).toBe(deliveryBranch(OBJECTIVE.id))
+  it('publishes on the branch supplied by the host', () => {
+    expect(describeAfter(completed(envelope())).branch).toBe('test/canary')
+  })
+
+  it('delivers the checkout branch when the objective has an unrelated generated id', () => {
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/trick-harness-v2-activation-rerun' })
+    handlers.interpret(STAGE, 'opencode', completed(envelope()))
+    const request = handlers.describeDelivery?.({
+      stageId: 'delivery-1',
+      objective: { ...OBJECTIVE, id: 'opencode-ebc62d40-cc38-4dc6-a6ec-596d8ad96551' },
+    })
+    expect(request?.branch).toBe('test/trick-harness-v2-activation-rerun')
   })
 
   it('bounds the commit subject the same way it bounds the pull request title', () => {
     const long = 'x'.repeat(MAX_SUMMARY_CHARS * 3)
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     handlers.interpret(STAGE, 'codex', completed(envelope()))
     const request = handlers.describeDelivery?.({
       stageId: 'delivery',
@@ -273,14 +249,14 @@ describe('the Plurora delivery description', () => {
 
 describe('the Plurora repair reading', () => {
   it('believes no repair that did not state its own evidence', () => {
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     const claimed = handlers.repairEvidence?.(STAGE, 'codex', completed(envelope()))
     expect(claimed?.rootCauseAddressed).toBe(false)
     expect(claimed?.regressionTest).toBeUndefined()
   })
 
   it('reads a stated regression test and focused green run', () => {
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     const claimed = handlers.repairEvidence?.(STAGE, 'codex', completed(envelope({
       repair: {
         rootCauseAddressed: true,
@@ -293,7 +269,7 @@ describe('the Plurora repair reading', () => {
   })
 
   it('reads no diagnosis out of a stage that did not state a whole one', () => {
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     expect(handlers.diagnose?.(STAGE, 'codex', completed(envelope()))).toBeUndefined()
     expect(handlers.diagnose?.(STAGE, 'codex', completed(envelope({ diagnosis: { cause: 'a guess' } }))))
       .toBeUndefined()
@@ -319,7 +295,7 @@ describe('reading the approved documents back', () => {
 
   it('reads the documents the objective names and hashes what it actually read', async () => {
     const objective = await checkout(SPEC_TEXT, PLAN_TEXT)
-    const read = createPluroraWorkflowHandlers().loadApprovedArtifacts
+    const read = createPluroraWorkflowHandlers({ branch: 'test/canary' }).loadApprovedArtifacts
 
     const loaded = await read?.(objective, new AbortController().signal)
 
@@ -335,7 +311,7 @@ describe('reading the approved documents back', () => {
     // construction, which is the one thing this read exists to check.
     const objective = await checkout(SPEC_TEXT, PLAN_TEXT)
     await writeFile(join(objective.cwd, 'docs/plan.md'), PLAN_TEXT + '### Task 3: unapproved\n', 'utf8')
-    const read = createPluroraWorkflowHandlers().loadApprovedArtifacts
+    const read = createPluroraWorkflowHandlers({ branch: 'test/canary' }).loadApprovedArtifacts
 
     const loaded = await read?.(objective, new AbortController().signal)
 
@@ -347,7 +323,7 @@ describe('reading the approved documents back', () => {
     // over the control server. A traversal here would hand a model's stage the
     // text of any file the host process can read, under the name of a Spec.
     const objective = await checkout(SPEC_TEXT, PLAN_TEXT)
-    const read = createPluroraWorkflowHandlers().loadApprovedArtifacts
+    const read = createPluroraWorkflowHandlers({ branch: 'test/canary' }).loadApprovedArtifacts
     for (const path of ['../outside.md', 'docs/../../outside.md', '/etc/passwd', 'docs\\..\\..\\outside.md']) {
       const escaping = {
         ...objective,
@@ -366,7 +342,7 @@ describe('reading the approved documents back', () => {
         spec: { path: '../secrets/service-role.md', sha256: 'a'.repeat(64) },
       },
     }
-    const read = createPluroraWorkflowHandlers().loadApprovedArtifacts
+    const read = createPluroraWorkflowHandlers({ branch: 'test/canary' }).loadApprovedArtifacts
 
     const raised = await read?.(escaping, new AbortController().signal).catch((error: unknown) => error)
 
@@ -381,7 +357,7 @@ describe('the Definition of Done these handlers carry', () => {
     // The Spec and the Plan are written per objective; the Definition of Done is
     // the standing bar, and a run that could read it out of the same documents
     // it is judged against could lower it in the same pull request.
-    expect(createPluroraWorkflowHandlers().dodObligations).toEqual(pluroraDodObligations)
+    expect(createPluroraWorkflowHandlers({ branch: 'test/canary' }).dodObligations).toEqual(pluroraDodObligations)
   })
 })
 
@@ -420,7 +396,7 @@ describe('reading a conformance result back', () => {
   }
 
   it('hands back the stated result so the runtime can hold it to the manifest', () => {
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
 
     const read = handlers.conformance?.(CONFORMANCE, 'codex', completed(answer()), MANIFEST)
 
@@ -428,7 +404,7 @@ describe('reading a conformance result back', () => {
   })
 
   it('establishes nothing when the stage printed no envelope this host can read', () => {
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     for (const result of [
       { status: 'completed', output: 'I checked everything and it all looks conformant.' } as ExecutorResult,
       completed({ verdict: 'PASS' }),
@@ -441,7 +417,7 @@ describe('reading a conformance result back', () => {
   })
 
   it('reads a result off an errored or cancelled stage as nothing at all', () => {
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     const failed: ExecutorResult = {
       status: 'error',
       output: RESULT_MARKER + ' ' + JSON.stringify(answer()),
@@ -456,7 +432,7 @@ describe('reading a conformance result back', () => {
     // The hashes identify the approved artifacts. A stage that could state its
     // own would answer obligations from documents nobody approved and still
     // line up with the manifest it was checked against.
-    const handlers = createPluroraWorkflowHandlers()
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     const forged = answer({ specSha256: 'c'.repeat(64), planSha256: 'd'.repeat(64) })
 
     const read = parseConformanceContract(handlers.conformance?.(CONFORMANCE, 'codex', completed(forged), MANIFEST))
@@ -468,7 +444,7 @@ describe('reading a conformance result back', () => {
   it('names the approved documents the conformance stage has to answer against', () => {
     // The stage is told which documents state the obligations, because a stage
     // that had to guess would answer whichever ones it happened to open.
-    const prompt = createPluroraWorkflowHandlers().task(CONFORMANCE, OBJECTIVE)
+    const prompt = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(CONFORMANCE, OBJECTIVE)
 
     expect(prompt).toContain('docs/spec.md')
     expect(prompt).toContain('docs/plan.md')
@@ -478,12 +454,12 @@ describe('reading a conformance result back', () => {
   it('tells the conformance stage it may not change the tree it is judging', () => {
     // Stated in the prompt as well as enforced by the permission mode: a stage
     // that edits the branch it is scoring is answering about its own work.
-    expect(createPluroraWorkflowHandlers().task(CONFORMANCE, OBJECTIVE))
+    expect(createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(CONFORMANCE, OBJECTIVE))
       .toMatch(/read-only|may not change/i)
   })
 
   it('states the envelope a conformance answer owes back', () => {
-    const prompt = createPluroraWorkflowHandlers().task(CONFORMANCE, OBJECTIVE)
+    const prompt = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(CONFORMANCE, OBJECTIVE)
 
     expect(prompt).toContain(RESULT_MARKER)
     expect(prompt).toContain('conformance')

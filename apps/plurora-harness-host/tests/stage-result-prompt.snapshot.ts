@@ -28,7 +28,7 @@ const OBJECTIVE: WorkflowObjective = Object.freeze({
 
 describe('Plurora stage-result prompt runnable snapshot', () => {
   it('records the complete final-line envelope the real host gives an implement stage', async () => {
-    const prompt = `${createPluroraWorkflowHandlers().task(STAGE, OBJECTIVE)}\n`
+    const prompt = `${createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)}\n`
 
     if (refreshing) {
       await mkdir(dirname(expected), { recursive: true })

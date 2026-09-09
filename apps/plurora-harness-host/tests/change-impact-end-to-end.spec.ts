@@ -322,6 +322,7 @@ async function runLifecycle(scenario: Scenario): Promise<RunRecord> {
   // the branch it published rather than from the one it replaced.
   let deliveries = 0
   const handlers = createPluroraWorkflowHandlers({
+    branch: 'test/canary',
     changeSet: {
       actualPaths: async () => {
         const answer = scenario.actual[Math.min(deliveries, scenario.actual.length - 1)] ?? []
