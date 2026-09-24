@@ -18,9 +18,13 @@ Routing policy may still *state* an effort. It is advisory metadata recorded wit
 
 ## The adapter seam
 
-`OpencodeAdapter` is the narrow OpenCode surface the provider depends on: start a server, connect a client, create a session, prompt, abort. `createSdkAdapter()` binds it to the real product; tests supply a fake. That keeps translation and lifecycle behaviour testable without a product process, and confines an SDK change to one module.
+`OpencodeAdapter` is the narrow OpenCode surface the provider depends on: start a server, connect a client, create a session, prompt, abort. `createSdkAdapter({ startupTimeoutMs })` binds it to the real product; tests supply a fake. That keeps translation and lifecycle behaviour testable without a product process, and confines an SDK change to one module.
 
 Every SDK call uses `throwOnError: true`. The generated client otherwise returns a result tuple whose `error` is an easily ignored field, and an ignored transport error would surface as a successful run with empty output.
+
+## Server readiness deadline
+
+The adapter requires an explicit `startupTimeoutMs`: positive integer milliseconds, no greater than `2147483647`. It applies only while the SDK waits for its child server to announce readiness, not while a session runs a prompt. The SDK owns startup timeout termination; the caller's abort signal remains active. `OpencodeStartupTimeoutError` reports the deadline without copying raw SDK output, and remains a provider failure without automatic fallback.
 
 ## Usage
 
@@ -31,7 +35,7 @@ import { createOpencodeProvider, createSdkAdapter } from '@trick-harness/provide
 declare const controller: AbortController
 
 const runtime = createExecutorRuntime()
-runtime.register(createOpencodeProvider(createSdkAdapter()))
+runtime.register(createOpencodeProvider(createSdkAdapter({ startupTimeoutMs: 60000 })))
 const result = await runtime.start({
   cwd: '/work/repo',
   task: 'implement the parser',
@@ -47,7 +51,7 @@ const result = await runtime.start({
 ## Known Limitations and Deferred Work
 
 - **Termination is verified against the adapter seam, not a real process tree.** The tests prove the provider aborts the session and closes the server on every path; proving the OS process tree reaches quiescence needs the live smoke described below.
-- **No live smoke runs in unit CI.** Exercising the real server entry path consumes the user's OpenCode quota, so the SDK binding in `src/adapter.ts` is the one module unit tests do not cover. A keyless local smoke is deferred.
+- **No live model smoke runs in unit CI.** SDK startup deadline tests simulate the external server; a local server-start smoke needs OpenCode installed but makes no model request. Real prompt execution still requires the user's OpenCode authentication and quota.
 - **A model name must already be a `provider/model` pair.** Resolving a semantic tier to that pair belongs to the profile above this seam; this package rejects a bare id rather than guessing which configured provider was meant.
 - **The prompt is a single text part.** File and subtask parts that the SDK accepts are not exposed, because the executor contract carries one task string.
 - **Streaming is not surfaced.** The result is the final assistant message's text; intermediate events are not forwarded, which is what "bounded result, not the child transcript" requires.

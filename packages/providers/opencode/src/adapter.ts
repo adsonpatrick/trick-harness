@@ -14,6 +14,7 @@
  */
 
 import { createOpencodeClient, createOpencodeServer } from '@opencode-ai/sdk'
+import { OpencodeStartupTimeoutError } from './startup-error.ts'
 import type {
   OpencodeAdapter,
   OpencodeClientHandle,
@@ -21,6 +22,7 @@ import type {
   OpencodePromptResult,
   OpencodeServerHandle,
   OpencodeServerOptions,
+  OpencodeSdkOptions,
 } from './types.ts'
 
 /**
@@ -63,18 +65,29 @@ function bindClient(url: string, directory: string): OpencodeClientHandle {
 
 /**
  * Create the adapter backed by the real product.
+ * @param settings - the deployment's explicit server-readiness deadline; it does not limit prompts.
  * @returns an adapter that starts scoped OpenCode servers on demand.
  */
-export function createSdkAdapter(): OpencodeAdapter {
+export function createSdkAdapter(settings: OpencodeSdkOptions): OpencodeAdapter {
   return {
     async startServer(options: OpencodeServerOptions): Promise<OpencodeServerHandle> {
       // `config` is an in-memory `Config` scoped to this server instance only.
-      const server = await createOpencodeServer({
-        hostname: options.hostname,
-        port: options.port,
-        signal: options.signal,
-        config: { permission: { ...options.config.permission } },
-      })
+      let server: Awaited<ReturnType<typeof createOpencodeServer>>
+      try {
+        server = await createOpencodeServer({
+          hostname: options.hostname,
+          port: options.port,
+          timeout: settings.startupTimeoutMs,
+          signal: options.signal,
+          config: { permission: { ...options.config.permission } },
+        })
+      } catch (error) {
+        // Only the SDK's exact timeout text is classified; no raw cause is exposed.
+        if (error instanceof Error && error.message === `Timeout waiting for server to start after ${settings.startupTimeoutMs}ms`) {
+          throw new OpencodeStartupTimeoutError(settings.startupTimeoutMs)
+        }
+        throw error
+      }
       return { url: server.url, close: () => { server.close() } }
     },
 

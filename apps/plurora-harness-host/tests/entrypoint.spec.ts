@@ -103,6 +103,29 @@ describe('parsePluroraHostArgs', () => {
 })
 
 describe('runPluroraHost', () => {
+  it.each([undefined, '90000'])('passes the resolved OpenCode startup deadline to the adapter: %s', async (value) => {
+    const fake = fakeRuntime({ PLURORA_HARNESS_TOKEN: 'redacted', PLURORA_OPENCODE_STARTUP_TIMEOUT_MS: value })
+    const running = runPluroraHost(invocation(), fake.runtime)
+    await vi.waitFor(() => { expect(fake.start).toHaveBeenCalledOnce() })
+    expect(fake.runtime.createOpencode).toHaveBeenCalledWith({ startupTimeoutMs: value === undefined ? 60000 : 90000 })
+    fake.stop()
+    expect(await running).toBe(0)
+  })
+
+  it.each(['', '0', '-1', '1.5', 'Infinity', '2147483648', 'private-value'])('rejects an invalid startup deadline before resources: %s', async (value) => {
+    const fake = fakeRuntime({ PLURORA_HARNESS_TOKEN: 'redacted', PLURORA_OPENCODE_STARTUP_TIMEOUT_MS: value })
+    expect(await runPluroraHost(invocation(), fake.runtime)).toBe(1)
+    expect(fake.start).not.toHaveBeenCalled()
+    expect(fake.disposal).toEqual([])
+    expect(fake.lines).toEqual(['error:plurora-host: Error: PLURORA_OPENCODE_STARTUP_TIMEOUT_MS must be an integer from 1 to 2147483647'])
+  })
+
+  it('validates the startup deadline in validate mode before creating subprocesses', async () => {
+    const fake = fakeRuntime({ PLURORA_OPENCODE_STARTUP_TIMEOUT_MS: 'invalid' })
+    expect(await runPluroraHost(parsePluroraHostArgs(['validate'], '/repo'), fake.runtime)).toBe(1)
+    expect(fake.createCatalogue).not.toHaveBeenCalled()
+    expect(fake.disposal).toEqual([])
+  })
   it('prints help without reading a token or constructing a runtime', async () => {
     const fake = fakeRuntime({})
     const result = await runPluroraHost(parsePluroraHostArgs(['--help'], '/repo'), fake.runtime)

@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-08-opencode-startup-deadline.md
+2026-09-08-opencode-startup-deadline.md: 4244141cf1abcf88527492b449483aab3b4ff1e2
+2026-09-08-opencode-startup-deadline.zh.md: 11677663fbaf8f5471f8af0149f84ab6df8c7c38

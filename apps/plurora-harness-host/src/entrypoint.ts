@@ -14,7 +14,7 @@ import { rename, writeFile } from 'node:fs/promises'
 import { Context } from '@deepseek-ai/cordis'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { createSdkAdapter } from '@trick-harness/provider-opencode'
-import type { OpencodeAdapter } from '@trick-harness/provider-opencode'
+import type { OpencodeAdapter, OpencodeSdkOptions } from '@trick-harness/provider-opencode'
 import { nativeCatalogueReader, type NativeCatalogueOptions } from './catalogue.ts'
 import { DEFAULT_DISPOSE_GRACE_MS, startPluroraHost, validatePluroraDeployment, type PluroraHost, type PluroraHostOptions } from './main.ts'
 import type { ModelCatalogReader } from './model-registry.ts'
@@ -80,7 +80,7 @@ export interface PluroraHostRuntime {
   /** Bind native authenticated model catalogues for the selected checkout. */
   readonly createCatalogue: (options: NativeCatalogueOptions) => ModelCatalogReader
   /** Bind the real OpenCode SDK adapter. */
-  readonly createOpencode: () => OpencodeAdapter
+  readonly createOpencode: (options: OpencodeSdkOptions) => OpencodeAdapter
   /** Start the composed host. */
   readonly start: (options: PluroraHostOptions) => Promise<PluroraHost>
 }
@@ -88,6 +88,17 @@ export interface PluroraHostRuntime {
 /** Reject an invocation with a safe, stable operator-facing message. */
 function refuse(message: string): never {
   throw new Error(`plurora-host: ${message}`)
+}
+
+/** Resolve the process-only server readiness deadline before constructing resources. */
+function opencodeStartupTimeout(env: PluroraHostRuntime['env']): number {
+  const value = env['PLURORA_OPENCODE_STARTUP_TIMEOUT_MS']
+  if (value === undefined) return 60000
+  const timeoutMs = Number(value)
+  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) {
+    throw new Error('PLURORA_OPENCODE_STARTUP_TIMEOUT_MS must be an integer from 1 to 2147483647')
+  }
+  return timeoutMs
 }
 
 /** Parse the settings the executable accepts. */
@@ -227,6 +238,7 @@ async function runValidate(
 ): Promise<number> {
   let subprocess: ManagedSubprocess | undefined
   try {
+    opencodeStartupTimeout(runtime.env)
     const controller = new AbortController()
     const unsubscribe = runtime.subscribeTermination(() => { controller.abort() })
     try {
@@ -285,6 +297,7 @@ export async function runPluroraHost(invocation: PluroraHostInvocation, runtime:
   let host: PluroraHost | undefined
   let termination: ReturnType<typeof waitForTermination> | undefined
   try {
+    const startupTimeoutMs = opencodeStartupTimeout(runtime.env)
     const controller = new AbortController()
     termination = waitForTermination(listener => runtime.subscribeTermination(() => {
       controller.abort()
@@ -304,7 +317,7 @@ export async function runPluroraHost(invocation: PluroraHostInvocation, runtime:
       signal: controller.signal,
       catalogue,
       spawn: subprocess.spawn,
-      opencode: runtime.createOpencode(),
+      opencode: runtime.createOpencode({ startupTimeoutMs }),
       ...(invocation.sessionId === undefined ? {} : { sessionId: invocation.sessionId }),
     })
     // The host only resolves once the control server is listening, so a ready

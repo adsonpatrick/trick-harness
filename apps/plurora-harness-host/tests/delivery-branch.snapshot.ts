@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { OpencodeAdapter } from '@trick-harness/provider-opencode'
+import { OpencodeStartupTimeoutError } from '@trick-harness/provider-opencode'
 import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import { PLURORA_SEMANTIC_TIERS } from '../src/config.ts'
 import { startPluroraHost } from '../src/main.ts'
@@ -45,7 +46,7 @@ function settled(stdout: string, exitCode: number | null): SubprocessHandle {
 describe('Plurora checkout delivery runnable snapshot', () => {
   it('delivers its bound branch and refuses protected, detached or changed checkouts', async () => {
     const transcript: unknown[] = []
-    for (const scenario of ['feature', 'switched', 'protected', 'detached'] as const) {
+    for (const scenario of ['feature', 'switched', 'protected', 'detached', 'startup-timeout'] as const) {
       const root = await mkdtemp(join(tmpdir(), 'plurora-delivery-'))
       const project = join(root, 'checkout')
       const remote = join(root, 'origin.git')
@@ -94,7 +95,10 @@ describe('Plurora checkout delivery runnable snapshot', () => {
           return settled('', 1)
         }
         const opencode: OpencodeAdapter = {
-          startServer: async () => ({ url: 'http://127.0.0.1:1', close() {} }),
+          startServer: async () => {
+            if (scenario === 'startup-timeout') throw new OpencodeStartupTimeoutError(60000)
+            return { url: 'http://127.0.0.1:1', close() {} }
+          },
           connect: () => ({
             createSession: async () => 'recorded-implement', abortSession: async () => {},
             async prompt() {
@@ -127,7 +131,13 @@ describe('Plurora checkout delivery runnable snapshot', () => {
           },
         }, undefined, { role: 'verify', executor: 'recorded-verifier', semanticModelTier: 'codex.balanced' })
         const delivery = outcome.stages.find(stage => stage.role === 'delivery')
-        expect(delivery?.verdict).toBe(scenario === 'feature' ? 'PASS' : 'FAIL')
+        if (scenario === 'startup-timeout') {
+          expect(delivery).toBeUndefined()
+          expect(outcome.stages).toHaveLength(1)
+          expect(outcome.stages[0]?.verdict).toBe('FAIL')
+        } else {
+          expect(delivery?.verdict).toBe(scenario === 'feature' ? 'PASS' : 'FAIL')
+        }
         if (scenario === 'feature') {
           expect(git(remote, 'show', `refs/heads/${BRANCH}:${MARKER}`)).toBe(CONTENT.trim())
           expect(git(project, 'diff', '--name-only', `${baseline}..HEAD`)).toBe(MARKER)
@@ -137,6 +147,7 @@ describe('Plurora checkout delivery runnable snapshot', () => {
           expect(opened).toBe(false)
         }
         transcript.push({ scenario, branch: git(project, 'rev-parse', '--abbrev-ref', 'HEAD'),
+          ...(scenario === 'startup-timeout' ? { startupSummary: outcome.stages[0]?.summary } : {}),
           stages: outcome.stages.slice(0, 3).map(({ role, verdict }) => ({ role, verdict })),
           deliverySummary: delivery?.summary, pullRequestSimulated: opened })
       } finally {
