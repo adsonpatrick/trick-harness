@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-24-plurora-delivery-commit-subject.md
+2026-09-24-plurora-delivery-commit-subject.md: 8f3cdf59634c1c387f10d2d9a0e3cc19fab245f4
+2026-09-24-plurora-delivery-commit-subject.zh.md: 6ee26b65a25d7ea3e72a307810ef249f62e366c9

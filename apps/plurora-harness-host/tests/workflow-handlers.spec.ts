@@ -228,16 +228,18 @@ describe('the Plurora delivery description', () => {
     expect(request?.branch).toBe('test/trick-harness-v2-activation-rerun')
   })
 
-  it('bounds the commit subject the same way it bounds the pull request title', () => {
-    const long = 'x'.repeat(MAX_SUMMARY_CHARS * 3)
+  it('uses a conventional commit subject independently of the natural-language requirement', () => {
+    const requirement = 'Create the approved documentation marker.'
     const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     handlers.interpret(STAGE, 'codex', completed(envelope()))
     const request = handlers.describeDelivery?.({
-      stageId: 'delivery',
-      objective: { ...OBJECTIVE, requirement: long },
+      stageId: 'delivery-1',
+      objective: { ...OBJECTIVE, requirement },
     })
-    const subject = request?.message.split('\n', 1)[0] ?? ''
-    expect(subject.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS + 1)
+    expect(request?.message).toBe(
+      `chore(harness): deliver approved workflow change\n\nObjective: ${OBJECTIVE.id}\nStage: delivery-1`,
+    )
+    expect(request?.pullRequest.title).toBe(requirement)
   })
 
   it('opens against the base branch and says merging stays a human decision', () => {

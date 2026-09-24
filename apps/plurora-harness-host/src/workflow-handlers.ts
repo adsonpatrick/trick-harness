@@ -71,6 +71,9 @@ export interface PluroraWorkflowHandlerOptions {
 /** The default base for every pull request this deployment opens. */
 const DEFAULT_BASE_BRANCH = 'main'
 
+/** A repository-neutral Conventional Commit subject for deterministic delivery. */
+const DELIVERY_COMMIT_SUBJECT = 'chore(harness): deliver approved workflow change'
+
 /** Trim a stage's own text to what this deployment will keep. */
 function bounded(value: string): string {
   const line = value.trim().split('\n', 1)[0] ?? ''
@@ -443,9 +446,10 @@ export function createPluroraWorkflowHandlers(
         // Sorted so two runs over the same set produce the same request, and a
         // reviewer comparing two deliveries is comparing content, not order.
         files: [...writeSet].toSorted(),
-        // Bounded exactly as the pull request title is: the same text, and a
-        // commit subject is the one place a wall of it is least readable.
-        message: `${bounded(input.objective.requirement) || 'harness change'}\n\n`
+        // Objectives are natural language and may violate a checkout's commit
+        // policy. Keep their description in the PR title and use one stable,
+        // repository-neutral Conventional Commit subject for the Git record.
+        message: `${DELIVERY_COMMIT_SUBJECT}\n\n`
           + `Objective: ${input.objective.id}\nStage: ${input.stageId}`,
         pullRequest: {
           title: bounded(input.objective.requirement),
