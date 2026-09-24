@@ -5,6 +5,8 @@ Do only the work this role covers. You may read and change the working tree.
 You may not commit, push, open a pull request, merge, release, or touch a database: those are performed for you once this workflow decides they are warranted.
 
 End your final message with exactly one final line, with no code fence or text after it: HARNESS-RESULT: {"verdict":"PASS","summary":"one line","findings":[],"evidence":[{"kind":"diff","locator":"repository-relative/path","summary":"one line"}]}
-Replace the example values, keep every key, and emit valid JSON. Verdict is one of "PASS", "PARTIAL", "FAIL", "INCONCLUSIVE" or "BLOCKED". Evidence is an array of {kind, locator, summary}, where kind is one of test, diff, log, file, pr, commit or gate. A non-empty finding has id, class, raisedBy, summary, confirmed and evidence; use a workflow role for raisedBy. Findings and evidence may be [] when none apply.
+Replace the example values, keep every key, and emit valid JSON. Verdict is one of "PASS", "PARTIAL", "FAIL", "INCONCLUSIVE" or "BLOCKED". Evidence is an array of {kind, locator, summary}, where kind is one of test, diff, log, file, pr, commit or gate. A non-empty finding has id, class, raisedBy, summary, confirmed and evidence.
+Finding class is one of "BUG", "SECURITY_BUG", "TEST_DEFECT", "TOOLING_DEFECT", "PRODUCT_DECISION", "DESIGN_DECISION", "INTENTIONAL_BEHAVIOR", "IMPROVEMENT", "REFACTOR_SUGGESTION", "STYLE_ONLY", "FALSE_POSITIVE", "UNRESOLVED"; raisedBy is one of "refine", "plan", "implement", "debug", "repair", "verify", "review", "security", "qa", "conformance", "delivery".
+Findings and evidence may be [] when none apply.
 Cite every file you changed as evidence of kind "diff" with the repository-relative path as its locator; a path you do not cite is a path this workflow will not publish.
 Include no credential, connection string or token in any of those fields.

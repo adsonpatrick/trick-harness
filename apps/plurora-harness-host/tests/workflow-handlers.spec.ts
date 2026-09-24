@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest'
 import type { StageSpec } from '@trick-harness/engineering-workflow'
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { ConformanceManifest, WorkflowObjective } from '@trick-harness/contracts'
-import { parseConformanceContract } from '@trick-harness/contracts'
+import { FINDING_CLASSES, ROLES, parseConformanceContract } from '@trick-harness/contracts'
 import { pluroraDodObligations } from '../../../profiles/plurora/profile.ts'
 import {
   MAX_SUMMARY_CHARS,
@@ -89,10 +89,27 @@ describe('the Plurora stage interpreter', () => {
 
   it('identifies a parsed but invalid result without journalling the stage output', () => {
     const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
-      .interpret(STAGE, 'codex', completed(envelope({ verdict: 'GREAT' })))
+      .interpret(STAGE, 'codex', completed(envelope({
+        findings: [{
+          id: 'F-1',
+          class: 'NOT_A_CLASS',
+          raisedBy: 'qa',
+          summary: 'the test environment refused a write',
+          confirmed: true,
+          evidence: [],
+        }],
+      })))
 
     expect(result.summary).toContain('stage-result-invalid')
-    expect(result.summary).not.toContain('GREAT')
+    expect(result.summary).toContain('stage.findings[0].class')
+    expect(result.summary).not.toContain('NOT_A_CLASS')
+  })
+
+  it('states every closed vocabulary an ordinary result may use', () => {
+    const prompt = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)
+
+    for (const findingClass of FINDING_CLASSES) expect(prompt).toContain(`"${findingClass}"`)
+    for (const role of ROLES) expect(prompt).toContain(`"${role}"`)
   })
 
   it('takes the role and the executor from the runtime, never from the stage', () => {
@@ -140,7 +157,7 @@ describe('the Plurora stage interpreter', () => {
     const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', completed(envelope({
       findings: [{
         id: 'F-1',
-        class: 'defect',
+        class: 'BUG',
         raisedBy: 'implement',
         summary: 'the migration is wrong',
         confirmed: true,
