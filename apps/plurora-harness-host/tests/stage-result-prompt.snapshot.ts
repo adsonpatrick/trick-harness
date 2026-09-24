@@ -9,9 +9,11 @@ import { createPluroraWorkflowHandlers } from '../src/workflow-handlers.ts'
 
 const root = resolve(import.meta.dirname, '../../..')
 const expected = join(root, 'scripts/snapshots/plurora-stage-result-prompt/prompt.expected.txt')
+const conformanceExpected = join(root, 'scripts/snapshots/plurora-conformance-result-prompt/prompt.expected.txt')
 const refreshing = process.env['DSH_SNAPSHOT'] === 'record' || process.env['DSH_SNAPSHOT'] === 'refresh'
 
 const STAGE: StageSpec = Object.freeze({ stageId: 'implement-1', role: 'implement' })
+const CONFORMANCE_STAGE: StageSpec = Object.freeze({ stageId: 'conformance-1', role: 'conformance' })
 
 const OBJECTIVE: WorkflowObjective = Object.freeze({
   id: 'plurora-prompt-snapshot',
@@ -37,5 +39,17 @@ describe('Plurora stage-result prompt runnable snapshot', () => {
       await access(expected)
     }
     await expect(prompt).toMatchFileSnapshot(expected)
+  })
+
+  it('records the combined stage and conformance envelope the real host requests', async () => {
+    const prompt = `${createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(CONFORMANCE_STAGE, OBJECTIVE)}\n`
+
+    if (refreshing) {
+      await mkdir(dirname(conformanceExpected), { recursive: true })
+      await writeFile(conformanceExpected, prompt)
+    } else {
+      await access(conformanceExpected)
+    }
+    await expect(prompt).toMatchFileSnapshot(conformanceExpected)
   })
 })

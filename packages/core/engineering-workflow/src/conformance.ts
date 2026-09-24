@@ -76,36 +76,99 @@ export interface ConformanceArtifactInput {
 const SPEC_CRITERION = /^-\s+\*\*([A-Z][A-Z0-9-]*\d+):\*\*\s+(.+)$/
 
 /**
- * A declared Plan task heading.
- *
- * Exactly three hashes: the plans in this repository write a task at that
- * depth, and a deeper heading is a section inside one.
+ * A Markdown heading, split into its depth and label.
  */
-const PLAN_TASK = /^### Task ([1-9][0-9]*):\s+(.+)$/
+const MARKDOWN_HEADING = /^(#{1,6})\s+(.+?)\s*#*$/
+
+/** A top-level list item inside an acceptance section. */
+const ACCEPTANCE_LIST_ITEM = /^(?:[-*+]\s+(?:\[[ xX]\]\s+)?|[1-9][0-9]*[.)]\s+)(.+)$/
 
 /**
- * Read the obligations one document declares.
+ * A declared Plan task heading.
  *
- * @param text - The document, verbatim.
- * @param pattern - What a declaration looks like in it.
- * @param source - Which artifact these obligations came from.
- * @param identify - How the captured id is spelled as an obligation id.
- * @returns The obligations, in the order the document declares them.
+ * Plans commonly put tasks at level two or three. A deeper heading is a
+ * section inside a task rather than another independently scored task.
  */
-function declared(
-  text: string,
-  pattern: RegExp,
-  source: ConformanceObligation['source'],
-  identify: (captured: string) => string,
-): readonly ConformanceObligation[] {
+const PLAN_TASK = /^(#{2,3})\s+(?:Task|Tarefa)\s+([1-9][0-9]*)\s*(?::|[.\-–—])\s*(.+)$/iu
+
+/** Normalize a heading label for the finite set of supported section names. */
+function normalizedHeading(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .trim()
+    .replace(/:$/, '')
+    .trim()
+    .toLocaleLowerCase('en-US')
+}
+
+/** Whether a heading opens a section whose top-level list items are acceptance criteria. */
+function isAcceptanceHeading(value: string): boolean {
+  return [
+    'acceptance criterion',
+    'acceptance criteria',
+    'acceptance requirements',
+    'success criteria',
+    'criterio de aceitacao',
+    'criterios de aceitacao',
+    'requisitos de aceitacao',
+    'criterio de aceptacion',
+    'criterios de aceptacion',
+  ].includes(normalizedHeading(value))
+}
+
+/** Read explicit criteria and ordinary list items inside a named acceptance section. */
+function declaredSpecCriteria(text: string): readonly ConformanceObligation[] {
+  const found: ConformanceObligation[] = []
+  let acceptanceDepth: number | undefined
+  let generated = 0
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trimEnd()
+    const heading = MARKDOWN_HEADING.exec(line)
+    if (heading !== null) {
+      const depth = (heading[1] ?? '').length
+      if (isAcceptanceHeading(heading[2] ?? '')) acceptanceDepth = depth
+      else if (acceptanceDepth !== undefined && depth <= acceptanceDepth) acceptanceDepth = undefined
+      continue
+    }
+
+    const explicit = SPEC_CRITERION.exec(line)
+    if (explicit !== null) {
+      found.push(Object.freeze({
+        id: explicit[1] ?? '',
+        source: 'spec',
+        requirement: (explicit[2] ?? '').trim(),
+        required: true,
+      }))
+      continue
+    }
+
+    if (acceptanceDepth === undefined) continue
+    const listed = ACCEPTANCE_LIST_ITEM.exec(line)
+    if (listed === null) continue
+    generated += 1
+    found.push(Object.freeze({
+      id: `SPEC-CRITERION-${generated}`,
+      source: 'spec',
+      requirement: (listed[1] ?? '').trim(),
+      required: true,
+    }))
+  }
+
+  return found
+}
+
+/** Read task headings from the common English and Portuguese Plan forms. */
+function declaredPlanTasks(text: string): readonly ConformanceObligation[] {
   const found: ConformanceObligation[] = []
   for (const line of text.split(/\r?\n/)) {
-    const match = pattern.exec(line.trimEnd())
+    const match = PLAN_TASK.exec(line.trimEnd())
     if (match === null) continue
     found.push(Object.freeze({
-      id: identify(match[1] ?? ''),
-      source,
-      requirement: (match[2] ?? '').trim(),
+      id: `PLAN-TASK-${match[2] ?? ''}`,
+      source: 'plan',
+      requirement: (match[3] ?? '').trim(),
       required: true,
     }))
   }
@@ -229,11 +292,11 @@ function readEntryPath(body: string): string {
  * @throws {ConformanceError} when an id is declared twice, or a document declares nothing.
  */
 export function buildConformanceManifest(input: ConformanceArtifactInput): ConformanceManifest {
-  const spec = declared(input.specText, SPEC_CRITERION, 'spec', id => id)
+  const spec = declaredSpecCriteria(input.specText)
   if (spec.length === 0) {
     throw new ConformanceError('no-obligations', 'the approved Spec declares no acceptance criterion')
   }
-  const plan = declared(input.planText, PLAN_TASK, 'plan', number => `PLAN-TASK-${number}`)
+  const plan = declaredPlanTasks(input.planText)
   if (plan.length === 0) {
     throw new ConformanceError('no-obligations', 'the approved Plan declares no task')
   }

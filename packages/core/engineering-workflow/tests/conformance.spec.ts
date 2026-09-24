@@ -74,10 +74,85 @@ describe('building the obligation set the implementation is judged against', () 
     expect(spec.every(o => o.required)).toBe(true)
   })
 
+  it('reads numbered criteria under an English acceptance heading', () => {
+    const specText = [
+      '# Activation canary',
+      '',
+      '## Acceptance criteria:',
+      '',
+      '1. Only the approved marker is created.',
+      '2. The marker matches the approved sentence.',
+      '',
+      '## Context',
+      '',
+      '1. This numbered context item is not a criterion.',
+    ].join('\n')
+
+    const spec = buildConformanceManifest({ ...input, specText }).obligations.filter(o => o.source === 'spec')
+
+    expect(spec.map(o => [o.id, o.requirement])).toEqual([
+      ['SPEC-CRITERION-1', 'Only the approved marker is created.'],
+      ['SPEC-CRITERION-2', 'The marker matches the approved sentence.'],
+    ])
+  })
+
+  it('reads bullet criteria under a Portuguese acceptance heading', () => {
+    const specText = [
+      '# Canário de ativação',
+      '',
+      '## Critérios de aceitação',
+      '',
+      '- Somente o marcador aprovado é criado.',
+      '- [ ] O conteúdo corresponde ao texto aprovado.',
+    ].join('\n')
+
+    const spec = buildConformanceManifest({ ...input, specText }).obligations.filter(o => o.source === 'spec')
+
+    expect(spec.map(o => [o.id, o.requirement])).toEqual([
+      ['SPEC-CRITERION-1', 'Somente o marcador aprovado é criado.'],
+      ['SPEC-CRITERION-2', 'O conteúdo corresponde ao texto aprovado.'],
+    ])
+  })
+
+  it('reads criteria under a Spanish acceptance heading', () => {
+    const specText = [
+      '# Canary de activación',
+      '',
+      '## Criterios de aceptación',
+      '',
+      '* Solo se crea el marcador aprobado.',
+    ].join('\n')
+
+    const spec = buildConformanceManifest({ ...input, specText }).obligations.filter(o => o.source === 'spec')
+
+    expect(spec.map(o => [o.id, o.requirement])).toEqual([
+      ['SPEC-CRITERION-1', 'Solo se crea el marcador aprobado.'],
+    ])
+  })
+
   it('reads every Plan task heading at the depth the plans are written at', () => {
     const plan = buildConformanceManifest(input).obligations.filter(o => o.source === 'plan')
     expect(plan.map(o => o.id)).toEqual(['PLAN-TASK-1', 'PLAN-TASK-2'])
     expect(plan[1]?.requirement).toBe('Build the deterministic manifest')
+  })
+
+  it('reads English and Portuguese task headings at common Plan depths', () => {
+    const planText = [
+      '# Plan',
+      '',
+      '## Task 1 - Create the marker',
+      '',
+      '### Tarefa 2: Verificar o conteúdo',
+      '',
+      '#### Task 3: Nested implementation detail',
+    ].join('\n')
+
+    const plan = buildConformanceManifest({ ...input, planText }).obligations.filter(o => o.source === 'plan')
+
+    expect(plan.map(o => [o.id, o.requirement])).toEqual([
+      ['PLAN-TASK-1', 'Create the marker'],
+      ['PLAN-TASK-2', 'Verificar o conteúdo'],
+    ])
   })
 
   it('carries the supplied Definition of Done through unchanged', () => {
