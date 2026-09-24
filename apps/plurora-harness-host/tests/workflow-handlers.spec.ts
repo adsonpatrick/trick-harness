@@ -483,5 +483,10 @@ describe('reading a conformance result back', () => {
     expect(prompt).toContain(RESULT_MARKER)
     expect(prompt).toContain('conformance')
     expect(prompt).toContain('implementationEvidence')
+    expect(prompt).toContain('top-level include "verdict", "summary", "findings" and "evidence"')
+    expect(prompt).toContain(
+      `${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"evidence":[],`
+      + '"conformance":{"items":[],"verdict":"PASS","summary":"one line"}}',
+    )
   })
 })

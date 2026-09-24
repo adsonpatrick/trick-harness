@@ -6,7 +6,7 @@ English | [中文](2026-09-08-plurora-stage-result-envelope.zh.md)
 
 ## Problem
 
-The Plurora host could parse a stage's final `HARNESS-RESULT:` JSON object and still reject the stage-result contract without identifying the rejected field. The ordinary-stage prompt named the required finding fields but omitted the closed values accepted for `class` and `raisedBy`, so an executor could produce valid JSON that the strict parser rejected.
+The Plurora host could parse a stage's final `HARNESS-RESULT:` JSON object and still reject the stage-result contract without identifying the rejected field. The ordinary-stage prompt named the required finding fields but omitted the closed values accepted for `class` and `raisedBy`, so an executor could produce valid JSON that the strict parser rejected. The conformance prompt requested only its nested reading even though the workflow first reads the same envelope as an ordinary stage result, making a compliant response fail at the missing top-level `verdict`.
 
 ## Decision
 
@@ -14,18 +14,22 @@ The Plurora host could parse a stage's final `HARNESS-RESULT:` JSON object and s
 
 The ordinary-stage prompt ends with a complete, valid JSON example containing `verdict`, `summary`, `findings`, and `evidence`. It requires that single final line without a fence or following prose and derives the accepted verdict, evidence, finding-class, and role values from the same constants the parser validates.
 
+The conformance prompt supplies one complete JSON example containing the ordinary top-level result and the nested `conformance` reading. It requires equal top-level and conformance verdicts and summaries; deterministic coverage validation still has the final word over the nested reading.
+
 ## Verification
 
-`apps/plurora-harness-host/tests/workflow-handlers.spec.ts` proves the safe rejection diagnostic names the field path, excludes rejected model text, and presents every closed finding value to the executor. `apps/plurora-harness-host/tests/stage-result-prompt.snapshot.ts` snapshots the prompt assembled through the real host handler without a model credential.
+`apps/plurora-harness-host/tests/workflow-handlers.spec.ts` proves the safe rejection diagnostic names the field path, excludes rejected model text, presents every closed finding value to the executor, and gives conformance both required readings. `apps/plurora-harness-host/tests/stage-result-prompt.snapshot.ts` snapshots the ordinary and conformance prompts assembled through the real host handler without a model credential.
 
 ## Alternatives considered
 
 - **Journal the parser error or final model message** - rejected because either can contain repository-derived secrets and would put unbounded model content into durable state; the parser-owned field path is sufficient and bounded.
 - **Relax the stage-result contract** - rejected because missing evidence or findings structure would weaken the workflow's evidence boundary instead of explaining the rejected report.
+- **Interpret conformance before recording stage facts** - rejected because it would move manifest-dependent validation into the generic dispatch path and duplicate the deterministic conformance reader.
 - **Retry the stage without a diagnosis** - rejected because a retry can repeat writes and leaves the operator unable to distinguish a report-shape problem from an executor failure.
 
 ## Consequences
 
 - An operator can identify the field that violated stage-result validation while raw stage output and rejected values remain outside the journal.
 - Executors receive a reproducible envelope for the ordinary no-finding case and the complete accepted values when findings exist.
+- Conformance produces one envelope that both the generic stage reader and the manifest-dependent reader can validate.
 - A canary retry must start a new workflow after the reviewed Harness revision is pinned; it cannot turn a blocked workflow into evidence retroactively.

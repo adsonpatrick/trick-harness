@@ -53,6 +53,9 @@ export const RESULT_MARKER = 'HARNESS-RESULT:'
 /** A complete ordinary result shown to stages that must report one. */
 const STAGE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"evidence":[{"kind":"diff","locator":"repository-relative/path","summary":"one line"}]}'
 
+/** A complete conformance result showing both readings the workflow performs. */
+const CONFORMANCE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"evidence":[],"conformance":{"items":[],"verdict":"PASS","summary":"one line"}}'
+
 /** Model-visible spelling of every finding class the result parser accepts. */
 const STAGE_RESULT_FINDING_CLASSES = FINDING_CLASSES.map(value => JSON.stringify(value)).join(', ')
 
@@ -339,9 +342,13 @@ function conformanceTask(stage: StageSpec, objective: WorkflowObjective): string
     'This stage is read-only: you may not change the working tree, and work you fixed while judging'
     + ' it is work nobody reviewed.',
     '',
-    `End your final message with one line: ${RESULT_MARKER} followed by JSON holding a "conformance"`
-    + ' object with the fields items (array of {id, source, requirement, status, implementationEvidence,'
-    + ' verificationEvidence, summary}), verdict ("PASS", "FAIL" or "BLOCKED") and summary (one line).',
+    `End your final message with exactly one final line, with no code fence or text after it: ${RESULT_MARKER} ${CONFORMANCE_RESULT_EXAMPLE}`,
+    'Replace the example values and populate conformance.items with every obligation.',
+    'At the top-level include "verdict", "summary", "findings" and "evidence"; findings and evidence are'
+    + ' arrays and may be empty. Also include a "conformance" object with the fields items (array of'
+    + ' {id, source, requirement, status, implementationEvidence, verificationEvidence, summary}), verdict'
+    + ' ("PASS", "FAIL" or "BLOCKED") and summary (one line).',
+    'Keep the top-level verdict and summary equal to the conformance verdict and summary.',
     'Restate the id, source and requirement of each obligation exactly as they were given to you; a'
     + ' restated requirement is an answer to something nobody approved.',
     'Include no credential, connection string or token in any of those fields.',
