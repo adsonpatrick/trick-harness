@@ -141,6 +141,7 @@ describe('Plurora checkout delivery runnable snapshot', () => {
         if (scenario === 'feature') {
           expect(git(remote, 'show', `refs/heads/${BRANCH}:${MARKER}`)).toBe(CONTENT.trim())
           expect(git(project, 'diff', '--name-only', `${baseline}..HEAD`)).toBe(MARKER)
+          expect(git(project, 'log', '-1', '--pretty=%s')).toBe('chore(harness): deliver approved workflow change')
         } else {
           expect(git(project, 'rev-parse', 'HEAD')).toBe(baseline)
           expect(git(project, 'diff', '--cached', '--name-only')).toBe('')
@@ -148,6 +149,7 @@ describe('Plurora checkout delivery runnable snapshot', () => {
         }
         transcript.push({ scenario, branch: git(project, 'rev-parse', '--abbrev-ref', 'HEAD'),
           ...(scenario === 'startup-timeout' ? { startupSummary: outcome.stages[0]?.summary } : {}),
+          ...(scenario === 'feature' ? { commitSubject: git(project, 'log', '-1', '--pretty=%s') } : {}),
           stages: outcome.stages.slice(0, 3).map(({ role, verdict }) => ({ role, verdict })),
           deliverySummary: delivery?.summary, pullRequestSimulated: opened })
       } finally {

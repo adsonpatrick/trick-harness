@@ -2,6 +2,7 @@
   {
     "scenario": "feature",
     "branch": "test/activation-canary",
+    "commitSubject": "chore(harness): deliver approved workflow change",
     "stages": [
       {
         "role": "implement",
