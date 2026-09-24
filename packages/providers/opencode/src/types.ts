@@ -84,3 +84,9 @@ export interface OpencodeAdapter {
   startServer(options: OpencodeServerOptions): Promise<OpencodeServerHandle>
   connect(url: string, directory: string): OpencodeClientHandle
 }
+
+/** Deployment settings for the real SDK binding. */
+export interface OpencodeSdkOptions {
+  /** Positive integer milliseconds, at most 2147483647, to wait for server readiness. */
+  readonly startupTimeoutMs: number
+}

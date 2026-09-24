@@ -19,6 +19,7 @@ import type {
   ExecutorStartRequest,
 } from '@trick-harness/executor'
 import { permissionConfig, parseModel, OpencodeRouteError } from './config.ts'
+import { OpencodeStartupTimeoutError } from './startup-error.ts'
 import type { OpencodeAdapter, OpencodeClientHandle, OpencodeServerHandle } from './types.ts'
 
 export type * from './types.ts'
@@ -27,6 +28,7 @@ export { OpencodeRouteError, permissionConfig, parseModel } from './config.ts'
 // only `index` and `invariant` entries, so it is re-exported here rather than
 // living behind a subpath that could never be built.
 export { createSdkAdapter } from './adapter.ts'
+export { OpencodeStartupTimeoutError } from './startup-error.ts'
 
 /** The provider name routes select this executor by. */
 export const OPENCODE_EXECUTOR = 'opencode'
@@ -77,6 +79,9 @@ function finalText(parts: readonly { type: string; text?: string }[]): string {
  * @returns a failure carrying no credential-bearing text.
  */
 function classify(error: unknown): ExecutorFailure {
+  if (error instanceof OpencodeStartupTimeoutError) {
+    return { category: 'provider-error', availability: false, safeDiagnostic: error.message }
+  }
   if (error instanceof OpencodeRouteError) {
     // Not an availability failure. The executor is reachable and refusing a
     // route it cannot express, which is a deployment or policy mistake and is
