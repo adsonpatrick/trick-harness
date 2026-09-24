@@ -26,7 +26,14 @@ import type { HarnessWorkflowHandlers } from '@trick-harness/composition'
 import type {
   ApprovedArtifactRef, DiagnosisContract, EvidenceRef, StageResult, WorkflowObjective,
 } from '@trick-harness/contracts'
-import { ContractError, parseConformanceContract, parseDiagnosisContract, parseStageResult } from '@trick-harness/contracts'
+import {
+  ContractError,
+  FINDING_CLASSES,
+  ROLES,
+  parseConformanceContract,
+  parseDiagnosisContract,
+  parseStageResult,
+} from '@trick-harness/contracts'
 import { pluroraDodObligations } from '../../../profiles/plurora/profile.ts'
 import { extractApprovedPlanWriteSet } from '@trick-harness/engineering-workflow'
 import type { ChangeImpactReader, StageSpec } from '@trick-harness/engineering-workflow'
@@ -45,6 +52,12 @@ export const RESULT_MARKER = 'HARNESS-RESULT:'
 
 /** A complete ordinary result shown to stages that must report one. */
 const STAGE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"evidence":[{"kind":"diff","locator":"repository-relative/path","summary":"one line"}]}'
+
+/** Model-visible spelling of every finding class the result parser accepts. */
+const STAGE_RESULT_FINDING_CLASSES = FINDING_CLASSES.map(value => JSON.stringify(value)).join(', ')
+
+/** Model-visible spelling of every role a finding may name as its author. */
+const STAGE_RESULT_ROLES = ROLES.map(value => JSON.stringify(value)).join(', ')
 
 /** How much of a stage's own summary this deployment journals. */
 export const MAX_SUMMARY_CHARS = 400
@@ -175,7 +188,11 @@ function interpret(stage: StageSpec, executor: string, result: ExecutorResult): 
   }
   catch (error) {
     if (error instanceof ContractError) {
-      return unreadable(stage, executor, `the ${RESULT_MARKER} envelope violates the stage-result contract (stage-result-invalid)`)
+      return unreadable(
+        stage,
+        executor,
+        `the ${RESULT_MARKER} envelope violates the stage-result contract (stage-result-invalid at ${error.path})`,
+      )
     }
     return unreadable(stage, executor, `the ${RESULT_MARKER} envelope was not one this host can read`)
   }
@@ -346,7 +363,9 @@ function task(stage: StageSpec, objective: WorkflowObjective): string {
     'Replace the example values, keep every key, and emit valid JSON. Verdict is one of "PASS", "PARTIAL",'
     + ' "FAIL", "INCONCLUSIVE" or "BLOCKED". Evidence is an array of {kind, locator, summary}, where kind is'
     + ' one of test, diff, log, file, pr, commit or gate. A non-empty finding has id, class, raisedBy, summary,'
-    + ' confirmed and evidence; use a workflow role for raisedBy. Findings and evidence may be [] when none apply.',
+    + ' confirmed and evidence.',
+    `Finding class is one of ${STAGE_RESULT_FINDING_CLASSES}; raisedBy is one of ${STAGE_RESULT_ROLES}.`,
+    'Findings and evidence may be [] when none apply.',
     'Cite every file you changed as evidence of kind "diff" with the repository-relative path as its'
     + ' locator; a path you do not cite is a path this workflow will not publish.',
     'Include no credential, connection string or token in any of those fields.',
