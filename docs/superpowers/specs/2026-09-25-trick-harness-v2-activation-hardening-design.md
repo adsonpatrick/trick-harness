@@ -1,7 +1,7 @@
 # Trick Harness V2 Activation Hardening — Design
 
 - **Date:** 2026-09-25
-- **Status:** Draft for owner review after in-chat design approval
+- **Status:** Approved — owner approval confirmed 2026-09-25
 - **Repository:** `adsonpatrick/trick-harness`
 - **Project integration:** `adsonpatrick/neuro-via`
 - **Base revision:** `9031aca5fd8a5576a3308011e5e46d37d3e6f8c5`
