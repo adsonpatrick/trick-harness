@@ -183,12 +183,14 @@ describe('writing and replaying one workflow', () => {
 
     const written = session.events.filter(event => event.type.startsWith('harness/')).map(event => event.type)
     expect(written).toStrictEqual([...HARNESS_EVENT_TYPES])
-    expect(replay().constraints).toEqual([
-      expect.objectContaining({ stageId: 'verify-1', constraint: expect.objectContaining({ class: 'SANDBOX_LIMITATION' }) }),
-    ])
-    expect(replay().repairAuthorizations).toEqual([
-      expect.objectContaining({ stageId: 'repair-1', findingId: 'f-1', allowedPathCount: 2 }),
-    ])
+    const projection = replay()
+    expect(projection.constraints).toHaveLength(1)
+    expect(projection.constraints[0]?.stageId).toBe('verify-1')
+    expect(projection.constraints[0]?.constraint.class).toBe('SANDBOX_LIMITATION')
+    expect(projection.repairAuthorizations).toHaveLength(1)
+    expect(projection.repairAuthorizations[0]?.stageId).toBe('repair-1')
+    expect(projection.repairAuthorizations[0]?.findingId).toBe('f-1')
+    expect(projection.repairAuthorizations[0]?.allowedPathCount).toBe(2)
   })
 
   it('replays the objective, routes, findings, diagnoses, verdicts and delivery from the log alone', async () => {

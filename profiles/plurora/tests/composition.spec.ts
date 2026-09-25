@@ -147,16 +147,15 @@ describe('the Plurora deployment composition', () => {
         permissionMode: 'workspace-write',
         reasoningEffort: rule.use['effort'] as ReasoningEffort,
       })
-      // Dispatched for real. The seams throw, so the run fails — but it fails
-      // as `provider-error`, which only happens once the route has already
-      // cleared capability validation. An unnarrowed row would instead reject
+      // Dispatched for real. The seams throw, so the run fails with a canonical
+      // `other` category after the route has cleared capability validation. An unnarrowed row would instead reject
       // with `ExecutorCapabilityError` before any provider was reached.
       await expect(bundle.runtime.start({
         cwd: '/workspace',
         task: 'do the task',
         route: narrowed.route,
         signal: new AbortController().signal,
-      })).resolves.toMatchObject({ status: 'error', failure: { category: 'provider-error' } })
+      })).resolves.toMatchObject({ status: 'error', failure: { category: 'other' } })
       if (narrowed.dropped.length > 0) dropped.push(rule.id)
     }
     // Nothing is dropped today, and the reason is stated rather than assumed:
@@ -236,6 +235,7 @@ const DIAGNOSIS: DiagnosisContract = Object.freeze({
   confidence: 'high',
   regressionTestSeam: 'thing.spec.ts',
   minimalRepairSurface: 'thing.ts',
+  proposedRepairPaths: ['src/thing.ts'],
   unknowns: Object.freeze([]),
   securityRelevance: 'none',
 })
@@ -254,7 +254,8 @@ const REPAIRED = Object.freeze({
  */
 function defect(id: string, cls: Finding['class']): Finding {
   return {
-    id, class: cls, raisedBy: 'verify', summary: `${id} is wrong`, confirmed: true, evidence: [EVIDENCE],
+    id, class: cls, raisedBy: 'verify', summary: `${id} is wrong`, confirmed: true,
+    affectedPaths: ['src/thing.ts'], evidence: [EVIDENCE],
   }
 }
 
@@ -321,9 +322,14 @@ describe('Plurora policy driving a live run', () => {
           verdict: 'PASS',
           summary: `${stage.role} passed`,
           findings: [],
+          constraints: [],
           evidence: [],
         })),
         task: stage => `${stage.role}: do the work`,
+        changeImpact: {
+          plannedPaths: async () => ['src/thing.ts'],
+          actualPaths: async () => ['src/thing.ts'],
+        },
         ...CONFORMS,
         describeDelivery: input => ({
           branch: 'feature',
@@ -562,7 +568,7 @@ describe('Plurora policy driving a live run', () => {
    * @returns the result.
    */
   function passing(role: string, executor: string): StageResult {
-    return { role, executor, verdict: 'PASS', summary: `${role} passed`, findings: [], evidence: [] } as StageResult
+    return { role, executor, verdict: 'PASS', summary: `${role} passed`, findings: [], constraints: [], evidence: [] }
   }
 
   describe('authority this deployment does not hand to a model', () => {
@@ -620,7 +626,7 @@ describe('Plurora policy driving a live run', () => {
           return readings === 1
             ? {
               role: stage.role, executor, verdict: 'FAIL', summary: 'a secret leaks',
-              findings: [defect('f-sec', 'SECURITY_BUG')], evidence: [],
+              findings: [defect('f-sec', 'SECURITY_BUG')], constraints: [], evidence: [],
             }
             : passing(stage.role, executor)
         },
@@ -644,7 +650,7 @@ describe('Plurora policy driving a live run', () => {
           return reviews === 1
             ? {
               role: stage.role, executor, verdict: 'FAIL', summary: 'the thing is wrong',
-              findings: [defect('f-bug', 'BUG')], evidence: [],
+              findings: [defect('f-bug', 'BUG')], constraints: [], evidence: [],
             }
             : passing(stage.role, executor)
         },
@@ -658,7 +664,7 @@ describe('Plurora policy driving a live run', () => {
       expect(ids).toEqual([
         'implement-1', 'verify-1', 'delivery-1', 'review-1',
         'debug-1', 'repair-1', 'verify-2', 'delivery-2', 'review-2',
-        'qa-1', 'conformance-1', 'verify-final',
+        'qa-2', 'conformance-2', 'verify-final-2',
       ])
       noMutationAuthorityInPrompts(seen)
     })
@@ -729,6 +735,7 @@ describe('the capabilities this project actually turns on', () => {
           verdict: 'PASS',
           summary: `${stage.role} passed`,
           findings: [],
+          constraints: [],
           evidence: [],
         }),
         task: stage => `${stage.role}: do the work`,
@@ -775,6 +782,7 @@ describe('the capabilities this project actually turns on', () => {
           verdict: 'PASS',
           summary: `${stage.role} passed`,
           findings: [],
+          constraints: [],
           evidence: [],
         }),
         task: stage => `${stage.role}: do the work`,
@@ -826,6 +834,7 @@ describe('the capabilities this project actually turns on', () => {
           verdict: 'PASS',
           summary: `${stage.role} passed`,
           findings: [],
+          constraints: [],
           evidence: [],
         }),
         task: stage => `${stage.role}: do the work`,
@@ -875,6 +884,7 @@ describe('the capabilities this project actually turns on', () => {
           verdict: 'PASS',
           summary: `${stage.role} passed`,
           findings: [],
+          constraints: [],
           evidence: [],
         }),
         task: stage => `${stage.role}: do the work`,

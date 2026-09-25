@@ -1415,7 +1415,7 @@ The composition, host, workspace-state and activation E2E regression pass (66 te
 **Interfaces:**
 - Produces: one reviewable Trick Harness implementation branch with no unrelated changes and a commit SHA suitable for NeuroVia pinning after human merge.
 
-- [ ] **Step 1: Run focused suites as one regression pass**
+- [x] **Step 1: Run focused suites as one regression pass**
 
 ```bash
 corepack pnpm exec vitest run   packages/core/contracts   packages/core/executor   packages/core/routing   packages/core/journal   packages/core/engineering-workflow   packages/providers/opencode   packages/composition/runtime   apps/plurora-harness-host
@@ -1423,7 +1423,7 @@ corepack pnpm exec vitest run   packages/core/contracts   packages/core/executor
 
 Expected: PASS.
 
-- [ ] **Step 2: Run the repository Trick Harness gate**
+- [x] **Step 2: Run the repository Trick Harness gate**
 
 ```bash
 corepack pnpm run test:trick
@@ -1431,7 +1431,7 @@ corepack pnpm run test:trick
 
 Expected: PASS.
 
-- [ ] **Step 3: Run static gates**
+- [x] **Step 3: Run static gates**
 
 ```bash
 corepack pnpm run typecheck
@@ -1449,6 +1449,8 @@ corepack pnpm run constraints
 
 Expected: no unintended snapshot or dependency-boundary drift.
 
+Observed: `corepack pnpm run constraints` passes, and the activation delivery plus stage-result prompt snapshots pass (3 tests). The full `corepack pnpm run test:snapshot` run was not green on this Windows host: transcript/headless/SDK snapshot suites failed or stalled at 27–48 second test durations. It was interrupted after several independent failures and emitted no final summary; no snapshot files were refreshed from that run.
+
 - [ ] **Step 5: Inspect the final diff for forbidden regressions**
 
 Explicitly verify:
@@ -1459,6 +1461,8 @@ Explicitly verify:
 - every repair path goes through deterministic scope authorization.
 
 Use repository search plus the final diff; do not rely only on tests.
+
+The code search found no emitted `provider-error` / `route-unsupported` categories, no `ExecutorFailure.availability` field in implementation/types, no model-diff-derived delivery write set, and all workflow-result fixtures include `constraints`. One legacy paragraph in `packages/providers/codex/README.md` still describes the removed `ExecutorFailure.availability` property and must be corrected before this audit is complete. Repair dispatch calls the deterministic scope builder and authorization gate before journaling authority and starting the repair.
 
 - [ ] **Step 6: Push the implementation branch and open a PR**
 
