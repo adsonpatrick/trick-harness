@@ -63,8 +63,10 @@ export * from './conformance.ts'
 import {
   assessRepairCompletion,
   authorizeRepair,
+  buildRepairScope,
   isMechanicallyObvious,
   RepairError,
+  repairScopeDigest,
   validateDiagnosis,
 } from './repair.ts'
 import type { RepairAuthorization, RepairEvidence } from './repair.ts'
@@ -526,6 +528,7 @@ export class WorkflowRunner {
     let defect: Finding | undefined
     let diagnosis: DiagnosisContract | undefined
     let authorization: RepairAuthorization | undefined
+    let pendingRepairCycle: number | undefined
     // The executor that last wrote to the tree, so the verifier that follows a
     // repair is routed as an independent reader rather than back to the writer.
     let lastMutator: string | undefined
@@ -609,10 +612,39 @@ export class WorkflowRunner {
             `stage ${stage.stageId} repairs, but no confirmed defect is open for it to act on`,
           )
         }
+        if (diagnosis?.productDecisionDependency !== undefined
+          && diagnosis.productDecisionDependency.trim().length > 0) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'product-decision',
+            'the defect depends on an unmade product decision; the run stops rather than inventing the behavior',
+          )
+        }
+        if (plannedPaths === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'automatic repair requires a deterministic approved write set, and this run has none',
+          )
+        }
         // The gate runs before dispatch, so a repair that may not start never
         // gets a writable working tree in the first place.
         try {
-          authorization = authorizeRepair(defect, diagnosis, profile.securityPolicy.repairRules)
+          const scope = buildRepairScope(plannedPaths, profile.changeImpactPolicy)
+          authorization = authorizeRepair(defect, {
+            diagnosis,
+            scope,
+            changeImpactPolicy: profile.changeImpactPolicy,
+            ...profile.securityPolicy.repairRules === undefined
+              ? {}
+              : { securityRepairRules: profile.securityPolicy.repairRules },
+          })
+          await journal.repairAuthorization({
+            stageId: stage.stageId,
+            findingId: authorization.findingId,
+            scopeSha256: repairScopeDigest(authorization.scope),
+            allowedPathCount: authorization.scope.allowedPaths.length,
+            allowedSurfaces: authorization.scope.allowedSurfaces,
+            reasonCodes: authorization.reasonCodes,
+          })
         } catch (error) {
           if (!(error instanceof RepairError)) throw error
           return await this.#blocked(
@@ -772,13 +804,20 @@ export class WorkflowRunner {
         )
       }
 
+      if (stage.role === 'repair') {
+        if (pendingRepairCycle === undefined || authorization === undefined) {
+          throw new Error('repair dispatch reached without an authorized pending cycle')
+        }
+        repairCycles = pendingRepairCycle
+        pendingRepairCycle = undefined
+      }
       executorStarts += 1
       const reroutesBefore = availability.rerouteStarts
       let dispatched: Dispatched
       try {
         dispatched = await this.#dispatch(
           stage, request, signal, repairCycles, lastMutator, availability,
-          maxExecutorStarts - executorStarts, humanOverride, measurement,
+          maxExecutorStarts - executorStarts, humanOverride, measurement, authorization,
         )
       } catch (error) {
         // A policy that cannot answer for this stage — a degraded executor no
@@ -939,7 +978,7 @@ export class WorkflowRunner {
         defect = repairable
         diagnosis = undefined
         authorization = undefined
-        repairCycles += 1
+        pendingRepairCycle = repairCycles + 1
         const retry = (attempts.get(stage.role) ?? 1) + 1
         attempts.set(stage.role, retry)
         // Mechanically obvious scaffolding defects skip diagnosis; everything
@@ -958,18 +997,18 @@ export class WorkflowRunner {
         queue.unshift(
           ...isMechanicallyObvious(repairable)
             ? []
-            : [{ stageId: `debug-${repairCycles}`, role: 'debug' as const }],
-          { stageId: `repair-${repairCycles}`, role: 'repair' },
+            : [{ stageId: `debug-${pendingRepairCycle}`, role: 'debug' as const }],
+          { stageId: `repair-${pendingRepairCycle}`, role: 'repair' },
           ...reverify,
           // A published branch is re-delivered before it is re-read: a review
           // that ran against the pre-repair diff would be certifying a state
           // the pull request no longer holds.
-          ...delivered ? [{ stageId: `delivery-${repairCycles + 1}`, role: 'delivery' as const }] : [],
+          ...delivered ? [{ stageId: `delivery-${pendingRepairCycle + 1}`, role: 'delivery' as const }] : [],
           // A conformance reading taken before this repair describes a branch
           // that no longer exists, so it is taken again before the stage that
           // found the defect re-runs and before anything certifies the result.
           ...conformanceRead && stage.role !== 'conformance'
-            ? [{ stageId: `conformance-${repairCycles + 1}`, role: 'conformance' as const }]
+            ? [{ stageId: `conformance-${pendingRepairCycle + 1}`, role: 'conformance' as const }]
             : [],
           { stageId: `${stage.role}-${retry}`, role: stage.role },
         )
@@ -1170,6 +1209,7 @@ export class WorkflowRunner {
     extraStarts: number,
     humanOverride: OverrideBox,
     measurement: ImpactBox,
+    repairAuthorization: RepairAuthorization | undefined,
   ): Promise<Dispatched> {
     let spent = 0
     let lastProviderFailure: Dispatched | undefined
@@ -1177,7 +1217,8 @@ export class WorkflowRunner {
       let attempt: { readonly dispatched: Dispatched; readonly reroutable: boolean }
       try {
         attempt = await this.#attempt(
-          stage, request, signal, priorAttempts, lastMutator, availability, humanOverride, measurement,
+          stage, request, signal, priorAttempts, lastMutator, availability,
+          humanOverride, measurement, repairAuthorization,
         )
       } catch (error) {
         // A provider failure remains the established fact if routing cannot
@@ -1211,6 +1252,7 @@ export class WorkflowRunner {
     availability: AvailabilityState,
     humanOverride: OverrideBox,
     measurement: ImpactBox,
+    repairAuthorization: RepairAuthorization | undefined,
   ): Promise<{ readonly dispatched: Dispatched; readonly reroutable: boolean }> {
     const { journal, executors, policy } = this.#options
     const context = this.#routingContext(
@@ -1273,9 +1315,13 @@ export class WorkflowRunner {
       })
     }
     const startedAt = this.#now()
+    const baseTask = request.task(stage, request.objective)
+    const task = stage.role === 'repair' && repairAuthorization !== undefined
+      ? `${baseTask}\n\nHarness repair authorization: modify only repository-relative paths in this exact JSON array; do not modify other paths.\n${JSON.stringify(repairAuthorization.scope.allowedPaths)}`
+      : baseTask
     const result = await executors.start({
       cwd: request.objective.cwd,
-      task: request.task(stage, request.objective),
+      task,
       route: executorRoute,
       signal,
     })

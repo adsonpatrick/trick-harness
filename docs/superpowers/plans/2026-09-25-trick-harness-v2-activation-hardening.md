@@ -763,7 +763,7 @@ git commit -m "fix(workflow): reconcile verdicts from established facts"
 - Consumes: `plannedPaths`, profile `changeImpactPolicy`, `Finding.affectedPaths`, `DiagnosisContract.proposedRepairPaths`, security repair rules.
 - Produces: `RepairScope`, scoped `RepairAuthorization`, `scope-unauthorized` refusal, and a deterministic repair-scope digest for journaling.
 
-- [ ] **Step 1: Add failing unit tests for in-scope and out-of-scope repair**
+- [x] **Step 1: Add failing unit tests for in-scope and out-of-scope repair**
 
 Add cases equivalent to:
 
@@ -791,7 +791,7 @@ expect(() => authorizeRepair(confirmedToolingDefect({
 
 Add a non-empty proposed-path requirement: an auto-repairable finding that names no affected path must not receive write authority.
 
-- [ ] **Step 2: Add the Review Focus test: repair must fail closed without planned scope**
+- [x] **Step 2: Add the Review Focus test: repair must fail closed without planned scope**
 
 In `workflow.spec.ts`, construct a run that can reach a repairable finding but has no deterministic planned-path reader. Assert:
 
@@ -803,13 +803,13 @@ expect(repairProviderStarts).toBe(0)
 
 The repair cycle counter must not be incremented until authorization can actually be granted.
 
-- [ ] **Step 3: Run repair/workflow tests and confirm failure**
+- [x] **Step 3: Run repair/workflow tests and confirm failure**
 
 ```bash
 corepack pnpm exec vitest run   packages/core/engineering-workflow/tests/repair.spec.ts   packages/core/engineering-workflow/tests/workflow.spec.ts
 ```
 
-- [ ] **Step 4: Implement `RepairScope`, scope normalization, and digest**
+- [x] **Step 4: Implement `RepairScope`, scope normalization, and digest**
 
 Add:
 
@@ -832,7 +832,7 @@ export interface RepairAuthorization {
 
 `repairScopeDigest(scope)` must hash a canonical serialization: sorted paths, then sorted surfaces, with fixed separators. Do not hash model prose.
 
-- [ ] **Step 5: Change `authorizeRepair` to require a scope**
+- [x] **Step 5: Change `authorizeRepair` to require a scope**
 
 Use one options object to prevent positional drift:
 
@@ -850,7 +850,7 @@ export function authorizeRepair(
 
 Derive proposed paths from validated diagnosis when diagnosis exists; otherwise from `finding.affectedPaths`. Normalize them, require every path to be inside `scope.allowedPaths`, classify the proposed paths, and require their surfaces to be a subset of `scope.allowedSurfaces`.
 
-- [ ] **Step 6: Move repair-cycle accounting after successful authorization and journal authority before dispatch**
+- [x] **Step 6: Move repair-cycle accounting after successful authorization and journal authority before dispatch**
 
 At the repair stage:
 
@@ -886,7 +886,7 @@ await journal.repairAuthorization({
 
 Do not increment `repairCycles` when a certifier merely proposes a repair. Introduce a local `pendingRepairCycle` number: when a confirmed repairable finding is selected, set `pendingRepairCycle = repairCycles + 1` and use that number only to name the queued `debug-N` / `repair-N` stages. After scope authorization is recorded and the pre-repair snapshot succeeds, assign `repairCycles = pendingRepairCycle` immediately before writable repair dispatch and clear `pendingRepairCycle`. This preserves `repairCycles = 0` when authorization is refused before repair starts.
 
-- [ ] **Step 7: Re-run tests and commit**
+- [x] **Step 7: Re-run tests and commit**
 
 ```bash
 corepack pnpm exec vitest run packages/core/engineering-workflow/tests/repair.spec.ts packages/core/engineering-workflow/tests/workflow.spec.ts
