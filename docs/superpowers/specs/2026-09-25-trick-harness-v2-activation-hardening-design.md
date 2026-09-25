@@ -149,8 +149,6 @@ classified(proposedRepairPaths).surfaces ⊆ RepairScope.allowedSurfaces
 
 A legitimate repair that needs an additional test or source file not named by the approved Plan is intentionally blocked until scope is expanded by an external approved decision.
 
-The approved repair scope is derived by deterministic code from the approved Plan and change-impact policy.
-
 ```ts
 export interface RepairScope {
   readonly allowedPaths: readonly string[]
