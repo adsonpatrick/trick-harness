@@ -52,6 +52,10 @@ const state = projectWorkflow(session.events, 'wf-1')
 
 `./invariant` pins the event vocabulary against an independently restated expectation and checks every type this journal writes is one the build's persistence read path knows.
 
+## Constraints and repair authority
+
+`harness/stage-constraint` records an environmental limitation separately from findings. `harness/repair-authorization` is checkpointed before writable repair and carries only deterministic scope facts. Executor-end events retain a stable safe failure code, never provider prose.
+
 ## Known Limitations and Deferred Work
 
 - **The journal enforces no ordering** — nothing here refuses a verdict before a route or a second start for one stage. Sequencing is the workflow runtime's to own; the projection reports open stages and lets the caller decide.

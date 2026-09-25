@@ -21,6 +21,7 @@ import type {
   Risk,
   Role,
   RoutedPermissionMode,
+  StageConstraint,
   Workload,
   WorkflowVerdict,
 } from '@trick-harness/contracts'
@@ -135,6 +136,7 @@ declare module '@deepseek-ai/dsh-session/types' {
       executor: string
       outcome: ExecutorOutcome
       failureClass?: string
+      failureCode?: string
       durationMs: number
     }
     /**
@@ -163,6 +165,10 @@ declare module '@deepseek-ai/dsh-session/types' {
     }
     /** One triaged finding, carrying its evidence rather than its narration. */
     'harness/finding': { workflowId: string; stageId: string; finding: Finding }
+    /** A bounded environmental constraint a stage reported, kept separate from artifact findings. */
+    'harness/stage-constraint': { workflowId: string; stageId: string; constraint: StageConstraint }
+    /** Deterministic repair scope authorized before a writable repair stage may begin. */
+    'harness/repair-authorization': { workflowId: string; stageId: string; findingId: string; scopeSha256: string; allowedPathCount: number; allowedSurfaces: string[]; reasonCodes: string[] }
     /** One completed diagnosis, as the contract a repair is allowed to act on. */
     'harness/diagnosis': { workflowId: string; stageId: string; diagnosis: DiagnosisContract }
     /** One stage's verdict, and whether a weakened route lowered it. */

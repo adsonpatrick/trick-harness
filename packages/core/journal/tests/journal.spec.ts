@@ -51,6 +51,7 @@ const finding: Finding = {
   raisedBy: 'review',
   summary: 'the delivery stage accepts a protected branch',
   confirmed: true,
+  affectedPaths: [],
   evidence: [{ kind: 'diff', locator: 'src/delivery.ts', summary: 'no branch check before push' }],
 }
 
@@ -65,12 +66,13 @@ const diagnosis: DiagnosisContract = {
   confidence: 'high',
   regressionTestSeam: 'delivery.spec.ts',
   minimalRepairSurface: 'src/delivery.ts',
+  proposedRepairPaths: [],
   unknowns: [],
   securityRelevance: 'possible',
 }
 
 describe('the harness event vocabulary', () => {
-  it('declares the seventeen events the lifecycle needs, in lifecycle order', () => {
+  it('declares the durable lifecycle events in order', () => {
     expect([...HARNESS_EVENT_TYPES]).toStrictEqual([
       'harness/workflow-start',
       'harness/route-decision',
@@ -80,6 +82,8 @@ describe('the harness event vocabulary', () => {
       'harness/capability-start',
       'harness/capability-end',
       'harness/finding',
+      'harness/stage-constraint',
+      'harness/repair-authorization',
       'harness/diagnosis',
       'harness/verdict',
       'harness/delivery',
@@ -137,6 +141,8 @@ describe('writing and replaying one workflow', () => {
     await journal.beginCapability('deliver-1', 'github-delivery', true)
     await journal.endCapability('deliver-1', 'github-delivery', 'completed', 900)
     journal.finding('review-1', finding)
+    journal.stageConstraint('verify-1', { id: 'constraint-1', class: 'SANDBOX_LIMITATION', raisedBy: 'verify', summary: 'sandbox cannot read the external runtime', evidence })
+    await journal.repairAuthorization({ stageId: 'repair-1', findingId: 'f-1', scopeSha256: 'd'.repeat(64), allowedPathCount: 2, allowedSurfaces: ['packages/core'], reasonCodes: ['planned-paths'] })
     await journal.diagnosis('debug-1', diagnosis)
     await journal.verdict('verify-1', 'verify', 'PASS', 'focused suite green', evidence)
     await journal.delivery({ action: 'push', branch: 'feat/x', commitSha: 'abc123' })
@@ -177,6 +183,12 @@ describe('writing and replaying one workflow', () => {
 
     const written = session.events.filter(event => event.type.startsWith('harness/')).map(event => event.type)
     expect(written).toStrictEqual([...HARNESS_EVENT_TYPES])
+    expect(replay().constraints).toEqual([
+      expect.objectContaining({ stageId: 'verify-1', constraint: expect.objectContaining({ class: 'SANDBOX_LIMITATION' }) }),
+    ])
+    expect(replay().repairAuthorizations).toEqual([
+      expect.objectContaining({ stageId: 'repair-1', findingId: 'f-1', allowedPathCount: 2 }),
+    ])
   })
 
   it('replays the objective, routes, findings, diagnoses, verdicts and delivery from the log alone', async () => {
@@ -262,6 +274,8 @@ describe('writing and replaying one workflow', () => {
       workflowId: 'wf-absent',
       routes: [],
       findings: [],
+      constraints: [],
+      repairAuthorizations: [],
       diagnoses: [],
       verdicts: [],
       deliveries: [],
@@ -345,6 +359,7 @@ describe('what never reaches the durable log', () => {
     const logged = session.events.find(event => event.type === 'harness/finding')
     const payload = logged?.data as { finding: Record<string, unknown> } | undefined
     expect(Object.keys(payload?.finding ?? {}).sort()).toStrictEqual([
+      'affectedPaths',
       'class',
       'confirmed',
       'evidence',
