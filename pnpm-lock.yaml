@@ -3914,6 +3914,9 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../contracts
 
   packages/core/journal:
     devDependencies:
@@ -6207,6 +6210,9 @@ importers:
       '@deepseek-ai/dsh-subprocess':
         specifier: workspace:^
         version: link:../../subprocess/subprocess
+      '@trick-harness/contracts':
+        specifier: workspace:^
+        version: link:../../core/contracts
       '@trick-harness/executor':
         specifier: workspace:^
         version: link:../../core/executor

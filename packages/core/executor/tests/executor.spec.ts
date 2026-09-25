@@ -372,11 +372,11 @@ describe('dispatch and run lifecycle', () => {
     runtime.register(provider('codex', fullCapabilities, async () => ({
       status: 'error',
       output: '',
-      failure: { category: 'unavailable', availability: false, safeDiagnostic: 'server refused' },
+      failure: { category: 'other', code: 'fixture.other', safeDiagnostic: 'server refused' },
     })))
     await expect(runtime.start(request())).resolves.toMatchObject({
       status: 'error',
-      failure: { availability: false },
+      failure: { category: 'other', code: 'fixture.other' },
     })
   })
 })
@@ -462,7 +462,7 @@ describe('cleanup facts travel beside the outcome, not inside it', () => {
     ['error', {
       status: 'error',
       output: '',
-      failure: { category: 'provider-error', availability: false, safeDiagnostic: 'nope' },
+      failure: { category: 'other', code: 'fixture.other', safeDiagnostic: 'nope' },
     }],
   ] as const)('leaves a %s run classified exactly as the provider classified it', async (
     status,

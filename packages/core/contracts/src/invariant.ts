@@ -9,6 +9,7 @@ import {
   CONFORMANCE_SOURCES,
   CONFIDENCE_LEVELS,
   EVIDENCE_KINDS,
+  EXECUTOR_FAILURE_CATEGORIES,
   FINDING_CLASSES,
   INDEPENDENCE_REQUIREMENTS,
   READ_ONLY_ROLES,
@@ -116,6 +117,13 @@ const EXPECTED_STAGE_CONSTRAINT_CLASSES = [
   'EXTERNAL_SERVICE_UNAVAILABLE',
 ]
 
+/** Restated canonical executor failures; see {@link EXPECTED_ROLES}. */
+const EXPECTED_EXECUTOR_FAILURE_CATEGORIES = [
+  'usage-limit-exceeded', 'session-budget-exceeded', 'server-overloaded', 'internal-server-error',
+  'transport-unavailable', 'context-window-exceeded', 'bad-request', 'sandbox-denied',
+  'cyber-policy-refusal', 'unauthorized', 'wrong-answer', 'failed-verification', 'other',
+]
+
 /** Roles that may never hold write authority, restated; see {@link EXPECTED_ROLES}. */
 const EXPECTED_WRITING_ROLES = ['implement', 'repair', 'delivery']
 
@@ -152,6 +160,7 @@ const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
   pin(fail, 'CONFIDENCE_LEVELS', CONFIDENCE_LEVELS, EXPECTED_CONFIDENCE_LEVELS)
   pin(fail, 'SECURITY_RELEVANCES', SECURITY_RELEVANCES, EXPECTED_SECURITY_RELEVANCES)
   pin(fail, 'STAGE_CONSTRAINT_CLASSES', STAGE_CONSTRAINT_CLASSES, EXPECTED_STAGE_CONSTRAINT_CLASSES)
+  pin(fail, 'EXECUTOR_FAILURE_CATEGORIES', EXECUTOR_FAILURE_CATEGORIES, EXPECTED_EXECUTOR_FAILURE_CATEGORIES)
 
   // The separation these two lists express is the reason the read-only set
   // exists at all: a stage that judges work must not be able to change it.

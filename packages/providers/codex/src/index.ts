@@ -34,7 +34,6 @@ import { CodexRouteError, executorFailure, sandboxMode } from './config.ts'
 export {
   CodexRouteError,
   executorFailure,
-  isAvailabilityFailure,
   sandboxMode,
   NON_AVAILABILITY_CATEGORIES,
 } from './config.ts'
@@ -173,20 +172,19 @@ async function runOnce(
         status: 'error',
         output: '',
         failure: {
-          category: 'route-unsupported',
-          availability: false,
-          safeDiagnostic: error.message,
+          category: 'bad-request',
+          code: 'codex.route.unsupported',
+          safeDiagnostic: 'Codex cannot express the routed request',
         },
       }
     }
-    const name = error instanceof Error ? error.name : 'Error'
     return {
       status: 'error',
       output: '',
       failure: {
-        category: 'provider-error',
-        availability: false,
-        safeDiagnostic: `codex run failed (${name})`,
+        category: 'other',
+        code: 'codex.run.failed',
+        safeDiagnostic: 'Codex run failed before returning a valid result',
       },
     }
   } finally {

@@ -11,7 +11,7 @@
  * @module @trick-harness/routing
  */
 
-import type { RouteDecision, RoutingContext, WorkflowVerdict } from '@trick-harness/contracts'
+import type { ExecutorFailureCategory, RouteDecision, RoutingContext, WorkflowVerdict } from '@trick-harness/contracts'
 import { RoutingError } from './types.ts'
 
 /**
@@ -34,7 +34,7 @@ export const AVAILABILITY_FAILURES = [
   'server-overloaded',
   'internal-server-error',
   'transport-unavailable',
-] as const
+] as const satisfies readonly ExecutorFailureCategory[]
 
 /**
  * Failures that mean the executor served the run and the result was unusable.
@@ -58,7 +58,7 @@ export const QUALITY_FAILURES = [
   // refuses to guess, while a provider saying `other` has already decided that
   // an unrecognised fault is not grounds to send the work somewhere else.
   'other',
-] as const
+] as const satisfies readonly ExecutorFailureCategory[]
 
 /**
  * Failures that say the executor cannot serve *any* run until a human acts.
@@ -88,7 +88,7 @@ export function disablesExecutor(failure: string): boolean {
 }
 
 /** One recognised failure category. */
-export type FailureClass = typeof AVAILABILITY_FAILURES[number] | typeof QUALITY_FAILURES[number]
+export type FailureClass = ExecutorFailureCategory
 
 /** Whether a failure is about the product's ability to answer, or the answer. */
 export type FailureNature = 'availability' | 'quality'

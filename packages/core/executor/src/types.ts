@@ -12,6 +12,8 @@
  * @module @trick-harness/executor
  */
 
+import type { ExecutorFailureCategory } from '@trick-harness/contracts'
+
 /** Reasoning budget requested for one run, in increasing order of cost. */
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -74,7 +76,7 @@ export interface ExecutorCapabilities {
  */
 export interface ExecutorFailure {
   /** Stable machine-readable failure class. */
-  readonly category: string
+  readonly category: ExecutorFailureCategory
   /**
    * Whether the executor's own reachability explains this failure.
    *
@@ -86,7 +88,7 @@ export interface ExecutorFailure {
    * a refusal that a different executor would also make burns the budget and
    * records the wrong cause in the durable route fact.
    */
-  readonly availability: boolean
+  readonly code: string
   /** Redacted human-readable diagnostic. */
   readonly safeDiagnostic: string
   /** Upstream HTTP status when the failure came from an HTTP surface. */

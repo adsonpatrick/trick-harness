@@ -31,7 +31,8 @@
     "@deepseek-ai/dsh-subagent": "workspace:^",
     "@deepseek-ai/dsh-subagent-codex": "workspace:^",
     "@deepseek-ai/dsh-subprocess": "workspace:^",
-    "@trick-harness/executor": "workspace:^"
+    "@trick-harness/executor": "workspace:^",
+    "@trick-harness/contracts": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-invariants": "workspace:^",
@@ -39,6 +40,7 @@
     "@deepseek-ai/dsh-subagent": "workspace:^",
     "@deepseek-ai/dsh-subagent-codex": "workspace:^",
     "@deepseek-ai/dsh-subprocess": "workspace:^",
-    "@trick-harness/executor": "workspace:^"
+    "@trick-harness/executor": "workspace:^",
+    "@trick-harness/contracts": "workspace:^"
   }
 }

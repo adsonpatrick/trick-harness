@@ -128,6 +128,26 @@ export const STAGE_CONSTRAINT_CLASSES = [
 /** One closed class of non-artifact stage constraint. */
 export type StageConstraintClass = typeof STAGE_CONSTRAINT_CLASSES[number]
 
+/** Stable provider-neutral executor failure categories. */
+export const EXECUTOR_FAILURE_CATEGORIES = [
+  'usage-limit-exceeded',
+  'session-budget-exceeded',
+  'server-overloaded',
+  'internal-server-error',
+  'transport-unavailable',
+  'context-window-exceeded',
+  'bad-request',
+  'sandbox-denied',
+  'cyber-policy-refusal',
+  'unauthorized',
+  'wrong-answer',
+  'failed-verification',
+  'other',
+] as const
+
+/** One canonical executor failure category. */
+export type ExecutorFailureCategory = typeof EXECUTOR_FAILURE_CATEGORIES[number]
+
 /**
  * Finding classes an automated repair may act on at all.
  *
