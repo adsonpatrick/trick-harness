@@ -872,7 +872,8 @@ git commit -m "feat(workflow): bind repairs to approved scope"
 **Interfaces:**
 - Produces core types `WorkspaceSnapshot`, `WorkspacePathState`, `WorkspaceStateReader`, and `changedPathsBetween(before, after)`.
 - Host implementation produces snapshots from the project checkout without writing to Git/index/worktree.
-- Workflow consumes `WorkflowRunRequest.workspaceState` only for repair integrity checks.
+- Workflow consumes `WorkflowRunRequest.workspaceState` for both repair integrity and per-run delivery mutation accounting.
+- `WorkflowDeliveryInput` gains optional `changedPaths?: readonly string[]`; the reusable core preserves deployments with no workspace reader, while the Plurora deployment requires this deterministic field before it will describe a delivery.
 
 - [ ] **Step 1: Write core comparison tests first**
 
@@ -959,9 +960,34 @@ Never place file contents in the returned snapshot.
 
 Expose one `workspaceState` reader from `startPluroraHost`, created from the same checkout/subprocess seam as `changeSet`.
 
-Add optional `workspaceState?: WorkspaceStateReader` to `WorkflowRunRequest`. Composition plumbing is completed in Task 10.
+Add optional `workspaceState?: WorkspaceStateReader` to `WorkflowRunRequest`. Extend `WorkflowDeliveryInput` with:
 
-- [ ] **Step 7: Enforce post-repair scope before repair completion**
+```ts
+readonly changedPaths?: readonly string[]
+```
+
+Composition plumbing is completed in Task 10.
+
+- [ ] **Step 7: Capture a per-run delivery baseline before the first mutating executor**
+
+In `WorkflowRunner.#drive`, keep:
+
+```ts
+let deliveryBaseline: WorkspaceSnapshot | undefined
+```
+
+Before the first executor stage whose `permissionModeFor(role)` is `workspace-write` (implementation or repair), if a workspace reader exists and `deliveryBaseline` is absent, capture it before `beginExecutor`/process spawn.
+
+At each delivery:
+1. capture the current snapshot before calling the delivery capability;
+2. require its revision to equal the baseline revision;
+3. derive `changedPathsBetween(deliveryBaseline, current)`;
+4. pass those paths in `WorkflowDeliveryInput.changedPaths`;
+5. after successful delivery, capture a fresh clean/post-commit snapshot and replace `deliveryBaseline` for any later repair/redelivery.
+
+This prevents a pre-existing dirty file from being delivered merely because it was already present when the workflow began. Add a workflow test where `preexisting.txt` is dirty in both baseline/current with the same fingerprint while `feature.ts` changes; delivery must receive only `feature.ts`.
+
+- [ ] **Step 8: Enforce post-repair scope before repair completion**
 
 Immediately before writable repair dispatch, capture `preRepairSnapshot`. Immediately after a non-canceled repair returns, capture `postRepairSnapshot`, derive `changedPathsBetween`, and require every path to be inside `authorization.scope.allowedPaths`.
 
@@ -973,7 +999,7 @@ On violation:
 
 On snapshot read failure after a writable repair, also end `BLOCKED`; the world may have changed and cannot be safely certified.
 
-- [ ] **Step 8: Run focused tests and commit**
+- [ ] **Step 9: Run focused tests and commit**
 
 ```bash
 corepack pnpm exec vitest run   packages/core/engineering-workflow/tests/workspace-state.spec.ts   packages/core/engineering-workflow/tests/workflow.spec.ts   apps/plurora-harness-host/tests/workspace-state.spec.ts
@@ -1135,8 +1161,8 @@ git commit -m "fix(opencode): classify aborts and malformed responses safely"
 - Modify: `packages/core/engineering-workflow/tests/conformance.spec.ts`
 
 **Interfaces:**
-- Consumes: new stage-result contracts and host `WorkspaceStateReader`.
-- Produces: prompts that require `constraints` and path fields, unreadable output -> `INCONCLUSIVE`, aligned conformance verdict reduction, and delivery files sourced from deterministic workspace state instead of model diff evidence.
+- Consumes: new stage-result contracts and `WorkflowDeliveryInput.changedPaths` computed by the Control Plane.
+- Produces: prompts that require `constraints` and path fields, unreadable output -> `INCONCLUSIVE`, aligned conformance verdict reduction, and delivery files sourced from the deterministic per-run mutation set instead of model diff evidence.
 
 - [ ] **Step 1: Update prompt snapshot expectations first**
 
@@ -1205,21 +1231,23 @@ Update the nested conformance prompt to allow the full workflow verdict vocabula
 
 Remove the `writeSet` that is populated from `EvidenceRef(kind='diff')`.
 
-Make `describeDelivery` obtain the current deterministic changed-path set from the workspace reader at delivery time and return that exact sorted list.
-
-The new handler signature is completed in Task 10; the implementation body should conceptually be:
+`describeDelivery` remains synchronous and consumes only the Control Plane's deterministic mutation set:
 
 ```ts
-async describeDelivery(input, signal) {
-  const snapshot = await options.workspaceState.snapshot(input.objective, signal)
+describeDelivery(input) {
+  if (input.changedPaths === undefined) {
+    throw new Error('Plurora delivery requires a deterministic workspace mutation set')
+  }
   return {
     branch: options.branch,
-    files: snapshot.entries.map(entry => entry.path).toSorted(),
+    files: [...input.changedPaths].toSorted(),
     message: ...,
     pullRequest: ...,
   }
 }
 ```
+
+Use the host's bounded deployment error type rather than a raw generic error in the real implementation, and do not include path text in the refusal.
 
 An empty deterministic change set must cause delivery to refuse through the existing delivery capability rather than invent a path from stage evidence.
 
@@ -1254,25 +1282,22 @@ git commit -m "fix(plurora): make stage output and delivery deterministic"
 
 **Interfaces:**
 - `HarnessWorkflowHandlers` gains `workspaceState?: WorkflowRunRequest['workspaceState']`.
-- `describeDelivery` becomes async and receives `AbortSignal`.
-- Composition passes the reader into every run and awaits delivery description before invoking GitHub delivery.
+- The existing synchronous `describeDelivery(input)` interface remains; `input.changedPaths` is supplied by the workflow when a workspace reader exists.
+- Composition passes the reader into every run; GitHub delivery receives only the paths the Control Plane placed on `WorkflowDeliveryInput`.
 
 - [ ] **Step 1: Add failing composition tests**
 
-Assert the workflow handler's workspace reader reaches `WorkflowRunner.run`, and an async delivery descriptor is awaited before the delivery client receives files.
+Assert the workflow handler's workspace reader reaches `WorkflowRunner.run`, and that a delivery input carrying `changedPaths: ['src/feature.ts']` reaches the project delivery descriptor unchanged.
 
-The handler type becomes:
+The handler type gains only:
 
 ```ts
 readonly workspaceState?: WorkflowRunRequest['workspaceState']
-
-readonly describeDelivery?: (
-  input: WorkflowDeliveryInput,
-  signal: AbortSignal,
-) => Promise<Omit<DeliveryRequest, 'signal'>>
 ```
 
-- [ ] **Step 2: Wire the new interfaces**
+The existing `describeDelivery(input)` signature remains unchanged.
+
+- [ ] **Step 2: Wire the new interface**
 
 In `begin()`, pass:
 
@@ -1280,12 +1305,11 @@ In `begin()`, pass:
 ...workflow.workspaceState === undefined ? {} : { workspaceState: workflow.workspaceState },
 ```
 
-In `deliveryFor`:
+Keep `deliveryFor` synchronous at the descriptor boundary:
 
 ```ts
 deliver: async (input, signal) => {
-  const request = await describeDelivery(input, signal)
-  const outcome = await client.deliver({ ...request, signal })
+  const outcome = await client.deliver({ ...describeDelivery(input), signal })
   // existing result reduction
 }
 ```
@@ -1302,6 +1326,8 @@ workflow: createPluroraWorkflowHandlers({
   workspaceState,
 })
 ```
+
+The handler forwards `workspaceState` through its returned `HarnessWorkflowHandlers`; it does not use the reader directly to decide delivery files.
 
 - [ ] **Step 4: Add an end-to-end regression for the original canary semantics**
 
