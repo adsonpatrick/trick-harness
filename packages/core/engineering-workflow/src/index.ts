@@ -59,6 +59,7 @@ export * from './triage.ts'
 export * from './lifecycle.ts'
 export * from './impact-policy.ts'
 export * from './conformance.ts'
+export * from './workspace-state.ts'
 
 import {
   assessRepairCompletion,
@@ -85,7 +86,8 @@ import {
   summarizeConformance,
   validateConformanceCoverage,
 } from './conformance.ts'
-import type { ApprovedArtifactTexts } from './types.ts'
+import { changedPathsBetween, WorkspaceStateError } from './workspace-state.ts'
+import type { ApprovedArtifactTexts, WorkspaceSnapshot } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type { CertificationStatusSummary } from '@trick-harness/contracts'
@@ -561,6 +563,8 @@ export class WorkflowRunner {
     // every stage routed afterwards has to see the reading that replaced it.
     const measurement: ImpactBox = {}
     let plannedPaths: readonly string[] | undefined
+    let deliveryBaseline: WorkspaceSnapshot | undefined
+    let preRepairSnapshot: WorkspaceSnapshot | undefined
     // How many times the certification half has been planned. A repair is
     // followed by a fresh delivery, and the branch that delivery published is
     // classified again, so the half that certifies it is planned again too.
@@ -599,6 +603,22 @@ export class WorkflowRunner {
           return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', read)
         }
         approved = read
+      }
+
+      if (
+        stage.role !== 'delivery'
+        && permissionModeFor(stage.role) === 'workspace-write'
+        && request.workspaceState !== undefined
+        && deliveryBaseline === undefined
+      ) {
+        try {
+          deliveryBaseline = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+        } catch {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'the workspace baseline could not be established before writable work began',
+          )
+        }
       }
 
       if (stage.role === 'repair') {
@@ -651,6 +671,16 @@ export class WorkflowRunner {
             objective, stages, repairCycles, executorStarts, blockerKindOfRepairError(error), error.message,
           )
         }
+        if (request.workspaceState !== undefined) {
+          try {
+            preRepairSnapshot = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+          } catch {
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external',
+              'the pre-repair workspace snapshot could not be established',
+            )
+          }
+        }
       }
 
       if (stage.role === 'delivery') {
@@ -693,6 +723,19 @@ export class WorkflowRunner {
           }
           schemaVerified = true
         }
+        let changedPaths: readonly string[] | undefined
+        if (request.workspaceState !== undefined) {
+          try {
+            const current = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+            if (deliveryBaseline === undefined) deliveryBaseline = current
+            changedPaths = changedPathsBetween(deliveryBaseline, current)
+          } catch {
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external',
+              'the delivery change set could not be compared with its workspace baseline',
+            )
+          }
+        }
         const capability = this.#options.capabilities?.delivery
         if (capability === undefined) {
           return await this.#blocked(
@@ -700,7 +743,7 @@ export class WorkflowRunner {
             `stage ${stage.stageId} publishes the work, and this deployment composed no delivery capability to do it`,
           )
         }
-        const published = await this.#publish(stage, objective, signal, capability)
+        const published = await this.#publish(stage, objective, signal, capability, changedPaths)
         stages.push(published.facts)
         // Recorded like any other stage's verdict: a projection rebuilding the
         // run should not have to know which stages were routed to see them all.
@@ -714,6 +757,16 @@ export class WorkflowRunner {
         if (published.facts.verdict !== 'PASS') {
           return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'FAIL',
             published.facts.summary)
+        }
+        if (request.workspaceState !== undefined) {
+          try {
+            deliveryBaseline = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+          } catch {
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external',
+              'the post-delivery workspace baseline could not be established',
+            )
+          }
         }
         delivered = true
         // The branch exists now, so there is finally a revision to name, and
@@ -847,6 +900,41 @@ export class WorkflowRunner {
       if (dispatched.canceled) {
         return await this.#end(objective, stages, repairCycles, executorStarts, 'canceled', 'INCONCLUSIVE',
           `the run was canceled during ${stage.role}`)
+      }
+      if (stage.role === 'repair' && request.workspaceState !== undefined) {
+        try {
+          if (preRepairSnapshot === undefined || authorization === undefined) {
+            throw new WorkspaceStateError('the repair has no pre-dispatch snapshot or authorization')
+          }
+          const postRepairSnapshot = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+          const changed = changedPathsBetween(preRepairSnapshot, postRepairSnapshot)
+          const allowed = new Set(authorization.scope.allowedPaths)
+          const unauthorizedCount = changed.filter(path => !allowed.has(path)).length
+          if (unauthorizedCount > 0) {
+            defect = undefined
+            diagnosis = undefined
+            authorization = undefined
+            preRepairSnapshot = undefined
+            const summary = 'the repair changed paths outside its authorized scope'
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external', summary,
+              [{ kind: 'gate', locator: 'harness:repair-scope', summary: `${unauthorizedCount} changed path(s) exceeded the approved scope` }],
+              stage.stageId,
+            )
+          }
+          preRepairSnapshot = undefined
+        } catch {
+          defect = undefined
+          diagnosis = undefined
+          authorization = undefined
+          preRepairSnapshot = undefined
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'the repair completed but its workspace mutations could not be verified',
+            [{ kind: 'gate', locator: 'harness:workspace-snapshot', summary: 'repair mutations were not verifiable' }],
+            stage.stageId,
+          )
+        }
       }
       if (dispatched.failed) {
         return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'INCONCLUSIVE',
@@ -1535,6 +1623,7 @@ export class WorkflowRunner {
     objective: WorkflowObjective,
     signal: AbortSignal,
     capability: DeliveryCapabilityPort,
+    changedPaths?: readonly string[],
   ): Promise<{ readonly facts: StageFacts; readonly canceled: boolean }> {
     const { journal } = this.#options
     const clock = this.#options.now ?? Date.now
@@ -1543,7 +1632,11 @@ export class WorkflowRunner {
     const started = clock()
     const base = { stageId: stage.stageId, role: stage.role, executor: name, permissionMode: 'workspace-write' } as const
     try {
-      const result = await capability.deliver({ stageId: stage.stageId, objective }, signal)
+      const result = await capability.deliver({
+        stageId: stage.stageId,
+        objective,
+        ...changedPaths === undefined ? {} : { changedPaths },
+      }, signal)
       const durationMs = clock() - started
       await journal.endCapability(
         stage.stageId, name, result.delivered ? 'completed' : 'error', durationMs,
@@ -1727,8 +1820,15 @@ export class WorkflowRunner {
     executorStarts: number,
     kind: BlockerKind,
     summary: string,
+    evidence: readonly EvidenceRef[] = [],
+    stageId?: string,
   ): Promise<WorkflowOutcome> {
-    await this.#options.journal.blocker({ kind, summary, evidence: [] })
+    await this.#options.journal.blocker({
+      kind,
+      summary,
+      evidence,
+      ...stageId === undefined ? {} : { stageId },
+    })
     return await this.#end(objective, stages, repairCycles, executorStarts, 'blocked', 'BLOCKED', summary)
   }
 
@@ -1888,4 +1988,18 @@ function facts(
     evidence: Object.freeze(evidence.map(reference => Object.freeze({ ...reference }))),
     durationMs,
   })
+}
+
+async function readWorkspaceSnapshot(
+  reader: WorkflowRunRequest['workspaceState'],
+  objective: WorkflowObjective,
+  signal: AbortSignal,
+): Promise<WorkspaceSnapshot> {
+  if (reader === undefined) throw new WorkspaceStateError('no workspace-state reader was supplied')
+  const snapshot = await reader.snapshot(objective, signal)
+  if (snapshot.revision.trim() === '') throw new WorkspaceStateError('workspace snapshot has no revision')
+  // Reusing the comparison validates repository-relative paths and rejects
+  // duplicate entries at this trust boundary without retaining file contents.
+  changedPathsBetween(snapshot, snapshot)
+  return snapshot
 }

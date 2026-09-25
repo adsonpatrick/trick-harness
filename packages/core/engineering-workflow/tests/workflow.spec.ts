@@ -25,7 +25,10 @@ import type {
   DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   StageSpec,
+  WorkspaceSnapshot,
+  WorkspaceStateReader,
   WorkflowOutcome,
+  WorkflowDeliveryInput,
 } from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
@@ -699,6 +702,160 @@ describe('a run that goes wrong', () => {
 
     expect(outcome.executorStarts).toBe(2)
     expect(outcome.state).toBe('blocked')
+  })
+})
+
+describe('workspace snapshot gates', () => {
+  it('passes only paths changed after the run baseline to delivery', async () => {
+    const revision = 'a'.repeat(40)
+    const snapshots: WorkspaceSnapshot[] = [
+      { revision, entries: [{ path: 'preexisting.txt', fingerprint: 'dirty-before' }] },
+      { revision, entries: [
+        { path: 'preexisting.txt', fingerprint: 'dirty-before' },
+        { path: 'feature.ts', fingerprint: 'new-change' },
+      ] },
+      { revision: 'b'.repeat(40), entries: [{ path: 'preexisting.txt', fingerprint: 'dirty-before' }] },
+    ]
+    const workspaceState: WorkspaceStateReader = {
+      snapshot: async () => snapshots.shift() as WorkspaceSnapshot,
+    }
+    const changed: string[][] = []
+    const delivery: DeliveryCapabilityPort = {
+      deliver: async (input: WorkflowDeliveryInput) => {
+        changed.push([...(input.changedPaths ?? [])])
+        return { delivered: true, summary: 'published', evidence: [], findings: [] }
+      },
+    }
+    const localSession = Session.create(SessionId('s'))
+    const localExecutors = createExecutorRuntime()
+    const localRunner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors: localExecutors,
+      journal: new WorkflowJournal(localSession, 'wf-1', async () => true),
+      capabilities: { delivery },
+    })
+    localExecutors.register(provider('builder', async () => passing('builder')))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      workspaceState,
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(changed).toEqual([['feature.ts']])
+  })
+
+  it('blocks and skips delivery if repair changes any path outside its authorized scope', async () => {
+    const revision = 'a'.repeat(40)
+    const snapshots: WorkspaceSnapshot[] = [
+      { revision, entries: [] },
+      { revision, entries: [{ path: 'src/thing.ts', fingerprint: 'before-repair' }] },
+      { revision, entries: [
+        { path: 'src/thing.ts', fingerprint: 'after-repair' },
+        { path: 'outside.txt', fingerprint: 'unauthorized' },
+      ] },
+    ]
+    const workspaceState: WorkspaceStateReader = {
+      snapshot: async () => snapshots.shift() as WorkspaceSnapshot,
+    }
+    let deliveryCalls = 0
+    let verificationCount = 0
+    const delivery: DeliveryCapabilityPort = {
+      deliver: async () => {
+        deliveryCalls += 1
+        return { delivered: true, summary: 'published', evidence: [], findings: [] }
+      },
+    }
+    const localSession = Session.create(SessionId('s'))
+    const localExecutors = createExecutorRuntime()
+    const localRunner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors: localExecutors,
+      journal: new WorkflowJournal(localSession, 'wf-1', async () => true),
+      capabilities: { delivery },
+    })
+    localExecutors.register(provider('builder', async () => passing('builder')))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? ++verificationCount === 1
+          ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
+          : interpretAllPass(stage, executor)
+        : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      changeImpact: REPAIR_CHANGE_IMPACT,
+      workspaceState,
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(outcome.repairCycles).toBe(1)
+    expect(outcome.stages.map(stage => stage.role)).not.toContain('delivery')
+    expect(deliveryCalls).toBe(0)
+    expect(projectWorkflow(localSession.events, 'wf-1').blockers.at(-1)).toMatchObject({
+      kind: 'external',
+      evidence: [{ kind: 'gate', locator: 'harness:repair-scope' }],
+    })
+  })
+
+  it('blocks after a repair if its post-repair snapshot cannot be read', async () => {
+    const revision = 'a'.repeat(40)
+    let snapshotCalls = 0
+    const workspaceState: WorkspaceStateReader = {
+      snapshot: async () => {
+        snapshotCalls += 1
+        if (snapshotCalls === 3) throw new Error('raw path-bearing filesystem error')
+        return { revision, entries: [] }
+      },
+    }
+    let deliveryCalls = 0
+    const delivery: DeliveryCapabilityPort = {
+      deliver: async () => {
+        deliveryCalls += 1
+        return { delivered: true, summary: 'published', evidence: [], findings: [] }
+      },
+    }
+    const localSession = Session.create(SessionId('s'))
+    const localExecutors = createExecutorRuntime()
+    const localRunner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors: localExecutors,
+      journal: new WorkflowJournal(localSession, 'wf-1', async () => true),
+      capabilities: { delivery },
+    })
+    localExecutors.register(provider('builder', async () => passing('builder')))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+    let verificationCount = 0
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify' && ++verificationCount === 1
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      changeImpact: REPAIR_CHANGE_IMPACT,
+      workspaceState,
+      ...CONFORMS,
+    })
+
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(outcome.repairCycles).toBe(1)
+    expect(deliveryCalls).toBe(0)
+    expect(JSON.stringify(localSession.events)).not.toContain('raw path-bearing filesystem error')
   })
 })
 

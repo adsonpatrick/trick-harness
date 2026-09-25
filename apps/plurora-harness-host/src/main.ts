@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ComposedHarness } from '@trick-harness/composition'
 import { composeHarness } from '@trick-harness/composition'
-import type { DatabaseVerificationCapabilityPort } from '@trick-harness/engineering-workflow'
+import type { DatabaseVerificationCapabilityPort, WorkspaceStateReader } from '@trick-harness/engineering-workflow'
 import type { JournalFlush } from '@trick-harness/journal'
 import type { ModelRegistry } from '@trick-harness/routing'
 import type { OpencodeAdapter } from '@trick-harness/provider-opencode'
@@ -24,6 +24,7 @@ import type { PluroraDeploymentConfig } from './config.ts'
 import { loadDeploymentConfig } from './config.ts'
 import type { ProjectChangeSetReader } from './change-set.ts'
 import { createGitChangeSetReader, readCheckoutBranch } from './change-set.ts'
+import { createGitWorkspaceStateReader } from './workspace-state.ts'
 import type { ModelCatalogReader } from './model-registry.ts'
 import { assertModelsAvailable, buildModelRegistry } from './model-registry.ts'
 import { createProjectDatabaseVerifier } from './project-database.ts'
@@ -121,6 +122,8 @@ export interface PluroraHost {
    * this checkout against the branch the deployment file names.
    */
   readonly changeSet: ProjectChangeSetReader
+  /** Deterministic filesystem snapshots from this same project checkout. */
+  readonly workspaceState: WorkspaceStateReader
   /** The composed harness: the runtime, the policy and the control server. */
   readonly harness: ComposedHarness
   /** Where the control server actually bound, once it was listening. */
@@ -235,6 +238,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
     unwind.push(async () => { await durable.dispose() })
 
     const changeSet = createGitChangeSetReader(checkout)
+    const workspaceState = createGitWorkspaceStateReader(checkout)
 
     const databaseVerification = createProjectDatabaseVerifier({
       projectRoot: options.projectRoot,
@@ -326,6 +330,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       registry,
       databaseVerification,
       changeSet,
+      workspaceState,
       harness,
       control,
       session: durable.session,

@@ -915,7 +915,7 @@ git commit -m "feat(workflow): bind repairs to approved scope"
 - Workflow consumes `WorkflowRunRequest.workspaceState` for both repair integrity and per-run delivery mutation accounting.
 - `WorkflowDeliveryInput` gains optional `changedPaths?: readonly string[]`; the reusable core preserves deployments with no workspace reader, while the Plurora deployment requires this deterministic field before it will describe a delivery.
 
-- [ ] **Step 1: Write core comparison tests first**
+- [x] **Step 1: Write core comparison tests first**
 
 Create cases for unchanged, added, removed, and changed fingerprints:
 
@@ -928,7 +928,7 @@ expect(changedPathsBetween(
 
 Also assert a revision change between snapshots is rejected; a repair may not silently move HEAD.
 
-- [ ] **Step 2: Define the core snapshot contracts and comparison helper**
+- [x] **Step 2: Define the core snapshot contracts and comparison helper**
 
 Use the spec signatures exactly:
 
@@ -950,7 +950,7 @@ export interface WorkspaceStateReader {
 
 `changedPathsBetween` compares the union of paths and flags a path whenever one side is absent or fingerprints differ.
 
-- [ ] **Step 3: Add host tests for deterministic candidate-path discovery**
+- [x] **Step 3: Add host tests for deterministic candidate-path discovery**
 
 The host reader must use only argv-based read operations. Test that it invokes:
 
@@ -964,7 +964,7 @@ Use the existing managed subprocess seam; never a shell string.
 
 Add rename/delete/untracked fixtures. `--no-renames` intentionally turns a rename into old-path deletion plus new-path addition, so both authorities are visible.
 
-- [ ] **Step 4: Add the Review Focus case: a file already dirty before repair changes again**
+- [x] **Step 4: Add the Review Focus case: a file already dirty before repair changes again**
 
 The fake reader should produce the same path in both snapshots with different fingerprints:
 
@@ -978,7 +978,7 @@ expect(changedPathsBetween(before, after)).toContain('src/already-dirty.ts')
 
 The test must fail if the implementation fingerprints only “path is dirty”.
 
-- [ ] **Step 5: Implement host fingerprints**
+- [x] **Step 5: Implement host fingerprints**
 
 For every candidate path from tracked diff + untracked list, compute a fingerprint from:
 
@@ -996,7 +996,7 @@ Use a stable SHA-256 over a fixed serialization. For worktree state:
 
 Never place file contents in the returned snapshot.
 
-- [ ] **Step 6: Wire the reader into the host and workflow request**
+- [x] **Step 6: Wire the reader into the host and workflow request**
 
 Expose one `workspaceState` reader from `startPluroraHost`, created from the same checkout/subprocess seam as `changeSet`.
 
@@ -1008,7 +1008,7 @@ readonly changedPaths?: readonly string[]
 
 Composition plumbing is completed in Task 10.
 
-- [ ] **Step 7: Capture a per-run delivery baseline before the first mutating executor**
+- [x] **Step 7: Capture a per-run delivery baseline before the first mutating executor**
 
 In `WorkflowRunner.#drive`, keep:
 
@@ -1027,7 +1027,7 @@ At each delivery:
 
 This prevents a pre-existing dirty file from being delivered merely because it was already present when the workflow began. Add a workflow test where `preexisting.txt` is dirty in both baseline/current with the same fingerprint while `feature.ts` changes; delivery must receive only `feature.ts`.
 
-- [ ] **Step 8: Enforce post-repair scope before repair completion**
+- [x] **Step 8: Enforce post-repair scope before repair completion**
 
 Immediately before writable repair dispatch, capture `preRepairSnapshot`. Immediately after a non-canceled repair returns, capture `postRepairSnapshot`, derive `changedPathsBetween`, and require every path to be inside `authorization.scope.allowedPaths`.
 
@@ -1039,7 +1039,7 @@ On violation:
 
 On snapshot read failure after a writable repair, also end `BLOCKED`; the world may have changed and cannot be safely certified.
 
-- [ ] **Step 9: Run focused tests and commit**
+- [x] **Step 9: Run focused tests and commit**
 
 ```bash
 corepack pnpm exec vitest run   packages/core/engineering-workflow/tests/workspace-state.spec.ts   packages/core/engineering-workflow/tests/workflow.spec.ts   apps/plurora-harness-host/tests/workspace-state.spec.ts

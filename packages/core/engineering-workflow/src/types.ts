@@ -132,6 +132,8 @@ export interface RestartAssessment {
 /** What the runtime needs to dispatch one objective. */
 export interface WorkflowRunRequest {
   readonly objective: WorkflowObjective
+  /** Read-only repository state used to prove per-stage filesystem mutations. */
+  readonly workspaceState?: WorkspaceStateReader
   /** The executor that did the implementing, when a read-only stage must avoid it. */
   readonly implementationExecutor?: string
   readonly interpret: StageInterpreter
@@ -254,6 +256,25 @@ export interface ApprovedArtifactTexts {
 export interface WorkflowDeliveryInput {
   readonly stageId: string
   readonly objective: WorkflowObjective
+  /** Exact paths changed in this workflow since its delivery baseline, when available. */
+  readonly changedPaths?: readonly string[]
+}
+
+/** One repository path and a content/state fingerprint, never its contents. */
+export interface WorkspacePathState {
+  readonly path: string
+  readonly fingerprint: string
+}
+
+/** A bounded view of path state at one immutable repository revision. */
+export interface WorkspaceSnapshot {
+  readonly revision: string
+  readonly entries: readonly WorkspacePathState[]
+}
+
+/** The deployment-owned read-only source of repository snapshots. */
+export interface WorkspaceStateReader {
+  snapshot(objective: WorkflowObjective, signal: AbortSignal): Promise<WorkspaceSnapshot>
 }
 
 /** What a delivery capability reports back, in the vocabulary a stage records. */

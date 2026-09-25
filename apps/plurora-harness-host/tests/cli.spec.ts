@@ -65,6 +65,7 @@ function fakeRuntime(
     registry: {},
     databaseVerification: {} as PluroraHost['databaseVerification'],
     changeSet: {} as PluroraHost['changeSet'],
+    workspaceState: {} as PluroraHost['workspaceState'],
     harness: {} as PluroraHost['harness'],
     control: { host: '127.0.0.1', port: 43123 },
     session: {} as PluroraHost['session'],
