@@ -20,7 +20,7 @@ const BRANCH = 'test/activation-canary'
 const SPEC = '# Canary\n\n- **C1:** Create the documentation marker.\n'
 const PLAN = `# Plan\n\n### Task 1: Create marker\n\n- Create: \`${MARKER}\`\n`
 const RESULT = `${RESULT_MARKER} ${JSON.stringify({
-  verdict: 'PASS', summary: 'Recorded provider response: marker verified.', findings: [],
+  verdict: 'PASS', summary: 'Recorded provider response: marker verified.', findings: [], constraints: [],
   evidence: [{ kind: 'diff', locator: MARKER, summary: 'Documentation marker.' }],
 })}`
 const expected = resolve(import.meta.dirname, '../../../scripts/snapshots/plurora-delivery-branch/workflow.expected.json')
@@ -134,9 +134,9 @@ describe('Plurora checkout delivery runnable snapshot', () => {
         if (scenario === 'startup-timeout') {
           expect(delivery).toBeUndefined()
           expect(outcome.stages).toHaveLength(1)
-          expect(outcome.stages[0]?.verdict).toBe('FAIL')
+          expect(outcome.stages[0]?.verdict).toBe('INCONCLUSIVE')
         } else {
-          expect(delivery?.verdict).toBe(scenario === 'feature' ? 'PASS' : 'FAIL')
+          expect(delivery?.verdict, outcome.summary).toBe(scenario === 'feature' ? 'PASS' : 'FAIL')
         }
         if (scenario === 'feature') {
           expect(git(remote, 'show', `refs/heads/${BRANCH}:${MARKER}`)).toBe(CONTENT.trim())

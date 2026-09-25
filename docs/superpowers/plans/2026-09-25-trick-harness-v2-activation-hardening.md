@@ -1327,7 +1327,7 @@ git commit -m "fix(plurora): make stage output and delivery deterministic"
 - The existing synchronous `describeDelivery(input)` interface remains; `input.changedPaths` is supplied by the workflow when a workspace reader exists.
 - Composition passes the reader into every run; GitHub delivery receives only the paths the Control Plane placed on `WorkflowDeliveryInput`.
 
-- [ ] **Step 1: Add failing composition tests**
+- [x] **Step 1: Add failing composition tests**
 
 Assert the workflow handler's workspace reader reaches `WorkflowRunner.run`, and that a delivery input carrying `changedPaths: ['src/feature.ts']` reaches the project delivery descriptor unchanged.
 
@@ -1339,7 +1339,7 @@ readonly workspaceState?: WorkflowRunRequest['workspaceState']
 
 The existing `describeDelivery(input)` signature remains unchanged.
 
-- [ ] **Step 2: Wire the new interface**
+- [x] **Step 2: Wire the new interface**
 
 In `begin()`, pass:
 
@@ -1356,22 +1356,20 @@ deliver: async (input, signal) => {
 }
 ```
 
-- [ ] **Step 3: Pass one workspace reader from `startPluroraHost` to the workflow handlers**
+- [x] **Step 3: Pass one workspace reader from `startPluroraHost` to composition**
 
-Create the reader from the same `checkout` options as `changeSet`, expose it on `PluroraHost` for tests/diagnostics, and call:
+Create the reader from the same `checkout` options as `changeSet`, expose it on `PluroraHost` for tests/diagnostics, and pass it alongside the workflow handlers:
 
 ```ts
-workflow: createPluroraWorkflowHandlers({
-  branch,
-  baseBranch: config.project.protectedBranch,
-  changeSet,
+workflow: {
+  ...createPluroraWorkflowHandlers({ branch, baseBranch, changeSet }),
   workspaceState,
-})
+}
 ```
 
-The handler forwards `workspaceState` through its returned `HarnessWorkflowHandlers`; it does not use the reader directly to decide delivery files.
+The workspace reader is not used by the Plurora result interpreter to decide delivery files.
 
-- [ ] **Step 4: Add an end-to-end regression for the original canary semantics**
+- [x] **Step 4: Add an end-to-end regression for the original canary semantics**
 
 Create an integrated fake-executor run where:
 1. implement returns the exact canary diff and `PASS`;
@@ -1383,7 +1381,7 @@ Create an integrated fake-executor run where:
 
 This test is the architectural regression for the September 2026 incident.
 
-- [ ] **Step 5: Add a paired positive repair E2E**
+- [x] **Step 5: Add a paired positive repair E2E**
 
 Prove the hardening did not disable legitimate repair:
 1. verify returns a confirmed in-scope `BUG`;
@@ -1393,13 +1391,16 @@ Prove the hardening did not disable legitimate repair:
 5. fresh verify passes;
 6. delivery proceeds.
 
-- [ ] **Step 6: Run composition + host E2E tests and commit**
+- [x] **Step 6: Run composition + host E2E tests and commit**
 
 ```bash
-corepack pnpm exec vitest run   packages/composition/runtime/tests/harness.spec.ts   apps/plurora-harness-host/tests/host.spec.ts   apps/plurora-harness-host/tests/activation-hardening-end-to-end.spec.ts
+corepack pnpm exec vitest run   packages/composition/runtime/tests/harness.spec.ts   apps/plurora-harness-host/tests/host.spec.ts   apps/plurora-harness-host/tests/workspace-state.spec.ts   apps/plurora-harness-host/tests/activation-hardening-end-to-end.spec.ts
+corepack pnpm exec vitest run --config vitest.snapshot.config.ts apps/plurora-harness-host/tests/delivery-branch.snapshot.ts
 git add packages/composition/runtime apps/plurora-harness-host
 git commit -m "test(harness): prove activation hardening end to end"
 ```
+
+The composition, host, workspace-state and activation E2E regression pass (66 tests); the delivery-branch runnable snapshot also passes after excluding the host's append-only `.plurora-harness/sessions` operational files from measured workspace paths. TypeScript project build, Oxlint on touched TypeScript files and `git diff --check` pass. The delivery snapshot contract was updated for Task 9's required `constraints` field and the timeout's current `INCONCLUSIVE` classification.
 
 ---
 

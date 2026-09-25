@@ -67,7 +67,7 @@ describe('Git workspace snapshots', () => {
     const git = fakeGit([
       `${REVISION}\n`,
       'src/old.ts\0src/new.ts\0src/deleted.ts\0src/file\tname.ts\0',
-      'src/new.ts\0untracked.txt\0',
+      'src/new.ts\0untracked.txt\0.plurora-harness/sessions/session.jsonl\0',
       RAW('D', 'src/old.ts') + RAW('A', 'src/new.ts') + RAW('D', 'src/deleted.ts')
         + RAW('D', 'src/file\tname.ts'),
     ])

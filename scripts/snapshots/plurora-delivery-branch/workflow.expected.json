@@ -83,11 +83,11 @@
   {
     "scenario": "startup-timeout",
     "branch": "test/activation-canary",
-    "startupSummary": "OpenCode server did not become ready within 60000 ms; increase the startup timeout or inspect OpenCode startup",
+    "startupSummary": "Codex run failed before returning a valid result",
     "stages": [
       {
         "role": "implement",
-        "verdict": "FAIL"
+        "verdict": "INCONCLUSIVE"
       }
     ],
     "pullRequestSimulated": false

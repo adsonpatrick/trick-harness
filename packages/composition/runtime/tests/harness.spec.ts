@@ -3,7 +3,7 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ConformanceManifest, StageResult, WorkflowObjective } from '@trick-harness/contracts'
 import type { ControlWorkflowStatus } from '@trick-harness/control-server'
 import { planPullRequestStages } from '@trick-harness/engineering-workflow'
-import type { DatabaseVerificationCapabilityPort, StageSpec } from '@trick-harness/engineering-workflow'
+import type { DatabaseVerificationCapabilityPort, StageSpec, WorkspaceSnapshot, WorkspaceStateReader } from '@trick-harness/engineering-workflow'
 import type { ExecutorProvider, ExecutorStartRequest } from '@trick-harness/executor'
 import { WorkflowJournal, projectWorkflow } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
@@ -526,7 +526,7 @@ describe('a workflow through the real control-server entry path', () => {
 
     expect(seen[0]?.obligations.filter(item => item.source === 'dod')).toEqual(dodObligations)
     expect(outcome.conformance?.expected.dod).toBe(1)
-    expect(outcome.verdict).toBe('PASS')
+    expect(outcome.verdict, outcome.summary).toBe('PASS')
   })
 
   it('routes around a degraded executor through the profile fallback table', async () => {
@@ -846,6 +846,43 @@ describe('an objective written for another deployment', () => {
 })
 
 describe('publishing from a composed deployment', () => {
+  it('passes the workspace reader to the runner and forwards its changed paths to the delivery descriptor', async () => {
+    const started: ExecutorStartRequest[] = []
+    const revision = 'a'.repeat(40)
+    const snapshots: WorkspaceSnapshot[] = [
+      { revision, entries: [] },
+      { revision, entries: [{ path: 'src/thing.ts', fingerprint: 'after-edit' }] },
+      { revision: 'b'.repeat(40), entries: [] },
+    ]
+    const workspaceState: WorkspaceStateReader = {
+      snapshot: async () => snapshots.shift() ?? { revision, entries: [] },
+    }
+    const deliveredPaths: (readonly string[] | undefined)[] = []
+    const base = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)
+    const harness = compose({
+      ...base,
+      workflow: {
+        ...base.workflow,
+        workspaceState,
+        describeDelivery: (input) => {
+          deliveredPaths.push(input.changedPaths)
+          return {
+            branch: 'feature',
+            files: [...(input.changedPaths ?? [])],
+            message: `deliver ${input.stageId}`,
+            pullRequest: { title: 'the thing', body: 'what it does', base: 'main' },
+          }
+        },
+      },
+    })
+
+    const outcome = await harness.run(OBJECTIVE)
+
+    expect(outcome.verdict, outcome.summary).toBe('PASS')
+    expect(deliveredPaths).toEqual([['src/thing.ts']])
+    expect(snapshots).toEqual([])
+  })
+
   it('writes every confirmed mutation into the journal of the run that caused it', async () => {
     const started: ExecutorStartRequest[] = []
     const options = baseOptions(profileEnabling([GITHUB_DELIVERY_CAPABILITY]), started)

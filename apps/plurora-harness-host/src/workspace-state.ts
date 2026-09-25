@@ -6,6 +6,7 @@ import { normalizeRepositoryPath } from '@trick-harness/change-impact'
 import type { WorkspaceSnapshot, WorkspaceStateReader } from '@trick-harness/engineering-workflow'
 import type { WorkflowObjective } from '@trick-harness/contracts'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import { SESSION_REPOSITORY_PATH } from './session-store.ts'
 
 const MAX_GIT_OUTPUT_BYTES = 1024 * 1024
 const COMMIT = /^[0-9a-f]{40}$/
@@ -41,7 +42,12 @@ export function createGitWorkspaceStateReader(
         options, ['ls-files', '--others', '--exclude-standard', '-z'], signal,
         'read untracked paths',
       )
-      const candidates = [...new Set([...tracked, ...untracked])].sort()
+      // The host's append-only journal lives in the checkout for deployment
+      // isolation, but it is operational state, not part of the change being
+      // implemented. Its writes must never widen the measured delivery set.
+      const candidates = [...new Set([...tracked, ...untracked])]
+        .filter(path => path !== SESSION_REPOSITORY_PATH && !path.startsWith(`${SESSION_REPOSITORY_PATH}/`))
+        .sort()
       const metadata = candidates.length === 0
         ? new Map<string, string>()
         : await rawMetadata(options, signal, new Set(tracked))
