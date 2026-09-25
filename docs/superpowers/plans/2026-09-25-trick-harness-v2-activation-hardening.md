@@ -50,7 +50,7 @@
 
 - [ ] **Step 1: Add the failing poisoned-global-config regression test**
 
-Add a test that creates an isolated checkout and a temporary global Git config whose excludes file does not exist, then invokes the runtime checker in a process that actually inherits that config:
+Add a test that creates an isolated checkout and a temporary global Git config whose excludes file does not exist. Because `verifyRuntimeCheckout` executes Git in the current process environment, set `GIT_CONFIG_GLOBAL` only for the duration of the test and restore it in `finally`:
 
 ```js
 it('ignores an inaccessible global core.excludesFile while validating the checkout', async () => {
@@ -61,21 +61,23 @@ it('ignores an inaccessible global core.excludesFile while validating the checko
   const globalConfig = join(globalConfigDir, 'gitconfig')
   writeFileSync(globalConfig, `[core]\n\texcludesFile = ${join(globalConfigDir, 'missing-ignore')}\n`)
 
-  const script = join(process.cwd(), 'scripts', 'harness', 'runtime-checkout.mjs')
-  const { stdout } = await run(process.execPath, [script], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: globalConfig,
-      TRICK_HARNESS_HOME: isolated.home,
-    },
-  })
-
-  assert.match(stdout, /runtime checkout ok/i)
+  const previous = process.env.GIT_CONFIG_GLOBAL
+  process.env.GIT_CONFIG_GLOBAL = globalConfig
+  try {
+    const result = await verifyRuntimeCheckout({
+      home: isolated.home,
+      expectedRepository: REPOSITORY,
+      expectedRevision: isolated.revision,
+    })
+    assert.equal(result.revision, isolated.revision)
+  } finally {
+    if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL
+    else process.env.GIT_CONFIG_GLOBAL = previous
+  }
 })
 ```
 
-Use a temporary project config fixture or the existing repository config so the CLI pins `isolated.revision`; if the CLI path makes that cumbersome, add a subprocess fixture that imports `verifyRuntimeCheckout` and passes the known revision. The important property is that the Git subprocess sees `GIT_CONFIG_GLOBAL`.
+This directly exercises the production `git()` helper under the poisoned global configuration and does not require a second project-config fixture.
 
 - [ ] **Step 2: Run the focused NeuroVia test and verify it fails for the expected Git reason**
 
@@ -317,6 +319,9 @@ git commit -m "feat(contracts): separate stage constraints from findings"
 - Modify: `packages/core/executor/tests/executor.spec.ts`
 - Modify: `packages/core/routing/src/availability.ts`
 - Modify: `packages/core/routing/tests/availability.spec.ts`
+- Modify: `packages/providers/codex/src/config.ts`
+- Modify: `packages/providers/codex/src/index.ts`
+- Modify: `packages/providers/codex/tests/codex.spec.ts`
 
 **Interfaces:**
 - Consumes: current routing availability/quality category names.
@@ -332,6 +337,8 @@ expect(new Set([...AVAILABILITY_FAILURES, ...QUALITY_FAILURES]))
 ```
 
 In executor tests/type fixtures, construct an `ExecutorFailure` with `category: 'other'` and `code: 'fixture.other'`, and remove all assertions that expect `availability`.
+
+Update Codex normalization tests at the same time: they must assert canonical `category` plus a stable provider code, not `availability`. For example, `usageLimitExceeded` becomes `{ category: 'usage-limit-exceeded', code: 'codex.usage-limit-exceeded' }`, and an unknown native variant becomes `{ category: 'other', code: 'codex.other' }`.
 
 - [ ] **Step 2: Run focused routing/executor tests and confirm failure**
 
@@ -380,7 +387,25 @@ export interface ExecutorFailure {
 }
 ```
 
-- [ ] **Step 5: Keep routing's two policy sets but type them against the canonical union**
+- [ ] **Step 5: Update Codex to the new failure shape before touching OpenCode**
+
+Change `executorFailure()` in `packages/providers/codex/src/config.ts` to return canonical category + provider-specific code + safe diagnostic:
+
+```ts
+export function executorFailure(category: string, httpStatus?: number): ExecutorFailure {
+  const normalized = normalizeFailure(category)
+  return {
+    category: normalized,
+    code: `codex.${normalized}`,
+    safeDiagnostic: `codex run failed (${normalized})`,
+    ...httpStatus === undefined ? {} : { httpStatus },
+  }
+}
+```
+
+Map `CodexRouteError` in `index.ts` to `bad-request` with `code: 'codex.route.unsupported'`; map an unexpected provider exception to `other` with `code: 'codex.run.failed'` and fixed secret-safe diagnostic text. Do not keep `provider-error` or `route-unsupported`.
+
+- [ ] **Step 6: Keep routing's two policy sets but type them against the canonical union**
 
 ```ts
 export const AVAILABILITY_FAILURES = [
@@ -405,19 +430,19 @@ export const QUALITY_FAILURES = [
 
 Keep `classifyFailure()` fail-closed for arbitrary strings used at runtime.
 
-- [ ] **Step 6: Re-run focused tests and typecheck the affected packages**
+- [ ] **Step 7: Re-run focused tests and typecheck the affected packages**
 
 ```bash
-corepack pnpm exec vitest run   packages/core/contracts/tests/contracts.spec.ts   packages/core/executor/tests/executor.spec.ts   packages/core/routing/tests/availability.spec.ts
+corepack pnpm exec vitest run   packages/core/contracts/tests/contracts.spec.ts   packages/core/executor/tests/executor.spec.ts   packages/core/routing/tests/availability.spec.ts   packages/providers/codex/tests/codex.spec.ts
 corepack pnpm run typecheck
 ```
 
 Expected: PASS after all current provider fixtures are updated to the new failure shape.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add packages/core/contracts packages/core/executor packages/core/routing
+git add packages/core/contracts packages/core/executor packages/core/routing packages/providers/codex
 git commit -m "refactor(executor): canonicalize failure taxonomy"
 ```
 
@@ -819,7 +844,7 @@ await journal.repairAuthorization({
 })
 ```
 
-Only increment `repairCycles` when the workflow actually schedules/enters an authorized repair cycle.
+Do not increment `repairCycles` when a certifier merely proposes a repair. Introduce a local `pendingRepairCycle` number: when a confirmed repairable finding is selected, set `pendingRepairCycle = repairCycles + 1` and use that number only to name the queued `debug-N` / `repair-N` stages. After scope authorization is recorded and the pre-repair snapshot succeeds, assign `repairCycles = pendingRepairCycle` immediately before writable repair dispatch and clear `pendingRepairCycle`. This preserves `repairCycles = 0` when authorization is refused before repair starts.
 
 - [ ] **Step 7: Re-run tests and commit**
 
