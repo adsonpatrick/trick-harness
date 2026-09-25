@@ -102,6 +102,8 @@ export interface StageConstraint {
 
 A constraint is only emitted for an observed limitation. There is no `confirmed` field, no severity, and no repairability field.
 
+The boundary between `StageConstraint` and `ExecutorFailure` is where the failure becomes observable. If the executor successfully runs and the stage can return a valid contract saying a required operation was unavailable, the fact is a `StageConstraint`. If the provider/executor fails before a valid stage result exists, the fact is an `ExecutorFailure`. The Control Plane must never synthesize a constraint from provider prose or synthesize a provider failure from a stage constraint.
+
 `StageResult` becomes:
 
 ```ts
@@ -135,6 +137,17 @@ A repair is permitted only when all of these are true:
 7. the repair budget remains available.
 
 The agent that raises a finding and the agent that performs the repair may never expand their own write authority.
+
+The approved repair scope is derived by deterministic code from the approved Plan and change-impact policy. Physical scope is the exact normalized `plannedPaths()` set. Logical scope is derived by classifying those same paths through the profile's change-impact rules; model-authored prose such as `affectedBoundary`, `summary`, or `minimalRepairSurface` never defines logical authority.
+
+For authorization, the Control Plane deterministically classifies the proposed repair paths and requires both:
+
+```text
+proposedRepairPaths ⊆ RepairScope.allowedPaths
+classified(proposedRepairPaths).surfaces ⊆ RepairScope.allowedSurfaces
+```
+
+A legitimate repair that needs an additional test or source file not named by the approved Plan is intentionally blocked until scope is expanded by an external approved decision.
 
 The approved repair scope is derived by deterministic code from the approved Plan and change-impact policy.
 
@@ -218,7 +231,7 @@ export interface WorkspaceStateReader {
 }
 ```
 
-A snapshot contains bounded path/fingerprint state, never file contents.
+A snapshot contains bounded path/fingerprint state, never file contents. Its fingerprint semantics must detect a path changing between the two snapshots even when the path was already dirty before repair. Creation, deletion, rename, staged changes, unstaged changes, and a second content mutation to an already-modified file must therefore remain distinguishable enough for `changedPathsBetween(before, after)` to identify the repair's mutation set.
 
 The runtime captures a snapshot immediately before repair dispatch and another immediately after repair completion. Deterministic comparison produces the paths actually changed by that repair.
 
