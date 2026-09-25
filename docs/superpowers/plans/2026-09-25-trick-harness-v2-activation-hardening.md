@@ -1464,9 +1464,11 @@ Use repository search plus the final diff; do not rely only on tests.
 
 The code search found no emitted `provider-error` / `route-unsupported` categories or `ExecutorFailure.availability` references, no model-diff-derived delivery write set, and all workflow-result fixtures include `constraints`. Repair dispatch calls the deterministic scope builder and authorization gate before journaling authority and starting the repair. The executor and Codex READMEs now document category-based fallback classification accurately.
 
-- [ ] **Step 6: Push the implementation branch and open a PR**
+- [x] **Step 6: Push the implementation branch and open a PR**
 
 PR description must reference the approved spec and summarize verification commands/results. Do not enable auto-merge.
+
+Opened [PR #18](https://github.com/adsonpatrick/trick-harness/pull/18), targeting `master`; auto-merge is disabled. At initial status, CodeRabbit had passed and repository CI had not yet reported. Step 4 remains incomplete because the full Windows snapshot run could not provide a final green result. Human review/merge remains the gate before Task 12 can consume an immutable runtime SHA.
 
 - [ ] **Step 7: Human merge gate**
 
