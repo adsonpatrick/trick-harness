@@ -73,6 +73,29 @@ The following must pass when the checkout is otherwise valid:
 
 The regression test must configure a deliberately unusable global `core.excludesFile` and prove `harness:check` still validates a correct pinned checkout.
 
+### A.1 Approved artifacts from a registered external repository
+
+An implementation checkout may consume an approved Spec and Plan from a
+different repository when the deployment explicitly registers that source. This
+exists for one reason: a cross-repository implementation must be held to the
+same immutable approved artifacts without copying them into a second source of
+truth.
+
+An external source is a deployment-owned record containing its canonical
+repository identity and an absolute local checkout path. A workflow names the
+source by its configured identifier and supplies an exact 40-hex revision for
+the source. Before reading either artifact, the Control Plane must verify the
+registered checkout's remote identity and its checked-out revision, resolve
+each artifact path inside that checkout, and verify its declared SHA-256. The
+Spec and Plan must come from the same registered source and revision.
+
+The operator cannot supply a URL, branch name, arbitrary checkout path, or a
+filesystem path outside a registered source. The runtime does not clone, fetch,
+or otherwise access the network while resolving an approved artifact. A missing
+source, mismatched remote or revision, path escape, or hash mismatch is an
+`INCONCLUSIVE` inability to establish the approved contract; it does not grant
+write authority or trigger repair.
+
 ### B. Findings and execution constraints are different contracts
 
 `Finding` remains the vocabulary for defects, decisions, observations, and review outcomes about the artifact.

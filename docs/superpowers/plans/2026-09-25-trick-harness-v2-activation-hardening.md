@@ -25,6 +25,7 @@
 - Keep Trick Harness and NeuroVia implementation commits separate by repository and responsibility.
 - Use isolated worktrees at execution time; do not implement directly on an unrelated dirty checkout.
 - Before any cross-repository pin update, use an exact immutable 40-hex Trick Harness commit SHA.
+- A cross-repository approved artifact is readable only through a deployment-registered local source; never accept operator-supplied URLs, branches, checkout paths, or network fetches.
 
 ## Review Focus
 
@@ -33,6 +34,45 @@
 3. **Older journals with none of the new event types:** replay must still reconstruct successfully with empty/absent new facts; Task 4 pins backward compatibility.
 4. **Unexpected OpenCode errors that are neither a known abort nor startup failure:** they must normalize to canonical `other` with a fixed safe code and no leaked message; Task 8 covers this.
 5. **Repairable finding when `plannedPaths()` is unavailable:** the run must refuse writable repair rather than infer scope; Task 6 covers this.
+
+---
+
+### Task 0: Resolve approved artifacts from a registered external repository
+
+**Repository:** `adsonpatrick/trick-harness`
+
+**Files:**
+- Modify: `packages/core/contracts/src/types.ts`
+- Modify: `packages/core/contracts/src/index.ts`
+- Modify: `packages/core/contracts/tests/contracts.spec.ts`
+- Modify: `apps/plurora-harness-host/src/workflow-handlers.ts`
+- Modify: `apps/plurora-harness-host/src/main.ts`
+- Modify: `apps/plurora-harness-host/tests/workflow-handlers.spec.ts`
+- Modify: `apps/plurora-harness-host/tests/host.spec.ts`
+
+**Interfaces:**
+- Consumes: a deployment-owned registry whose source id maps to a canonical repository identity and absolute local checkout.
+- Produces: an `ApprovedArtifactSet` that either reads both same-revision external artifacts after remote/revision/path/hash verification or refuses before any executor is started.
+
+- [ ] **Step 1: Add failing contract and host tests**
+
+Cover a local registered source that accepts a same-source exact revision and byte-hashed Spec/Plan. Add negative tests for an unknown source id, non-40-hex revision, remote mismatch, checked-out revision mismatch, path traversal, artifact hash mismatch, and attempting to mix local/external or two external sources. Assert that none starts an executor.
+
+- [ ] **Step 2: Define a closed source reference contract**
+
+Keep existing local artifacts compatible. Add an optional source reference containing only a configured source id and exact revision; reject URLs, branch names, and checkout paths at the control-plane parser. Require both artifacts to share the reference when either is external.
+
+- [ ] **Step 3: Implement registered-source resolution**
+
+At the host boundary, validate the registered checkout using command-scoped Git reads: canonical remote identity, exact detached or checked-out revision, contained artifact paths, and SHA-256 bytes. Do not fetch, clone, or write to the source checkout. Reuse the resolved bytes for task prompts, planned-path parsing, and conformance rather than rereading through the implementation checkout.
+
+- [ ] **Step 4: Run focused RED/GREEN evidence and commit**
+
+```bash
+corepack pnpm exec vitest run packages/core/contracts apps/plurora-harness-host/tests/workflow-handlers.spec.ts apps/plurora-harness-host/tests/host.spec.ts
+git add packages/core/contracts apps/plurora-harness-host
+git commit -m "feat(harness): resolve registered cross-repo artifacts"
+```
 
 ---
 
