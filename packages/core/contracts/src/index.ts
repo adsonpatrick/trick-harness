@@ -28,6 +28,7 @@ import {
   ROLES,
   ROUTED_PERMISSION_MODES,
   SECURITY_RELEVANCES,
+  STAGE_CONSTRAINT_CLASSES,
   WORKFLOW_VERDICTS,
   WORKLOADS,
   WRITE_VOLUMES,
@@ -46,6 +47,7 @@ import type {
   Risk,
   RouteDecision,
   StageResult,
+  StageConstraint,
   StageRouteOverride,
   WorkflowObjective,
 } from './types.ts'
@@ -189,6 +191,19 @@ export function parseFinding(value: unknown, path = 'finding'): Finding {
     raisedBy: member(source, 'raisedBy', ROLES, path),
     summary: text(source, 'summary', path),
     confirmed: flag(source, 'confirmed', path),
+    affectedPaths: list(source, 'affectedPaths', path, textItem),
+    evidence: list(source, 'evidence', path, parseEvidenceRef),
+  })
+}
+
+/** Read one stage constraint back, separately from a product finding. */
+export function parseStageConstraint(value: unknown, path = 'constraint'): StageConstraint {
+  const source = asRecord(value, path)
+  return Object.freeze({
+    id: text(source, 'id', path),
+    class: member(source, 'class', STAGE_CONSTRAINT_CLASSES, path),
+    raisedBy: member(source, 'raisedBy', ROLES, path),
+    summary: text(source, 'summary', path),
     evidence: list(source, 'evidence', path, parseEvidenceRef),
   })
 }
@@ -218,6 +233,7 @@ export function parseDiagnosisContract(value: unknown, path = 'diagnosis'): Diag
     confidence: member(source, 'confidence', CONFIDENCE_LEVELS, path),
     regressionTestSeam: text(source, 'regressionTestSeam', path),
     minimalRepairSurface: text(source, 'minimalRepairSurface', path),
+    proposedRepairPaths: list(source, 'proposedRepairPaths', path, textItem),
     unknowns: list(source, 'unknowns', path, textItem),
     securityRelevance: member(source, 'securityRelevance', SECURITY_RELEVANCES, path),
     ...dependency === undefined
@@ -271,6 +287,7 @@ export function parseStageResult(value: unknown, path = 'stage'): StageResult {
     verdict: member(source, 'verdict', WORKFLOW_VERDICTS, path),
     summary: text(source, 'summary', path),
     findings: list(source, 'findings', path, parseFinding),
+    constraints: list(source, 'constraints', path, parseStageConstraint),
     evidence: list(source, 'evidence', path, parseEvidenceRef),
   })
 }

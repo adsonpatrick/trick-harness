@@ -25,6 +25,10 @@ Two field-level rules are worth naming because they look like strictness and are
 
 `INCONCLUSIVE` and `BLOCKED` are distinct verdicts on purpose. Inconclusive means the work could not be judged; blocked means it was judged and cannot proceed without a decision only a person can make. Collapsing them would turn "nobody knows" into "somebody decided".
 
+## Findings and constraints
+
+A finding is a claim about an artifact and names its `affectedPaths`. A stage constraint is a claim about the stage's ability to judge that artifact, such as a sandbox limitation or unreadable external runtime. `StageResult.constraints` is required even when empty, remains separate from findings, and cannot grant repair authority. A diagnosis similarly names `proposedRepairPaths`; those are claims for later deterministic scope authorization, not permission to write.
+
 ## Usage
 
 ```ts

@@ -16,6 +16,7 @@ import {
   parseFinding,
   parseRouteDecision,
   parseStageResult,
+  parseStageConstraint,
   parseStageRouteOverride,
   parseChangeImpactFacts,
   parseConformanceContract,
@@ -39,6 +40,7 @@ const finding: Finding = {
   raisedBy: 'review',
   summary: 'the retry counter resets on every attempt',
   confirmed: true,
+  affectedPaths: ['packages/core/engineering-workflow/src/index.ts'],
   evidence: [{ kind: 'test', locator: 'retry.spec.ts:42', summary: 'fails on the second attempt' }],
 }
 
@@ -54,6 +56,7 @@ const diagnosis: DiagnosisContract = {
   confidence: 'high',
   regressionTestSeam: 'workflow.spec.ts, the bounded-repair describe block',
   minimalRepairSurface: 'the cycle accounting in the repair transition',
+  proposedRepairPaths: ['packages/core/engineering-workflow/src/index.ts'],
   unknowns: [],
   securityRelevance: 'none',
 }
@@ -76,6 +79,7 @@ const stage: StageResult = {
   verdict: 'FAIL',
   summary: 'one confirmed bug in the retry accounting',
   findings: [finding],
+  constraints: [],
   evidence: [{ kind: 'diff', locator: 'abc1234', summary: 'the reviewed change' }],
 }
 
@@ -304,6 +308,11 @@ describe('reading a serialized finding back', () => {
     expect(() => parseFinding({ ...finding, confirmed: 'yes' })).toThrow(/finding\.confirmed/)
   })
 
+  it('requires affected paths even when a finding has no evidence', () => {
+    const { affectedPaths: _dropped, ...rest } = finding
+    expect(() => parseFinding(rest)).toThrow(/finding\.affectedPaths/)
+  })
+
   it('names the offending element when one piece of evidence is malformed', () => {
     const evidence = [finding.evidence[0], { kind: 'seance', locator: 'x', summary: 'y' }]
     expect(() => parseFinding({ ...finding, evidence })).toThrow(/finding\.evidence\[1\]\.kind/)
@@ -345,6 +354,11 @@ describe('reading a serialized diagnosis back', () => {
     const { unknowns: _dropped, ...rest } = diagnosis
     expect(() => parseDiagnosisContract(rest)).toThrow(/diagnosis\.unknowns/)
     expect(parseDiagnosisContract({ ...rest, unknowns: [] }).unknowns).toStrictEqual([])
+  })
+
+  it('requires proposed repair paths even when none are proposed', () => {
+    const { proposedRepairPaths: _dropped, ...rest } = diagnosis
+    expect(() => parseDiagnosisContract(rest)).toThrow(/diagnosis\.proposedRepairPaths/)
   })
 
   it('rejects a confidence or security relevance outside its vocabulary', () => {
@@ -401,6 +415,16 @@ describe('reading a serialized route decision back', () => {
 })
 
 describe('reading a serialized stage result back', () => {
+  it('parses stage constraints separately from findings', () => {
+    expect(parseStageConstraint({
+      id: 'constraint-1',
+      class: 'SANDBOX_LIMITATION',
+      raisedBy: 'verify',
+      summary: 'the external runtime cannot be read in this sandbox',
+      evidence: [{ kind: 'gate', locator: 'harness:check', summary: 'sandbox denied the check' }],
+    })).toMatchObject({ class: 'SANDBOX_LIMITATION', raisedBy: 'verify' })
+  })
+
   it('survives a JSON round trip unchanged', () => {
     expect(parseStageResult(roundTrip(stage))).toStrictEqual(stage)
   })
@@ -417,6 +441,11 @@ describe('reading a serialized stage result back', () => {
   it('accepts a stage that found nothing', () => {
     const clean = { ...stage, verdict: 'PASS' as const, findings: [], summary: 'no findings' }
     expect(parseStageResult(roundTrip(clean)).findings).toStrictEqual([])
+  })
+
+  it('requires constraints even when no constraint was raised', () => {
+    const { constraints: _dropped, ...rest } = stage
+    expect(() => parseStageResult(rest)).toThrow(/stage\.constraints/)
   })
 
   it('drops fields the contract does not declare, transcripts included', () => {

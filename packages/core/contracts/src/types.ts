@@ -116,6 +116,18 @@ export const FINDING_CLASSES = [
 /** One finding class. */
 export type FindingClass = typeof FINDING_CLASSES[number]
 
+/** Conditions that limit a stage's ability to judge an artifact. */
+export const STAGE_CONSTRAINT_CLASSES = [
+  'SANDBOX_LIMITATION',
+  'MISSING_TOOL',
+  'EXTERNAL_RUNTIME_UNREADABLE',
+  'EXECUTOR_CAPABILITY_GAP',
+  'EXTERNAL_SERVICE_UNAVAILABLE',
+] as const
+
+/** One closed class of non-artifact stage constraint. */
+export type StageConstraintClass = typeof STAGE_CONSTRAINT_CLASSES[number]
+
 /**
  * Finding classes an automated repair may act on at all.
  *
@@ -190,7 +202,18 @@ export interface Finding {
   readonly summary: string
   /** Whether a stage established this is real, rather than suspected. */
   readonly confirmed: boolean
+  /** Paths the stage claims this finding concerns; scope remains control-plane owned. */
+  readonly affectedPaths: readonly string[]
   /** Evidence a later reader can follow; may be empty for an unconfirmed finding. */
+  readonly evidence: readonly EvidenceRef[]
+}
+
+/** A bounded reason a stage cannot completely judge the artifact. */
+export interface StageConstraint {
+  readonly id: string
+  readonly class: StageConstraintClass
+  readonly raisedBy: Role
+  readonly summary: string
   readonly evidence: readonly EvidenceRef[]
 }
 
@@ -224,6 +247,8 @@ export interface DiagnosisContract {
   readonly regressionTestSeam: string
   /** The smallest coherent surface a fix would touch. */
   readonly minimalRepairSurface: string
+  /** Paths proposed for repair; never grants writable authority by itself. */
+  readonly proposedRepairPaths: readonly string[]
   /** What remains unexplained; empty is a claim that nothing does. */
   readonly unknowns: readonly string[]
   /** Whether fixing this has security consequences. */
@@ -650,6 +675,8 @@ export interface StageResult {
   readonly summary: string
   /** Findings this stage raised. */
   readonly findings: readonly Finding[]
+  /** Conditions that prevented a complete judgement, separate from findings. */
+  readonly constraints: readonly StageConstraint[]
   /** Evidence supporting the verdict. */
   readonly evidence: readonly EvidenceRef[]
 }
