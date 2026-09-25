@@ -15,6 +15,7 @@
 
 import { createOpencodeClient, createOpencodeServer } from '@opencode-ai/sdk'
 import { OpencodeStartupTimeoutError } from './startup-error.ts'
+import { OpencodeMalformedResponseError, OpencodeServerStartError, OpencodeSessionAbortedError } from './runtime-errors.ts'
 import type {
   OpencodeAdapter,
   OpencodeClientHandle,
@@ -35,32 +36,51 @@ function bindClient(url: string, directory: string): OpencodeClientHandle {
   const client = createOpencodeClient({ baseUrl: url, directory })
   return {
     async createSession(dir: string): Promise<string> {
-      const created = await client.session.create({
+      const created: unknown = await client.session.create({
         query: { directory: dir },
         throwOnError: true,
       })
-      return created.data.id
+      const id = isRecord(created) && isRecord(created.data) ? created.data.id : undefined
+      if (typeof id !== 'string' || id.trim() === '') {
+        throw new OpencodeMalformedResponseError('session-id-missing')
+      }
+      return id
     },
 
     async prompt(request: OpencodePromptRequest): Promise<OpencodePromptResult> {
       // The model rides on the prompt body, which is the only place OpenCode
       // accepts one. Nothing here writes to a user or global config path.
-      const answered = await client.session.prompt({
-        path: { id: request.sessionId },
-        query: { directory: request.directory },
-        body: {
-          ...(request.model === undefined ? {} : { model: request.model }),
-          parts: [{ type: 'text', text: request.text }],
-        },
-        throwOnError: true,
-      })
-      return { parts: answered.data.parts }
+      let answered: unknown
+      try {
+        answered = await client.session.prompt({
+          path: { id: request.sessionId },
+          query: { directory: request.directory },
+          body: {
+            ...(request.model === undefined ? {} : { model: request.model }),
+            parts: [{ type: 'text', text: request.text }],
+          },
+          throwOnError: true,
+        })
+      } catch (error) {
+        if (error instanceof Error && error.name === 'MessageAbortedError') {
+          throw new OpencodeSessionAbortedError()
+        }
+        throw error
+      }
+      if (!isRecord(answered) || !isRecord(answered.data) || !Array.isArray(answered.data.parts)) {
+        throw new OpencodeMalformedResponseError('prompt-response-missing-data')
+      }
+      return { parts: answered.data.parts as OpencodePromptResult['parts'] }
     },
 
     async abortSession(sessionId: string): Promise<void> {
       await client.session.abort({ path: { id: sessionId }, throwOnError: true })
     },
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
@@ -86,7 +106,7 @@ export function createSdkAdapter(settings: OpencodeSdkOptions): OpencodeAdapter 
         if (error instanceof Error && error.message === `Timeout waiting for server to start after ${settings.startupTimeoutMs}ms`) {
           throw new OpencodeStartupTimeoutError(settings.startupTimeoutMs)
         }
-        throw error
+        throw new OpencodeServerStartError()
       }
       return { url: server.url, close: () => { server.close() } }
     },

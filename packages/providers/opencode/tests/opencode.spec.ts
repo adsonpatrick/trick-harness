@@ -33,6 +33,7 @@ interface Recorder {
 interface FakeOptions {
   readonly parts?: readonly OpencodeMessagePart[]
   readonly onPrompt?: (request: OpencodePromptRequest) => Promise<void>
+  readonly promptFails?: Error
   readonly startServerFails?: Error
   /** Make the scoped server refuse to close, the way a wedged port does. */
   readonly closeFails?: Error
@@ -70,6 +71,7 @@ function fakeAdapter(options: FakeOptions = {}): { adapter: OpencodeAdapter; see
         async prompt(request) {
           seen.prompts.push(request)
           await options.onPrompt?.(request)
+          if (options.promptFails !== undefined) throw options.promptFails
           return { parts: options.parts ?? [{ type: 'text', text: 'done' }] }
         },
         abortSession: (sessionId) => {
@@ -240,6 +242,39 @@ describe('results', () => {
     expect(result.failure?.category).toBe('other')
     expect(result.failure?.safeDiagnostic).not.toContain('sk-secret')
     expect(result.failure?.safeDiagnostic).not.toContain('ECONNREFUSED')
+  })
+
+  it('classifies an SDK session abort as an error rather than caller cancellation', async () => {
+    const aborted = Object.assign(new Error('private session detail'), { name: 'MessageAbortedError' })
+    const { adapter } = fakeAdapter({ promptFails: aborted })
+    const result = await createOpencodeProvider(adapter).start(request())
+
+    expect(result).toMatchObject({
+      status: 'error',
+      failure: {
+        category: 'other',
+        code: 'opencode.prompt.session-aborted',
+        safeDiagnostic: 'OpenCode aborted the active session before returning a valid result',
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('private session detail')
+  })
+
+  it('uses a stable safe taxonomy for unknown prompt errors', async () => {
+    const unsafe = Object.assign(new Error('OPENAI_API_KEY=sk-secret'), { name: 'PrivateServiceCredentialError' })
+    const { adapter } = fakeAdapter({ promptFails: unsafe })
+    const result = await createOpencodeProvider(adapter).start(request())
+
+    expect(result).toMatchObject({
+      status: 'error',
+      failure: {
+        category: 'other',
+        code: 'opencode.prompt.failed',
+        safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('sk-secret')
+    expect(JSON.stringify(result)).not.toContain('PrivateServiceCredentialError')
   })
 })
 

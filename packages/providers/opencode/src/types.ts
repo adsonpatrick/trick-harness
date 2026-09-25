@@ -72,6 +72,9 @@ export interface OpencodePromptResult {
   readonly parts: readonly OpencodeMessagePart[]
 }
 
+/** Stable reason a successful SDK response failed the adapter contract. */
+export type OpencodeMalformedResponseCode = 'session-id-missing' | 'prompt-response-missing-data'
+
 /** The client bound to one running server. */
 export interface OpencodeClientHandle {
   createSession(directory: string): Promise<string>

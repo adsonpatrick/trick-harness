@@ -1066,7 +1066,7 @@ git commit -m "feat(workflow): verify repair mutations against scope"
 - Produces typed internal adapter errors and canonical external `ExecutorFailure` categories/codes.
 - Harness-requested cancellation remains `status: 'aborted'`; an OpenCode-internal `MessageAbortedError` becomes `status: 'error'`, category `other`.
 
-- [ ] **Step 1: Add failing adapter tests for invalid SDK shapes**
+- [x] **Step 1: Add failing adapter tests for invalid SDK shapes**
 
 Mock `session.create` and `session.prompt` responses to exercise:
 - missing/blank session id;
@@ -1075,7 +1075,7 @@ Mock `session.create` and `session.prompt` responses to exercise:
 
 Each must reject with `OpencodeMalformedResponseError`, not an incidental `TypeError`.
 
-- [ ] **Step 2: Add failing provider tests for the exact safe taxonomy**
+- [x] **Step 2: Add failing provider tests for the exact safe taxonomy**
 
 Pin these outcomes:
 
@@ -1104,13 +1104,13 @@ expect(routeError.failure).toMatchObject({
 
 Add the Review Focus case: an unknown prompt error with a secret-bearing message must become category `other`, code `opencode.prompt.failed`, and no byte of the original message/name if the name is unsafe.
 
-- [ ] **Step 3: Run OpenCode tests and verify they fail under the current provider**
+- [x] **Step 3: Run OpenCode tests and verify they fail under the current provider**
 
 ```bash
 corepack pnpm exec vitest run packages/providers/opencode
 ```
 
-- [ ] **Step 4: Add typed internal errors**
+- [x] **Step 4: Add typed internal errors**
 
 `runtime-errors.ts` should define fixed-message classes such as:
 
@@ -1136,7 +1136,7 @@ export class OpencodeServerStartError extends Error {
 
 Keep the existing `OpencodeStartupTimeoutError`.
 
-- [ ] **Step 5: Validate response structure before dereferencing**
+- [x] **Step 5: Validate response structure before dereferencing**
 
 In `adapter.ts`, explicitly validate `created.data.id` and `answered.data.parts`.
 
@@ -1144,7 +1144,7 @@ Catch a thrown error with exact `error.name === 'MessageAbortedError'` around th
 
 Unknown prompt failures rethrow to the provider classifier; unknown server-start failures become a typed server-start fault.
 
-- [ ] **Step 6: Normalize only to canonical categories**
+- [x] **Step 6: Normalize only to canonical categories**
 
 Rewrite `classify(error)` so every return uses `ExecutorFailureCategory` and a stable code. Never emit `provider-error` or `route-unsupported`.
 
@@ -1178,7 +1178,7 @@ if (error instanceof OpencodeSessionAbortedError) {
 
 Use fixed safe text for generic errors; do not include raw `Error.name` unless it passes the existing bounded/safe-name rule.
 
-- [ ] **Step 7: Re-run provider + routing tests and commit**
+- [x] **Step 7: Re-run provider + routing tests and commit**
 
 ```bash
 corepack pnpm exec vitest run packages/providers/opencode packages/core/routing packages/core/executor
