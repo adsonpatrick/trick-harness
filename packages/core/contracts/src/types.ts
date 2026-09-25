@@ -332,12 +332,22 @@ export interface ApprovedArtifactRef {
   readonly sha256: string
 }
 
+/** One deployment-registered checkout holding an immutable approved artifact set. */
+export interface ApprovedArtifactSourceRef {
+  /** Stable deployment registry key; never a URL or filesystem path. */
+  readonly id: string
+  /** Exact commit the registered checkout must expose before either document is read. */
+  readonly revision: string
+}
+
 /** The documents a human approved before the work was allowed to start. */
 export interface ApprovedArtifactSet {
   /** The approved specification. */
   readonly spec: ApprovedArtifactRef
   /** The approved implementation plan. */
   readonly plan: ApprovedArtifactRef
+  /** Absent means both documents live in the implementation checkout. */
+  readonly source?: ApprovedArtifactSourceRef
 }
 
 /**

@@ -302,6 +302,12 @@ export function parseStageRouteOverride(value: unknown, path = 'routeOverride'):
 /** A lowercase 64-hex SHA-256 digest and nothing else. */
 const SHA256 = /^[0-9a-f]{64}$/
 
+/** A deployment registry key, deliberately narrower than a URL or path. */
+const ARTIFACT_SOURCE_ID = /^[a-z][a-z0-9-]{0,63}$/
+
+/** An immutable Git commit accepted for an external approved-artifact source. */
+const GIT_REVISION = /^[0-9a-f]{40}$/
+
 /** Read a required field that must be a SHA-256 digest. */
 function digest(source: Record<string, unknown>, key: string, path: string): string {
   const value = text(source, key, path)
@@ -445,9 +451,24 @@ export function parseEffectiveChangeImpact(value: unknown, path = 'effectiveImpa
  */
 export function parseApprovedArtifactSet(value: unknown, path = 'approvedArtifacts'): ApprovedArtifactSet {
   const source = asRecord(value, path)
+  const external = source['source']
+  let artifactSource: import('./types.ts').ApprovedArtifactSourceRef | undefined
+  if (external !== undefined) {
+    const externalRecord = asRecord(external, `${path}.source`)
+    const id = text(externalRecord, 'id', `${path}.source`)
+    const revision = text(externalRecord, 'revision', `${path}.source`)
+    if (!ARTIFACT_SOURCE_ID.test(id)) {
+      throw new ContractError(`${path}.source.id`, 'must be a registered source identifier')
+    }
+    if (!GIT_REVISION.test(revision)) {
+      throw new ContractError(`${path}.source.revision`, 'must be an exact lowercase 40-character commit SHA')
+    }
+    artifactSource = Object.freeze({ id, revision })
+  }
   return Object.freeze({
     spec: parseApprovedArtifactRef(source['spec'], `${path}.spec`),
     plan: parseApprovedArtifactRef(source['plan'], `${path}.plan`),
+    ...artifactSource === undefined ? {} : { source: artifactSource },
   })
 }
 

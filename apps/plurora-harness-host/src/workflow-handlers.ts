@@ -40,6 +40,7 @@ import type { ChangeImpactReader, StageSpec } from '@trick-harness/engineering-w
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { ProjectChangeSetReader } from './change-set.ts'
 import { looksLikeSecret } from './redaction.ts'
+import { loadApprovedArtifacts, type ApprovedArtifactResolverOptions } from './approved-artifacts.ts'
 
 /**
  * The line a stage is required to end with.
@@ -82,6 +83,7 @@ export interface PluroraWorkflowHandlerOptions {
    * classification taken from an approximation is a bar set on a guess.
    */
   readonly changeSet?: ProjectChangeSetReader
+  readonly approvedArtifacts?: ApprovedArtifactResolverOptions
 }
 
 /** The default base for every pull request this deployment opens. */
@@ -299,16 +301,18 @@ async function readApproved(root: string, artifact: ApprovedArtifactRef): Promis
  * @param changeSet - this checkout's delivered change-set reader.
  * @returns the reader the runtime classifies the run from.
  */
-function changeImpactReader(changeSet: ProjectChangeSetReader): ChangeImpactReader {
+function changeImpactReader(changeSet: ProjectChangeSetReader, resolver?: ApprovedArtifactResolverOptions): ChangeImpactReader {
   return {
-    async plannedPaths(objective) {
-      const plan = await readApproved(objective.cwd, objective.approvedArtifacts.plan)
-      if (plan.sha256 !== objective.approvedArtifacts.plan.sha256) {
+    async plannedPaths(objective, signal) {
+      const plan = resolver === undefined
+        ? await readApproved(objective.cwd, objective.approvedArtifacts.plan)
+        : await loadApprovedArtifacts(objective.cwd, objective.approvedArtifacts, resolver, signal)
+      if (('planSha256' in plan ? plan.planSha256 : plan.sha256) !== objective.approvedArtifacts.plan.sha256) {
         // Named without quoting either hash: this refusal is journalled, and
         // the run stops here rather than classifying itself from the edit.
         throw new ApprovedArtifactError('the approved Plan on disk is not the one this objective was approved against')
       }
-      return extractApprovedPlanWriteSet(plan.text)
+      return extractApprovedPlanWriteSet('planText' in plan ? plan.planText : plan.text)
     },
     async actualPaths(_objective, signal) {
       return await changeSet.actualPaths(signal)
@@ -410,8 +414,13 @@ export function createPluroraWorkflowHandlers(
     // Absent rather than present-and-undefined: the runtime tells the two
     // apart, and a run holding a reader that answers nothing would plan its
     // certification from a change set nobody read.
-    ...options.changeSet === undefined ? {} : { changeImpact: changeImpactReader(options.changeSet) },
+    ...options.changeSet === undefined ? {} : { changeImpact: changeImpactReader(options.changeSet, options.approvedArtifacts) },
     async loadApprovedArtifacts(objective) {
+      if (options.approvedArtifacts !== undefined) {
+        return await loadApprovedArtifacts(
+          objective.cwd, objective.approvedArtifacts, options.approvedArtifacts, new AbortController().signal,
+        )
+      }
       const [spec, plan] = await Promise.all([
         readApproved(objective.cwd, objective.approvedArtifacts.spec),
         readApproved(objective.cwd, objective.approvedArtifacts.plan),

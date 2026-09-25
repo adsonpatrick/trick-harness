@@ -253,7 +253,11 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       // every run this host serves in its measured form: what the branch is
       // certified as comes from the approved Plan and this checkout's Git,
       // rather than from the risk whoever opened the objective typed.
-      workflow: createPluroraWorkflowHandlers({ branch, baseBranch: config.project.protectedBranch, changeSet }),
+      workflow: createPluroraWorkflowHandlers({ branch, baseBranch: config.project.protectedBranch, changeSet, approvedArtifacts: {
+        spawn: options.spawn,
+        disposeGraceMs,
+        ...config.approvedArtifactSources === undefined ? {} : { sources: config.approvedArtifactSources },
+      } }),
       providers: {
         opencode: { adapter: options.opencode },
         codex: { spawn: options.spawn, disposeGraceMs },

@@ -564,6 +564,30 @@ describe('reading the approved artifacts an objective was opened against', () =>
     const parsed = parseWorkflowObjective({ ...objective, approvedArtifacts })
     expect(Object.hasOwn(parsed.approvedArtifacts.spec, 'transcript')).toBe(false)
   })
+
+  it('accepts one immutable registered source for both approved artifacts', () => {
+    const parsed = parseWorkflowObjective({
+      ...objective,
+      approvedArtifacts: {
+        ...objective.approvedArtifacts,
+        source: { id: 'trick-harness-design', revision: 'c'.repeat(40) },
+      },
+    })
+    expect(parsed.approvedArtifacts.source).toEqual({ id: 'trick-harness-design', revision: 'c'.repeat(40) })
+  })
+
+  it('refuses a source reference that could select a moving or arbitrary location', () => {
+    for (const source of [
+      { id: 'https://github.com/adsonpatrick/trick-harness', revision: 'c'.repeat(40) },
+      { id: 'trick-harness', revision: 'main' },
+      { id: '../trick-harness', revision: 'c'.repeat(40) },
+    ]) {
+      expect(() => parseWorkflowObjective({
+        ...objective,
+        approvedArtifacts: { ...objective.approvedArtifacts, source },
+      })).toThrow(/objective\.approvedArtifacts\.source/)
+    }
+  })
 })
 
 describe('reading a conformance result back', () => {

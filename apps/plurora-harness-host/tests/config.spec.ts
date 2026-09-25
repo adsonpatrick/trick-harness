@@ -54,6 +54,19 @@ describe('parseDeploymentConfig', () => {
     expect(parseDeploymentConfig(validConfig()).projectRepository).toBe('adsonpatrick/neuro-via')
   })
 
+  it('accepts only registered local approved-artifact sources', () => {
+    const config = parseDeploymentConfig({
+      ...validConfig(),
+      approvedArtifactSources: {
+        'trick-harness-design': { repository: 'adsonpatrick/trick-harness', checkout: 'C:\\worktrees\\trick-harness' },
+      },
+    })
+    expect(config.approvedArtifactSources?.['trick-harness-design']).toEqual({
+      repository: 'adsonpatrick/trick-harness', checkout: 'C:\\worktrees\\trick-harness',
+    })
+    refuses({ ...validConfig(), approvedArtifactSources: { main: { repository: 'adsonpatrick/trick-harness', checkout: 'relative' } } }, 'approvedArtifactSources')
+  })
+
   it('refuses a deployment pointed at any other product repository', () => {
     // The certification is the status a branch-protection rule waits on. A file
     // that could name a different repository is a file that could point this
