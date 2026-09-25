@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ConformanceContract, ConformanceObligation } from '@trick-harness/contracts'
 
-import { ConformanceError, buildConformanceManifest, extractApprovedPlanWriteSet, validateConformanceCoverage } from '../src/conformance.ts'
+import { ConformanceError, buildConformanceManifest, extractApprovedPlanWriteSet, reconcileConformance, validateConformanceCoverage } from '../src/conformance.ts'
 
 const SPEC_SHA = 'a'.repeat(64)
 const PLAN_SHA = 'b'.repeat(64)
@@ -285,6 +285,43 @@ describe('holding a returned conformance result to the obligations that were set
       expect(error).toBeInstanceOf(ConformanceError)
       expect((error as Error).message).not.toContain(secret)
     }
+  })
+})
+
+describe('reducing conformance statuses deterministically', () => {
+  it.each([
+    ['BLOCKED', 'BLOCKED'],
+    ['FAIL', 'FAIL'],
+    ['MISSING', 'FAIL'],
+    ['INCONCLUSIVE', 'INCONCLUSIVE'],
+    ['PARTIAL', 'PARTIAL'],
+    ['PASS', 'PASS'],
+  ] as const)('reduces %s items to %s regardless of the claimed overall verdict', (status, verdict) => {
+    const reconciled = reconcileConformance({ ...answerAll(status), verdict: 'PASS' })
+    expect(reconciled.verdict).toBe(verdict)
+  })
+
+  it('treats a missing obligation blocked by a stage constraint as inconclusive, not absent', () => {
+    const missing = answerAll('MISSING')
+    const reconciled = reconcileConformance(missing, [{
+      id: 'C-1', class: 'MISSING_TOOL', raisedBy: 'conformance',
+      summary: 'the test runner is unavailable', evidence: [],
+    }])
+
+    expect(reconciled.items.every(item => item.status === 'INCONCLUSIVE')).toBe(true)
+    expect(reconciled.verdict).toBe('INCONCLUSIVE')
+  })
+
+  it('uses the strictest item status when statuses disagree', () => {
+    const result = answerAll()
+    const itemStatuses = ['PARTIAL', 'INCONCLUSIVE', 'FAIL', 'BLOCKED'] as const
+    const mixed = {
+      ...result,
+      items: result.items.map((item, index) => index < itemStatuses.length
+        ? { ...item, status: itemStatuses[index] ?? item.status }
+        : item),
+    }
+    expect(reconcileConformance(mixed).verdict).toBe('BLOCKED')
   })
 })
 

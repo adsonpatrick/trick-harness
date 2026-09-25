@@ -162,12 +162,13 @@ function conformanceOutput(
   answer: Answer = satisfies,
   extra: readonly Record<string, unknown>[] = [],
   omit: readonly string[] = [],
+  constraints: readonly Record<string, unknown>[] = [],
 ): string {
   const envelope = {
     verdict: 'PASS',
     summary: 'conformance ran',
     findings: [],
-    constraints: [],
+    constraints,
     evidence: [],
     conformance: {
       specSha256: manifest.specSha256,
@@ -214,6 +215,7 @@ async function runLifecycle(
     omit?: readonly string[]
     manifest?: ConformanceManifest
     executors?: readonly string[]
+    constraints?: readonly Record<string, unknown>[]
   } = {},
 ): Promise<PullRequestOutcome> {
   const manifest = options.manifest ?? expectedManifest()
@@ -226,7 +228,9 @@ async function runLifecycle(
       if (!request.task.startsWith(CONFORMANCE_PROMPT)) {
         return { status: 'completed', output: passing('the stage') }
       }
-      return { status: 'completed', output: conformanceOutput(manifest, options.answer, options.extra, options.omit) }
+      return { status: 'completed', output: conformanceOutput(
+        manifest, options.answer, options.extra, options.omit, options.constraints,
+      ) }
     }))
   }
   const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
@@ -314,6 +318,23 @@ describe('a pull request that reaches a human', () => {
 })
 
 describe('the ways a branch could otherwise be called ready', () => {
+  it('reports a constrained missing obligation as inconclusive rather than missing', async () => {
+    const outcome = await runLifecycle(await checkout(), {
+      answer: obligation => ({
+        ...satisfies(obligation),
+        status: obligation.id === 'ND1' ? 'MISSING' : 'PASS',
+      }),
+      constraints: [{
+        id: 'C-1', class: 'EXTERNAL_RUNTIME_UNREADABLE', raisedBy: 'conformance',
+        summary: 'the required test runtime is unavailable', evidence: [],
+      }],
+    })
+
+    expect(outcome.state).toBe('INCONCLUSIVE')
+    expect(outcome.outcome.conformance?.counts.MISSING).toBe(0)
+    expect(outcome.outcome.conformance?.counts.INCONCLUSIVE).toBe(1)
+  })
+
   it('will not certify while an approved Plan task goes unanswered', async () => {
     // The reading answers every obligation but one, and calls itself a pass. A
     // gate that took the verdict at its word would be scoring the branch

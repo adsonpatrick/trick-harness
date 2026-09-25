@@ -1204,7 +1204,7 @@ git commit -m "fix(opencode): classify aborts and malformed responses safely"
 - Consumes: new stage-result contracts and `WorkflowDeliveryInput.changedPaths` computed by the Control Plane.
 - Produces: prompts that require `constraints` and path fields, unreadable output -> `INCONCLUSIVE`, aligned conformance verdict reduction, and delivery files sourced from the deterministic per-run mutation set instead of model diff evidence.
 
-- [ ] **Step 1: Update prompt snapshot expectations first**
+- [x] **Step 1: Update prompt snapshot expectations first**
 
 The ordinary result example must include:
 
@@ -1224,7 +1224,7 @@ executor capability, or unavailable external service, report it in constraints a
 Do not classify that condition as TOOLING_DEFECT unless the defect is in the repository artifact itself.
 ```
 
-- [ ] **Step 2: Change unreadable/invalid completed stage output to `INCONCLUSIVE`**
+- [x] **Step 2: Change unreadable/invalid completed stage output to `INCONCLUSIVE`**
 
 Replace the old `unreadable(...): BLOCKED` result with:
 
@@ -1244,14 +1244,14 @@ function unreadable(stage: StageSpec, executor: string, reason: string): StageRe
 
 Provider `status: error` remains handled by the core workflow before the interpreter; the host interpreter must not invent a `StageConstraint` from provider diagnostics.
 
-- [ ] **Step 3: Sanitize constraints and new path fields without silently granting authority**
+- [x] **Step 3: Sanitize constraints and new path fields without silently granting authority**
 
 For a valid parsed result:
 - bound/filter constraint summaries/evidence with the same secret rules as findings;
 - preserve `affectedPaths` / `proposedRepairPaths` as claims for the Control Plane to validate later;
 - do not add those paths to any delivery write-set.
 
-- [ ] **Step 4: Align conformance overall verdict reduction**
+- [x] **Step 4: Align conformance overall verdict reduction**
 
 In `conformance.ts`, reduce statuses in this exact precedence:
 
@@ -1267,7 +1267,7 @@ A required obligation blocked only by a stage constraint is `INCONCLUSIVE`, not 
 
 Update the nested conformance prompt to allow the full workflow verdict vocabulary needed by the parser.
 
-- [ ] **Step 5: Replace model-reported delivery write-set accumulation**
+- [x] **Step 5: Replace model-reported delivery write-set accumulation**
 
 Remove the `writeSet` that is populated from `EvidenceRef(kind='diff')`.
 
@@ -1291,7 +1291,9 @@ Use the host's bounded deployment error type rather than a raw generic error in 
 
 An empty deterministic change set must cause delivery to refuse through the existing delivery capability rather than invent a path from stage evidence.
 
-- [ ] **Step 6: Run host/conformance tests and refresh only the intended prompt snapshot**
+- [x] **Step 6: Run host/conformance tests and refresh only the intended prompt snapshot**
+
+Focused host/conformance tests and the targeted prompt snapshot pass. The full `test:snapshot` replay was attempted but is not green in this Windows environment: unrelated transcript/headless snapshots fail, and the delivery-branch snapshot requires the workspace-state composition wiring completed in Task 10; rerun it after that task.
 
 ```bash
 corepack pnpm exec vitest run   apps/plurora-harness-host/tests/workflow-handlers.spec.ts   apps/plurora-harness-host/tests/conformance-end-to-end.spec.ts   packages/core/engineering-workflow/tests/conformance.spec.ts
@@ -1300,7 +1302,7 @@ corepack pnpm run test:snapshot
 
 If the repository snapshot harness requires record mode for this exact prompt fixture, use its documented targeted refresh path and inspect the diff before committing.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/plurora-harness-host packages/core/engineering-workflow

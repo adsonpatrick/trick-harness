@@ -83,6 +83,7 @@ import {
 import {
   ConformanceError,
   buildConformanceManifest,
+  reconcileConformance,
   summarizeConformance,
   validateConformanceCoverage,
 } from './conformance.ts'
@@ -1273,14 +1274,15 @@ export class WorkflowRunner {
       const cause = error instanceof ConformanceError ? error.code : 'unreadable'
       return await unestablished(`conformance produced no result that could be held to the approved artifacts: ${cause}`)
     }
-    this.#conformance = summarizeConformance(objective.approvedArtifacts, manifest, contract)
+    const reconciledContract = reconcileConformance(contract, dispatched.facts.constraints)
+    this.#conformance = summarizeConformance(objective.approvedArtifacts, manifest, reconciledContract)
     this.#options.journal.conformance(this.#conformance)
-    const verdict = weaker(dispatched.facts.verdict, contract.verdict)
+    const verdict = weaker(dispatched.facts.verdict, reconciledContract.verdict)
     if (verdict === dispatched.facts.verdict) return { facts: dispatched.facts }
-    await this.#options.journal.verdict(stage.stageId, stage.role, verdict, contract.summary, [])
+    await this.#options.journal.verdict(stage.stageId, stage.role, verdict, reconciledContract.summary, [])
     return {
       facts: facts(
-        stage, dispatched.facts.executor, dispatched.facts.permissionMode, verdict, contract.summary,
+        stage, dispatched.facts.executor, dispatched.facts.permissionMode, verdict, reconciledContract.summary,
         dispatched.facts.findings, dispatched.facts.evidence, dispatched.facts.durationMs, dispatched.facts.constraints,
       ),
     }

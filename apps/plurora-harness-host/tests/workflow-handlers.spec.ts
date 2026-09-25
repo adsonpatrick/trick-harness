@@ -20,6 +20,7 @@ import { FINDING_CLASSES, ROLES, parseConformanceContract } from '@trick-harness
 import { pluroraDodObligations } from '../../../profiles/plurora/profile.ts'
 import {
   MAX_SUMMARY_CHARS,
+  PluroraDeliveryError,
   RESULT_MARKER,
   createPluroraWorkflowHandlers,
 } from '../src/workflow-handlers.ts'
@@ -75,17 +76,17 @@ describe('the Plurora stage interpreter', () => {
     expect(result.evidence).toHaveLength(1)
   })
 
-  it('blocks a stage that stated nothing, because prose is not evidence', () => {
+  it('marks a stage that stated nothing inconclusive, because prose is not evidence', () => {
     const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
       .interpret(STAGE, 'codex', { status: 'completed', output: 'Everything looks great! All tests pass.' })
-    expect(result.verdict).toBe('BLOCKED')
+    expect(result.verdict).toBe('INCONCLUSIVE')
     expect(result.summary).toContain('established nothing')
   })
 
-  it('blocks rather than fails an unreadable envelope, since neither was established', () => {
+  it('marks an unreadable envelope inconclusive, since neither was established', () => {
     const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
       .interpret(STAGE, 'codex', completed({ verdict: 'GREAT', summary: 'x', findings: [], constraints: [], evidence: [] }))
-    expect(result.verdict).toBe('BLOCKED')
+    expect(result.verdict).toBe('INCONCLUSIVE')
   })
 
   it('identifies a parsed but invalid result without journalling the stage output', () => {
@@ -112,6 +113,31 @@ describe('the Plurora stage interpreter', () => {
 
     for (const findingClass of FINDING_CLASSES) expect(prompt).toContain(`"${findingClass}"`)
     for (const role of ROLES) expect(prompt).toContain(`"${role}"`)
+    expect(prompt).toContain('affectedPaths')
+    expect(prompt).toContain('"constraints":[]')
+  })
+
+  it('keeps bounded safe constraints while preserving claimed affected paths for later validation', () => {
+    const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', completed(envelope({
+      findings: [{
+        id: 'F-1', class: 'BUG', raisedBy: 'implement', summary: 'a confirmed defect', confirmed: true,
+        affectedPaths: ['src\u0009feature.ts'], evidence: [],
+      }],
+      constraints: [{
+        id: 'C-1', class: 'MISSING_TOOL', raisedBy: 'verify', summary: 'x'.repeat(MAX_SUMMARY_CHARS * 2),
+        evidence: [{ kind: 'log', locator: 'logs/check.txt', summary: 'the tool is not installed' }],
+      }, {
+        id: 'C-2', class: 'EXTERNAL_SERVICE_UNAVAILABLE', raisedBy: 'verify',
+        summary: 'connected with postgresql://user:credential@db.invalid/service', evidence: [],
+      }],
+    })))
+
+    expect(result.findings[0]?.affectedPaths).toEqual(['src\u0009feature.ts'])
+    expect(result.constraints[0]?.summary.length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS + 1)
+    expect(result.constraints[0]?.evidence[0]?.summary).toBe('the tool is not installed')
+    expect(result.constraints).toHaveLength(2)
+    expect(result.constraints[1]?.summary).toBe('the stage reported nothing this host will journal')
+    expect(JSON.stringify(result)).not.toContain('credential')
   })
 
   it('takes the role and the executor from the runtime, never from the stage', () => {
@@ -130,10 +156,10 @@ describe('the Plurora stage interpreter', () => {
     expect(result.verdict).toBe('FAIL')
   })
 
-  it('blocks a cancelled stage rather than reading whatever it had said so far', () => {
+  it('marks a cancelled stage inconclusive rather than reading whatever it had said so far', () => {
     const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
       .interpret(STAGE, 'codex', { status: 'aborted', output: `${RESULT_MARKER} ${JSON.stringify(envelope())}` })
-    expect(result.verdict).toBe('BLOCKED')
+    expect(result.verdict).toBe('INCONCLUSIVE')
   })
 
   it('blocks an executor failure, carrying only the diagnostic its own boundary redacted', () => {
@@ -194,7 +220,9 @@ describe('the Plurora task text', () => {
     const text = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)
 
     expect(text).toContain('exactly one final line')
-    expect(text).toContain(`${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"evidence":[{"kind":"diff","locator":"repository-relative/path","summary":"one line"}]}`)
+    expect(text).toContain(`${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"constraints":[],"evidence":[]}`)
+    expect(text).toContain('affectedPaths')
+    expect(text).toContain('evidence locators do not authorize delivery')
   })
 
   it('tells the stage the mutations it is not the one performing', () => {
@@ -203,21 +231,37 @@ describe('the Plurora task text', () => {
       expect(text).toContain(denied)
     }
   })
+
+  it('keeps diagnosing and certifying roles read-only while naming mutation authority accurately', () => {
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
+    expect(handlers.task({ stageId: 'debug-1', role: 'debug' }, OBJECTIVE))
+      .toContain('This stage is read-only and may not change the working tree.')
+    expect(handlers.task({ stageId: 'repair-1', role: 'repair' }, OBJECTIVE))
+      .toContain('You may read and change the working tree.')
+  })
+
+  it('requires a diagnosis to name proposed repair paths and gives external check limits the inconclusive verdict', () => {
+    const debug = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task({ stageId: 'debug-1', role: 'debug' }, OBJECTIVE)
+    expect(debug).toContain('proposedRepairPaths')
+    const verify = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task({ stageId: 'qa-1', role: 'qa' }, OBJECTIVE)
+    expect(verify).toContain('report it in constraints and use INCONCLUSIVE')
+    expect(verify).toContain('Do not classify that condition as TOOLING_DEFECT')
+  })
 })
 
 describe('the Plurora delivery description', () => {
   /** Interpret one stage, then describe the delivery that would follow it. */
-  function describeAfter(result: ExecutorResult): ReturnType<NonNullable<
+  function describeAfter(result: ExecutorResult, changedPaths: readonly string[] = ['src/from-workspace.ts']): ReturnType<NonNullable<
     ReturnType<typeof createPluroraWorkflowHandlers>['describeDelivery']
   >> {
     const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
     handlers.interpret(STAGE, 'codex', result)
     const describe_ = handlers.describeDelivery
     if (describe_ === undefined) throw new Error('the Plurora handlers must describe a delivery')
-    return describe_({ stageId: 'delivery', objective: OBJECTIVE })
+    return describe_({ stageId: 'delivery', objective: OBJECTIVE, changedPaths })
   }
 
-  it('publishes exactly the paths the stages cited, and nothing the tree happens to hold', () => {
+  it('publishes exactly the paths supplied by the control plane, ignoring stage evidence', () => {
     const request = describeAfter(completed(envelope({
       evidence: [
         { kind: 'diff', locator: 'src/b.ts', summary: 'changed' },
@@ -225,13 +269,26 @@ describe('the Plurora delivery description', () => {
         { kind: 'log', locator: 'build.log', summary: 'not a change' },
       ],
     })))
-    expect(request.files).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(request.files).toEqual(['src/from-workspace.ts'])
   })
 
   it('names no write set at all when no stage cited a change', () => {
     // Delivery refuses an empty set, which is the right failure: a run that
     // published whatever the tree held would be unbounded by definition.
-    expect(describeAfter(completed(envelope({ evidence: [] }))).files).toEqual([])
+    expect(describeAfter(completed(envelope({ evidence: [] })), []).files).toEqual([])
+  })
+
+  it('refuses delivery description when deterministic changed paths are absent without naming paths', () => {
+    const handlers = createPluroraWorkflowHandlers({ branch: 'test/canary' })
+    expect(() => handlers.describeDelivery?.({ stageId: 'delivery', objective: OBJECTIVE }))
+      .toThrow(PluroraDeliveryError)
+    expect(() => handlers.describeDelivery?.({ stageId: 'delivery', objective: OBJECTIVE }))
+      .toThrow('Plurora delivery requires a deterministic workspace mutation set')
+  })
+
+  it('tells stages that evidence is review context, not delivery authority', () => {
+    const prompt = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)
+    expect(prompt).toContain('evidence locators do not authorize delivery')
   })
 
   it('publishes on the branch supplied by the host', () => {
@@ -244,6 +301,7 @@ describe('the Plurora delivery description', () => {
     const request = handlers.describeDelivery?.({
       stageId: 'delivery-1',
       objective: { ...OBJECTIVE, id: 'opencode-ebc62d40-cc38-4dc6-a6ec-596d8ad96551' },
+      changedPaths: ['src/feature.ts'],
     })
     expect(request?.branch).toBe('test/trick-harness-v2-activation-rerun')
   })
@@ -255,6 +313,7 @@ describe('the Plurora delivery description', () => {
     const request = handlers.describeDelivery?.({
       stageId: 'delivery-1',
       objective: { ...OBJECTIVE, requirement },
+      changedPaths: ['src/feature.ts'],
     })
     expect(request?.message).toBe(
       `chore(harness): deliver approved workflow change\n\nObjective: ${OBJECTIVE.id}\nStage: delivery-1`,
@@ -486,10 +545,11 @@ describe('reading a conformance result back', () => {
     expect(prompt).toContain(RESULT_MARKER)
     expect(prompt).toContain('conformance')
     expect(prompt).toContain('implementationEvidence')
-    expect(prompt).toContain('top-level include "verdict", "summary", "findings" and "evidence"')
+    expect(prompt).toContain('top-level include "verdict", "summary", "findings", "constraints" and "evidence"')
     expect(prompt).toContain(
-      `${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"evidence":[],`
-      + '"conformance":{"items":[],"verdict":"PASS","summary":"one line"}}',
+      `${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"constraints":[],"evidence":[],`
+      + '"conformance":{"items":[],"verdict":"INCONCLUSIVE","summary":"one line"}}',
     )
+    expect(prompt).toContain('"PASS", "PARTIAL", "INCONCLUSIVE", "FAIL" or "BLOCKED"')
   })
 })

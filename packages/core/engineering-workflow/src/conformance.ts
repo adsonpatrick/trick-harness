@@ -23,6 +23,8 @@ import type {
   ConformanceObligation,
   ConformanceSource,
   ConformanceStatusSummary,
+  StageConstraint,
+  WorkflowVerdict,
 } from '@trick-harness/contracts'
 import { CONFORMANCE_ITEM_STATUSES, CONFORMANCE_SOURCES } from '@trick-harness/contracts'
 import { ChangeImpactError, normalizeRepositoryPath } from '@trick-harness/change-impact'
@@ -359,6 +361,26 @@ export function validateConformanceCoverage(
   }
 
   return result
+}
+
+/** Reconcile item outcomes and stage constraints without trusting the claimed overall verdict. */
+export function reconcileConformance(
+  contract: ConformanceContract,
+  constraints: readonly StageConstraint[] = [],
+): ConformanceContract {
+  const constrained = constraints.length > 0
+  const items = contract.items.map(item =>
+    constrained && item.status === 'MISSING' ? { ...item, status: 'INCONCLUSIVE' as const } : item,
+  )
+  const statuses = new Set(items.map(item => item.status))
+  let verdict: WorkflowVerdict
+  if (statuses.has('BLOCKED')) verdict = 'BLOCKED'
+  else if (statuses.has('FAIL') || statuses.has('MISSING')) verdict = 'FAIL'
+  else if (constrained || statuses.has('INCONCLUSIVE')) verdict = 'INCONCLUSIVE'
+  else if (statuses.has('PARTIAL')) verdict = 'PARTIAL'
+  else verdict = 'PASS'
+
+  return Object.freeze({ ...contract, items: Object.freeze(items), verdict })
 }
 
 /**
