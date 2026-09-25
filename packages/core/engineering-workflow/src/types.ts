@@ -2,6 +2,7 @@ import type {
   EvidenceRef,
   ExternalCertificationState,
   Finding,
+  StageConstraint,
   Role,
   RoutedPermissionMode,
   StageResult,
@@ -50,6 +51,7 @@ export interface StageFacts {
   readonly verdict: WorkflowVerdict
   readonly summary: string
   readonly findings: readonly Finding[]
+  readonly constraints: readonly StageConstraint[]
   readonly evidence: readonly EvidenceRef[]
   readonly durationMs: number
 }

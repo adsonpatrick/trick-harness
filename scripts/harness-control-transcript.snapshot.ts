@@ -92,6 +92,7 @@ const DEFECT: Finding = Object.freeze({
   raisedBy: 'review',
   summary: 'the new test asserts a constant the module no longer exports',
   confirmed: true,
+  affectedPaths: [],
   evidence: Object.freeze([
     Object.freeze({ kind: 'test', locator: 'packages/thing/tests/thing.spec.ts', summary: 'the failing assertion' } as const),
   ]),
@@ -128,6 +129,7 @@ function interpret(stage: StageSpec, executor: string): StageResult {
       ? 'the branch is published but one test asserts a stale constant'
       : `${stage.role} found nothing outstanding`,
     findings: objecting ? [DEFECT] : [],
+    constraints: [],
     evidence: [],
   }
 }

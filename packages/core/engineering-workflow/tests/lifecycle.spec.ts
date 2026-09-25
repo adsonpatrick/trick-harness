@@ -128,6 +128,7 @@ const DIAGNOSIS: DiagnosisContract = Object.freeze({
   confidence: 'high',
   regressionTestSeam: 'cart.spec.ts totals suite',
   minimalRepairSurface: 'total.ts rounding order',
+  proposedRepairPaths: [],
   unknowns: Object.freeze([]),
   securityRelevance: 'none',
 })
@@ -151,6 +152,7 @@ function bug(id: string, raisedBy: Finding['raisedBy'] = 'review'): Finding {
     raisedBy,
     summary: `${id}: totals are a cent short`,
     confirmed: true,
+    affectedPaths: [],
     evidence: [{ kind: 'test', locator: 'cart.spec.ts:totals', summary: 'red' }],
   }
 }
@@ -167,6 +169,7 @@ function improvement(id: string): Finding {
     raisedBy: 'review',
     summary: `${id}: this module would read better split in two`,
     confirmed: true,
+    affectedPaths: [],
     evidence: [],
   }
 }
@@ -183,6 +186,7 @@ function productDecision(id: string): Finding {
     raisedBy: 'review',
     summary: `${id}: should an empty cart show zero or a dash?`,
     confirmed: false,
+    affectedPaths: [],
     evidence: [],
   }
 }
@@ -226,6 +230,7 @@ function interpret(stage: StageSpec, executor: string): StageResult {
     verdict: blocking ? 'BLOCKED' : material ? 'FAIL' : 'PASS',
     summary: `${stage.role} ran`,
     findings,
+    constraints: [],
     evidence: [],
   }
 }
@@ -286,6 +291,7 @@ const PASSING = Object.freeze({
   verdict: 'PASS' as const,
   summary: 'verify ran',
   findings: Object.freeze([]),
+  constraints: [],
   evidence: Object.freeze([]),
   durationMs: 1,
 })

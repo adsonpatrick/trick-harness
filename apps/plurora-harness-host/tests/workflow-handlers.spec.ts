@@ -61,6 +61,7 @@ function envelope(overrides: Record<string, unknown> = {}): Record<string, unkno
     verdict: 'PASS',
     summary: 'added the column and its migration',
     findings: [],
+    constraints: [],
     evidence: [{ kind: 'diff', locator: 'supabase/migrations/0002_flights.sql', summary: 'the migration' }],
     ...overrides,
   }
@@ -83,7 +84,7 @@ describe('the Plurora stage interpreter', () => {
 
   it('blocks rather than fails an unreadable envelope, since neither was established', () => {
     const result = createPluroraWorkflowHandlers({ branch: 'test/canary' })
-      .interpret(STAGE, 'codex', completed({ verdict: 'GREAT', summary: 'x', findings: [], evidence: [] }))
+      .interpret(STAGE, 'codex', completed({ verdict: 'GREAT', summary: 'x', findings: [], constraints: [], evidence: [] }))
     expect(result.verdict).toBe('BLOCKED')
   })
 
@@ -96,6 +97,7 @@ describe('the Plurora stage interpreter', () => {
           raisedBy: 'qa',
           summary: 'the test environment refused a write',
           confirmed: true,
+          affectedPaths: [],
           evidence: [],
         }],
       })))
@@ -138,7 +140,7 @@ describe('the Plurora stage interpreter', () => {
     const result = createPluroraWorkflowHandlers({ branch: 'test/canary' }).interpret(STAGE, 'codex', {
       status: 'error',
       output: '',
-      failure: { category: 'transport', availability: true, safeDiagnostic: 'the app-server closed the connection' },
+      failure: { category: 'transport-unavailable', code: 'fixture.transport-unavailable', safeDiagnostic: 'the app-server closed the connection' },
     })
     expect(result.verdict).toBe('BLOCKED')
     expect(result.summary).toBe('the app-server closed the connection')
@@ -161,6 +163,7 @@ describe('the Plurora stage interpreter', () => {
         raisedBy: 'implement',
         summary: 'the migration is wrong',
         confirmed: true,
+        affectedPaths: [],
         evidence: [{ kind: 'log', locator: secret, summary: 'the session' }],
       }],
     })))
@@ -440,7 +443,7 @@ describe('reading a conformance result back', () => {
     const failed: ExecutorResult = {
       status: 'error',
       output: RESULT_MARKER + ' ' + JSON.stringify(answer()),
-      failure: { category: 'transport', availability: true, safeDiagnostic: 'the executor exited' },
+      failure: { category: 'transport-unavailable', code: 'fixture.transport-unavailable', safeDiagnostic: 'the executor exited' },
     }
 
     expect(handlers.conformance?.(CONFORMANCE, 'codex', failed, MANIFEST)).toBeUndefined()

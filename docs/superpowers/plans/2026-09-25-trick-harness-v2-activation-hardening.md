@@ -615,7 +615,7 @@ git commit -m "feat(journal): record constraints and repair authority"
 - Consumes: `StageResult.constraints`, `Triage`, canonical provider failures.
 - Produces: `StageFacts.constraints`; `UNRESOLVED -> INCONCLUSIVE`; constraint-driven `INCONCLUSIVE`; material defects drive `FAIL`; scaffolding defects cap `PASS` to `PARTIAL`; provider errors with no successful fallback end `INCONCLUSIVE`.
 
-- [ ] **Step 1: Add failing triage/reconciliation tests**
+- [x] **Step 1: Add failing triage/reconciliation tests**
 
 Pin the approved matrix:
 
@@ -635,7 +635,7 @@ expect(reconcileVerdict('PASS', triage([confirmedToolingDefect]), [], 'claimed p
 
 Also add a workflow case where a certifying stage returns `PARTIAL` without any confirmed repairable finding and assert `repairCycles === 0`.
 
-- [ ] **Step 2: Add a failing workflow test for provider error semantics**
+- [x] **Step 2: Add a failing workflow test for provider error semantics**
 
 Use a fake provider whose final non-reroutable result is:
 
@@ -653,13 +653,13 @@ Use a fake provider whose final non-reroutable result is:
 
 Assert the workflow ends with verdict `INCONCLUSIVE`, not `FAIL`, and opens no repair cycle.
 
-- [ ] **Step 3: Run focused workflow tests and verify failure**
+- [x] **Step 3: Run focused workflow tests and verify failure**
 
 ```bash
 corepack pnpm exec vitest run   packages/core/engineering-workflow/tests/triage.spec.ts   packages/core/engineering-workflow/tests/workflow.spec.ts
 ```
 
-- [ ] **Step 4: Separate blocking and uncertain findings**
+- [x] **Step 4: Separate blocking and uncertain findings**
 
 Change triage dispositions so `PRODUCT_DECISION` and `DESIGN_DECISION` remain blocking, while `UNRESOLVED` becomes explicitly inconclusive:
 
@@ -676,7 +676,7 @@ export const INCONCLUSIVE_FINDINGS: readonly FindingClass[] = ['UNRESOLVED']
 
 Add `uncertain` to `Triage`.
 
-- [ ] **Step 5: Reconcile from facts in the approved order**
+- [x] **Step 5: Reconcile from facts in the approved order**
 
 Change `reconcileVerdict` to accept constraints:
 
@@ -701,7 +701,7 @@ unconfirmed auto-repairable concern -> at most PARTIAL
 otherwise claimed verdict
 ```
 
-- [ ] **Step 6: Carry constraints through `StageFacts`, journal them, and make provider error inconclusive**
+- [x] **Step 6: Carry constraints through `StageFacts`, journal them, and make provider error inconclusive**
 
 Add `constraints` to `StageFacts` and the internal `facts(...)` builder.
 
@@ -735,11 +735,11 @@ Update the outer `dispatched.failed` branch to terminate with workflow verdict `
 
 For completed stages, call `journal.stageConstraint` for each parsed constraint before the verdict record.
 
-- [ ] **Step 7: Stop `PARTIAL` without a repair target without manufacturing a blocker**
+- [x] **Step 7: Stop `PARTIAL` without a repair target without manufacturing a blocker**
 
 Keep repair entry conditional on a confirmed repairable finding. If effective verdict is `PARTIAL` and `triaged.repairable[0]` is absent, end the workflow `PARTIAL` with zero new repair cycles instead of emitting “failed without naming a confirmed defect”.
 
-- [ ] **Step 8: Re-run focused tests and commit**
+- [x] **Step 8: Re-run focused tests and commit**
 
 ```bash
 corepack pnpm exec vitest run packages/core/engineering-workflow/tests/triage.spec.ts packages/core/engineering-workflow/tests/workflow.spec.ts

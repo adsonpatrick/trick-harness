@@ -161,10 +161,10 @@ describe('per-run model routing', () => {
       route: { executor: OPENCODE_EXECUTOR, permissionMode: 'read-only', model: 'bare-name' },
     }))
     expect(result.status).toBe('error')
-    expect(result.failure?.category).toBe('route-unsupported')
+    expect(result.failure).toMatchObject({ category: 'bad-request', code: 'opencode.route.unsupported' })
     // Reachable and refusing: a fallback would pay for a second run to hear the
     // same refusal from a different product.
-    expect(result.failure?.availability).toBe(false)
+    expect(result.failure?.code).toBe('opencode.route.unsupported')
     expect(seen.servers).toEqual([])
   })
 })
@@ -237,7 +237,7 @@ describe('results', () => {
     const { adapter } = fakeAdapter({ startServerFails: leak })
     const result = await createOpencodeProvider(adapter).start(request())
     expect(result.status).toBe('error')
-    expect(result.failure?.availability).toBe(false)
+    expect(result.failure?.category).toBe('other')
     expect(result.failure?.safeDiagnostic).not.toContain('sk-secret')
     expect(result.failure?.safeDiagnostic).not.toContain('ECONNREFUSED')
   })

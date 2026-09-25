@@ -143,7 +143,7 @@ const DEBUG_PROMPT = 'You are the debug stage'
 
 /** The envelope an ordinary stage prints to pass. */
 function passing(): string {
-  const envelope = { verdict: 'PASS', summary: 'the stage found nothing', findings: [], evidence: [] }
+  const envelope = { verdict: 'PASS', summary: 'the stage found nothing', findings: [], constraints: [], evidence: [] }
   return `Looked it over.\n${RESULT_MARKER} ${JSON.stringify(envelope)}`
 }
 
@@ -158,6 +158,7 @@ function failing(): string {
       raisedBy: 'qa',
       summary: 'an absent gate renders as an empty string',
       confirmed: true,
+      affectedPaths: [],
       evidence: [{ kind: 'test', locator: 'gate.spec.ts:absent', summary: 'red' }],
     }],
     evidence: [],
@@ -171,6 +172,7 @@ function diagnosing(): string {
     verdict: 'PASS',
     summary: 'the null branch falls through to the empty string',
     findings: [],
+    constraints: [],
     evidence: [],
     diagnosis: {
       symptom: 'an absent gate renders as an empty string',
@@ -183,6 +185,7 @@ function diagnosing(): string {
       confidence: 'high',
       regressionTestSeam: 'gate.spec.ts absent suite',
       minimalRepairSurface: 'the null branch in gate.tsx',
+      proposedRepairPaths: [],
       unknowns: [],
       securityRelevance: 'none',
     },
@@ -196,6 +199,7 @@ function repairing(): string {
     verdict: 'PASS',
     summary: 'the null branch renders unknown',
     findings: [],
+    constraints: [],
     evidence: [],
     repair: {
       regressionTest: { kind: 'test', locator: 'gate.spec.ts:absent', summary: 'red first' },
@@ -221,6 +225,7 @@ function conformanceOutput(manifest: ConformanceManifest): string {
     verdict: 'PASS',
     summary: 'conformance ran',
     findings: [],
+    constraints: [],
     evidence: [],
     conformance: {
       specSha256: manifest.specSha256,

@@ -142,6 +142,7 @@ function interpret(stage: { readonly role: StageResult['role'] }, executor: stri
     verdict: 'PASS',
     summary: `${stage.role} passed`,
     findings: [],
+    constraints: [],
     evidence: [],
   }
 }

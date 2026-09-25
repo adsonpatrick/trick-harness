@@ -151,6 +151,7 @@ function unreadable(stage: StageSpec, executor: string, reason: string): StageRe
     verdict: 'BLOCKED',
     summary: `${reason}, so this stage established nothing`,
     findings: [],
+    constraints: [],
     evidence: [],
   }
 }
@@ -176,6 +177,7 @@ function interpret(stage: StageSpec, executor: string, result: ExecutorResult): 
       // is bounded again here because this host decides what its log holds.
       summary: safeSummary(result.failure?.safeDiagnostic ?? 'the executor failed without saying why'),
       findings: [],
+      constraints: [],
       evidence: [],
     }
   }

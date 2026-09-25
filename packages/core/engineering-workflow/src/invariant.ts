@@ -57,6 +57,7 @@ const install: InvariantInstaller = (_ctx: Context, fail: InvariantFailure) => {
     raisedBy: 'review',
     summary: 'invariant probe',
     confirmed: true,
+    affectedPaths: ['invariant'],
     evidence: [{ kind: 'file', locator: 'invariant', summary: 'probe' }],
   }).disposition === 'repair')
   const widened = repairable.filter(findingClass => !EXPECTED_REPAIRABLE_CLASSES.includes(findingClass))

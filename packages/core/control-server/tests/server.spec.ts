@@ -44,6 +44,7 @@ function outcome(workflowId: string, objectiveId: string): WorkflowOutcome {
         verdict: 'PASS',
         summary: 'implemented',
         findings: [],
+        constraints: [],
         evidence: [],
         durationMs: 1,
       },

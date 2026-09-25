@@ -112,6 +112,7 @@ function interpretAllPass(stage: StageSpec, executor: string): StageResult {
     verdict: 'PASS',
     summary: `${stage.role} ok`,
     findings: [],
+    constraints: [],
     evidence: [],
   }
 }
@@ -169,6 +170,7 @@ const DIAGNOSIS: DiagnosisContract = Object.freeze({
   confidence: 'high',
   regressionTestSeam: 'cart.spec.ts totals suite',
   minimalRepairSurface: 'total.ts rounding order',
+  proposedRepairPaths: [],
   unknowns: Object.freeze([]),
   securityRelevance: 'none',
 })
@@ -180,6 +182,7 @@ function bug(id = 'f-1', findingClass: Finding['class'] = 'BUG'): Finding {
     raisedBy: 'verify',
     summary: 'totals are a cent short',
     confirmed: true,
+    affectedPaths: [],
     evidence: [{ kind: 'test', locator: 'cart.spec.ts:totals', summary: 'red' }],
   }
 }
@@ -371,19 +374,71 @@ describe('a run that goes wrong', () => {
       output: '',
       failure: {
         category: 'transport-unavailable',
-        availability: true,
+        code: 'fixture.transport-unavailable',
         safeDiagnostic: 'provider did not start',
       },
     })))
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    // The single registered executor cannot serve, and there is nobody to
-    // reroute to. Blocking is the expected outcome of that, not a defect: the
-    // alternative is inventing a route to a product this runtime does not have.
-    expect(outcome.state).toBe('blocked')
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
     expect(JSON.stringify(session.events)).toContain('transport-unavailable')
     expect(JSON.stringify(session.events)).toContain('provider did not start')
+  })
+
+  it('keeps a non-reroutable provider error inconclusive without opening repair', async () => {
+    executors.register(provider('builder', async () => ({
+      status: 'error',
+      output: '',
+      failure: { category: 'other', code: 'fixture.prompt.failed', safeDiagnostic: 'fixture executor failed safely' },
+    })))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.repairCycles).toBe(0)
+    expect(outcome.stages[0]?.verdict).toBe('INCONCLUSIVE')
+    expect(projectWorkflow(session.events, 'wf-1').end?.verdict).toBe('INCONCLUSIVE')
+  })
+
+  it('does not repair a certifying PARTIAL result without a confirmed repair target', async () => {
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'PARTIAL', summary: 'some evidence is incomplete', findings: [], constraints: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.verdict).toBe('PARTIAL')
+    expect(outcome.repairCycles).toBe(0)
+    expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify'])
+  })
+
+  it('reconciles PASS plus a stage constraint to inconclusive without repair', async () => {
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? {
+          role: stage.role, executor, verdict: 'PASS', summary: 'claimed pass', findings: [],
+          constraints: [{ id: 'sandbox', class: 'SANDBOX_LIMITATION', raisedBy: 'verify', summary: 'external runtime is unreadable', evidence: [] }],
+          evidence: [],
+        }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.repairCycles).toBe(0)
+    expect(projectWorkflow(session.events, 'wf-1').constraints).toHaveLength(1)
   })
 
   it('blocks rather than guessing when a stage returns a product decision', async () => {
@@ -404,8 +459,10 @@ describe('a run that goes wrong', () => {
             raisedBy: 'verify',
             summary: 'rounding currency unspecified',
             confirmed: true,
+            affectedPaths: [],
             evidence: [],
           }],
+          constraints: [],
           evidence: [],
         }
         : interpretAllPass(stage, executor),
@@ -439,6 +496,7 @@ describe('a run that goes wrong', () => {
           verdict: verifications === 1 ? 'FAIL' : 'PASS',
           summary: verifications === 1 ? 'focused suite red' : 'focused suite green',
           findings: verifications === 1 ? [bug()] : [],
+          constraints: [],
           evidence: [],
         }
       },
@@ -465,7 +523,7 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       task: taskFor, ...CONFORMS,
     })
@@ -482,7 +540,7 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => undefined,
       task: taskFor, ...CONFORMS,
@@ -504,7 +562,7 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => ({ ...DIAGNOSIS, productDecisionDependency: 'nobody said which currency to round to' }),
       task: taskFor, ...CONFORMS,
@@ -524,7 +582,7 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => ({ focusedGreen: REPAIRED.focusedGreen, rootCauseAddressed: true }),
@@ -552,6 +610,7 @@ describe('a run that goes wrong', () => {
           verdict: verifications === 1 ? 'FAIL' : 'PASS',
           summary: 'suite',
           findings: verifications === 1 ? [bug('f-2', 'TEST_DEFECT')] : [],
+          constraints: [],
           evidence: [],
         }
       },
@@ -572,7 +631,7 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
@@ -804,7 +863,7 @@ describe('triage inside a run', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'PASS', summary: 'looks fine', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'PASS', summary: 'looks fine', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
@@ -826,6 +885,7 @@ describe('triage inside a run', () => {
           verdict: 'PASS',
           summary: 'shipped it',
           findings: [{ ...bug(), class: 'PRODUCT_DECISION', summary: 'which currency rounds?' }],
+          constraints: [],
           evidence: [],
         }
         : interpretAllPass(stage, executor),
@@ -850,6 +910,7 @@ describe('triage inside a run', () => {
           verdict: qaRuns === 1 ? 'FAIL' : 'PASS',
           summary: qaRuns === 1 ? 'negative path throws' : 'negative path handled',
           findings: qaRuns === 1 ? [{ ...bug(), raisedBy: 'qa' }] : [],
+          constraints: [],
           evidence: [],
         }
       },
@@ -883,6 +944,7 @@ describe('triage inside a run', () => {
           findings: verifications === 1
             ? [{ ...bug('f-tool', 'TOOLING_DEFECT') }, { ...bug('f-sec', 'SECURITY_BUG') }]
             : [],
+          constraints: [],
           evidence: [],
         }
       },
@@ -915,6 +977,7 @@ describe('triage inside a run', () => {
           verdict: verifications === 1 ? 'FAIL' : 'PASS',
           summary: 'suite',
           findings: verifications === 1 ? [{ ...bug('f-sec', 'SECURITY_BUG') }] : [],
+          constraints: [],
           evidence: [],
         }
       },
@@ -1089,16 +1152,16 @@ describe('an executor that stops serving mid-run', () => {
     runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
-  function failing(name: string, category: string, availability: boolean, seen: string[]): ExecutorProvider {
+  function failing(name: string, category: 'usage-limit-exceeded' | 'server-overloaded' | 'bad-request' | 'other', seen: string[]): ExecutorProvider {
     return provider(name, async () => {
       seen.push(name)
-      return { status: 'error', output: '', failure: { category, availability, safeDiagnostic: `${name} declined` } }
+      return { status: 'error', output: '', failure: { category, code: `fixture.${category}`, safeDiagnostic: `${name} declined` } }
     })
   }
 
   it('moves the stage to another product when the first one cannot serve', async () => {
     const seen: string[] = []
-    executors.register(failing('builder', 'usage-limit-exceeded', true, seen))
+    executors.register(failing('builder', 'usage-limit-exceeded', seen))
     executors.register(provider('reviewer', async () => passing('reviewer')))
     executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
 
@@ -1117,7 +1180,7 @@ describe('an executor that stops serving mid-run', () => {
 
   it('does not ask a second product the same question after a wrong answer', async () => {
     const seen: string[] = []
-    executors.register(failing('builder', 'bad-request', false, seen))
+    executors.register(failing('builder', 'bad-request', seen))
     executors.register(provider('reviewer', async () => passing('reviewer')))
     executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
 
@@ -1132,14 +1195,15 @@ describe('an executor that stops serving mid-run', () => {
 
   it('counts every reroute against the start budget the run was given', async () => {
     const seen: string[] = []
-    executors.register(failing('builder', 'server-overloaded', true, seen))
-    executors.register(failing('spare', 'server-overloaded', true, seen))
+    executors.register(failing('builder', 'server-overloaded', seen))
+    executors.register(failing('spare', 'server-overloaded', seen))
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(seen).toEqual(['builder', 'spare'])
     expect(outcome.executorStarts).toBe(2)
-    expect(outcome.state).toBe('blocked')
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.repairCycles).toBe(0)
   })
 })
 
@@ -1987,7 +2051,7 @@ describe('recertifying what a repair turned the change into', () => {
         qaRuns += 1
         return qaRuns > 1
           ? interpretAllPass(stage, executor)
-          : { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug('f-1')], evidence: [] }
+          : { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug('f-1')], constraints: [], evidence: [] }
       },
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
@@ -2256,6 +2320,7 @@ describe('marking a delivered revision as pending certification', () => {
           verdict: qaRuns === 1 ? 'FAIL' : 'PASS',
           summary: qaRuns === 1 ? 'negative path throws' : 'negative path handled',
           findings: qaRuns === 1 ? [{ ...bug(), raisedBy: 'qa' }] : [],
+          constraints: [],
           evidence: [],
         }
       },
@@ -2438,7 +2503,7 @@ describe('publishing the terminal certification', () => {
     const outcome = await runnerWith(certification.port).run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'conformance'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'an obligation is unmet', findings: [], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'an obligation is unmet', findings: [], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       task: taskFor,
       ...CONFORMS,
@@ -2460,6 +2525,7 @@ describe('publishing the terminal certification', () => {
           verdict: 'BLOCKED',
           summary: 'this needs a person',
           findings: [],
+          constraints: [],
           evidence: [],
         }
         : interpretAllPass(stage, executor),

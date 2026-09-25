@@ -22,6 +22,7 @@ const DIAGNOSIS: DiagnosisContract = Object.freeze({
   confidence: 'high',
   regressionTestSeam: 'cart.spec.ts totals suite',
   minimalRepairSurface: 'total.ts rounding order',
+  proposedRepairPaths: [],
   unknowns: Object.freeze([]),
   securityRelevance: 'none',
 })
@@ -33,6 +34,7 @@ function finding(overrides: Partial<Finding> = {}): Finding {
     raisedBy: 'verify',
     summary: 'totals are a cent short',
     confirmed: true,
+    affectedPaths: [],
     evidence: [EVIDENCE],
     ...overrides,
   }

@@ -80,7 +80,7 @@ function finalText(parts: readonly { type: string; text?: string }[]): string {
  */
 function classify(error: unknown): ExecutorFailure {
   if (error instanceof OpencodeStartupTimeoutError) {
-    return { category: 'provider-error', availability: false, safeDiagnostic: error.message }
+    return { category: 'transport-unavailable', code: 'opencode.server.startup-timeout', safeDiagnostic: error.message }
   }
   if (error instanceof OpencodeRouteError) {
     // Not an availability failure. The executor is reachable and refusing a
@@ -88,13 +88,12 @@ function classify(error: unknown): ExecutorFailure {
     // deterministic: a fallback route would spend a second run to be told the
     // same thing by a different product, and would file the outage of a healthy
     // executor as the cause.
-    return { category: 'route-unsupported', availability: false, safeDiagnostic: error.message }
+    return { category: 'bad-request', code: 'opencode.route.unsupported', safeDiagnostic: 'OpenCode cannot express the routed request' }
   }
-  const name = error instanceof Error ? error.name : 'Error'
   return {
-    category: 'provider-error',
-    availability: false,
-    safeDiagnostic: `opencode run failed (${name})`,
+    category: 'other',
+    code: 'opencode.run.failed',
+    safeDiagnostic: 'OpenCode run failed before returning a valid result',
   }
 }
 

@@ -22,6 +22,7 @@ import type {
   EffectiveChangeImpact,
   EvidenceRef,
   Finding,
+  StageConstraint,
   Risk,
   Role,
   RoutedPermissionMode,
@@ -809,7 +810,7 @@ export class WorkflowRunner {
           `the run was canceled during ${stage.role}`)
       }
       if (dispatched.failed) {
-        return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'FAIL',
+        return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'INCONCLUSIVE',
           dispatched.facts.summary)
       }
 
@@ -830,7 +831,7 @@ export class WorkflowRunner {
       // concluded; it may not report a PASS over a confirmed material defect, and
       // it may not carry on while a decision nobody made is outstanding.
       const triaged = triage(dispatched.facts.findings)
-      const reconciled = reconcileVerdict(dispatched.facts.verdict, triaged, dispatched.facts.summary)
+      const reconciled = reconcileVerdict(dispatched.facts.verdict, triaged, dispatched.facts.constraints, dispatched.facts.summary)
       if (reconciled.corrected) {
         await journal.verdict(stage.stageId, stage.role, reconciled.verdict, reconciled.summary, [])
       }
@@ -926,6 +927,10 @@ export class WorkflowRunner {
         // having said what to fix, and guessing is how a repair invents work.
         const repairable = triaged.repairable[0]
         if (repairable === undefined) {
+          if (verdict === 'PARTIAL') {
+            return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'PARTIAL',
+              reconciled.summary)
+          }
           return await this.#blocked(
             objective, stages, repairCycles, executorStarts, 'external',
             `${stage.role} failed without naming a confirmed defect an automated repair may act on`,
@@ -1149,7 +1154,7 @@ export class WorkflowRunner {
     return {
       facts: facts(
         stage, dispatched.facts.executor, dispatched.facts.permissionMode, verdict, contract.summary,
-        dispatched.facts.findings, dispatched.facts.evidence, dispatched.facts.durationMs,
+        dispatched.facts.findings, dispatched.facts.evidence, dispatched.facts.durationMs, dispatched.facts.constraints,
       ),
     }
   }
@@ -1167,10 +1172,20 @@ export class WorkflowRunner {
     measurement: ImpactBox,
   ): Promise<Dispatched> {
     let spent = 0
+    let lastProviderFailure: Dispatched | undefined
     for (;;) {
-      const attempt = await this.#attempt(
-        stage, request, signal, priorAttempts, lastMutator, availability, humanOverride, measurement,
-      )
+      let attempt: { readonly dispatched: Dispatched; readonly reroutable: boolean }
+      try {
+        attempt = await this.#attempt(
+          stage, request, signal, priorAttempts, lastMutator, availability, humanOverride, measurement,
+        )
+      } catch (error) {
+        // A provider failure remains the established fact if routing cannot
+        // resolve a fallback. The fallback refusal did not establish an
+        // artifact defect, so preserve the provider's INCONCLUSIVE result.
+        if (error instanceof RoutingError && lastProviderFailure !== undefined) return lastProviderFailure
+        throw error
+      }
       // Only an executor that could not serve the run is retried, and only
       // while the budget the profile set still has room. A wrong answer is not
       // retried at all: asking a second product the same question and taking
@@ -1181,6 +1196,7 @@ export class WorkflowRunner {
       // direction that ends runs early.
       if (spent > 0) availability.rerouteStarts += 1
       if (!attempt.reroutable || spent >= extraStarts) return attempt.dispatched
+      lastProviderFailure = attempt.dispatched
       spent += 1
     }
   }
@@ -1363,11 +1379,11 @@ export class WorkflowRunner {
 
     if (result.status === 'error') {
       const failure = result.failure
-      journal.executorEnd(stage.stageId, executor, 'failed', durationMs, failure?.category)
+      journal.executorEnd(stage.stageId, executor, 'failed', durationMs, failure?.category, failure?.code)
       const summary = failure?.safeDiagnostic ?? 'the executor failed without a diagnostic'
-      await journal.verdict(stage.stageId, stage.role, 'FAIL', summary, [])
+      await journal.verdict(stage.stageId, stage.role, 'INCONCLUSIVE', summary, [])
       return {
-        facts: facts(stage, executor, permissionMode, 'FAIL', summary, [], [], durationMs),
+        facts: facts(stage, executor, permissionMode, 'INCONCLUSIVE', summary, [], [], durationMs),
         canceled: false,
         failed: true,
         result: undefined,
@@ -1379,6 +1395,7 @@ export class WorkflowRunner {
     journal.executorEnd(stage.stageId, executor, 'completed', durationMs)
     const interpreted: StageResult = request.interpret(stage, executor, result)
     for (const finding of interpreted.findings) journal.finding(stage.stageId, finding)
+    for (const constraint of interpreted.constraints) journal.stageConstraint(stage.stageId, constraint)
     await journal.verdict(
       stage.stageId, stage.role, interpreted.verdict, interpreted.summary, interpreted.evidence,
     )
@@ -1386,7 +1403,7 @@ export class WorkflowRunner {
     return {
       facts: facts(
         stage, executor, permissionMode, interpreted.verdict, interpreted.summary,
-        interpreted.findings, interpreted.evidence, durationMs,
+        interpreted.findings, interpreted.evidence, durationMs, interpreted.constraints,
       ),
       canceled: false,
       failed: false,
@@ -1492,6 +1509,7 @@ export class WorkflowRunner {
           verdict: result.delivered ? 'PASS' : 'FAIL',
           summary: result.summary,
           findings: result.findings,
+          constraints: [],
           evidence: result.evidence,
           durationMs,
         },
@@ -1515,6 +1533,7 @@ export class WorkflowRunner {
             ? 'delivery was canceled before it could publish'
             : error instanceof Error ? error.message : 'delivery ended without saying why',
           findings: [],
+          constraints: [],
           evidence: [],
           durationMs,
         },
@@ -1624,6 +1643,7 @@ export class WorkflowRunner {
           verdict: result.status === 'PASSED' ? 'PASS' : result.status === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
           summary: result.summary,
           findings: result.findings,
+          constraints: [],
           evidence: result.evidence,
           durationMs,
         },
@@ -1645,6 +1665,7 @@ export class WorkflowRunner {
             ? 'the schema verification was canceled before it finished'
             : error instanceof Error ? error.message : 'the database verification ended without saying why',
           findings: [],
+          constraints: [],
           evidence: [],
           durationMs,
         },
@@ -1793,6 +1814,7 @@ function facts(
   findings: readonly Finding[],
   evidence: readonly EvidenceRef[],
   durationMs: number,
+  constraints: readonly StageConstraint[] = [],
 ): StageFacts {
   return Object.freeze({
     stageId: stage.stageId,
@@ -1807,7 +1829,15 @@ function facts(
       raisedBy: finding.raisedBy,
       summary: finding.summary,
       confirmed: finding.confirmed,
+      affectedPaths: Object.freeze([...finding.affectedPaths]),
       evidence: Object.freeze(finding.evidence.map(reference => Object.freeze({ ...reference }))),
+    }))),
+    constraints: Object.freeze(constraints.map(constraint => Object.freeze({
+      id: constraint.id,
+      class: constraint.class,
+      raisedBy: constraint.raisedBy,
+      summary: constraint.summary,
+      evidence: Object.freeze(constraint.evidence.map(reference => Object.freeze({ ...reference }))),
     }))),
     evidence: Object.freeze(evidence.map(reference => Object.freeze({ ...reference }))),
     durationMs,

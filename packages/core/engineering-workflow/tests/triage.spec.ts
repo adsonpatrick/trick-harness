@@ -20,6 +20,7 @@ function finding(findingClass: FindingClass, confirmed = true, id = `f-${finding
     raisedBy: 'review',
     summary: `a ${findingClass}`,
     confirmed,
+    affectedPaths: [],
     evidence: [{ kind: 'diff', locator: 'src/thing.ts', summary: 'the change' }],
   }
 }
@@ -28,7 +29,7 @@ describe('triage over every finding class', () => {
   it('gives every declared class exactly one disposition', () => {
     for (const findingClass of FINDING_CLASSES) {
       const entry = triageFinding(finding(findingClass))
-      expect(['repair', 'block', 'report']).toContain(entry.disposition)
+      expect(['repair', 'block', 'report', 'inconclusive']).toContain(entry.disposition)
       expect(entry.reason).not.toBe('')
     }
   })
@@ -88,20 +89,38 @@ describe('sorting one stage of findings', () => {
     const result = triage(findings)
 
     expect(result.entries).toHaveLength(findings.length)
-    expect(result.repairable.length + result.blocking.length + result.reported.length).toBe(findings.length)
+    expect(result.repairable.length + result.blocking.length + result.uncertain.length + result.reported.length).toBe(findings.length)
   })
 })
 
 describe('holding a verdict to its own findings', () => {
   it('refuses a PASS reported over a confirmed material defect', () => {
-    const result = reconcileVerdict('PASS', triage([finding('BUG')]), 'all good')
+    const result = reconcileVerdict('PASS', triage([finding('BUG')]), [], 'all good')
 
     expect(result.verdict).toBe('FAIL')
     expect(result.corrected).toBe(true)
   })
 
+  it('keeps a confirmed material defect at FAIL even if the stage claimed PARTIAL', () => {
+    expect(reconcileVerdict('PARTIAL', triage([finding('BUG')]), [], 'partial').verdict).toBe('FAIL')
+  })
+
+  it('lowers a constrained PASS or unresolved finding to INCONCLUSIVE', () => {
+    const constraint = [{ id: 'sandbox', class: 'SANDBOX_LIMITATION' as const, raisedBy: 'verify' as const, summary: 'unreadable', evidence: [] }]
+    expect(reconcileVerdict('PASS', triage([]), constraint, 'claimed pass').verdict).toBe('INCONCLUSIVE')
+    expect(reconcileVerdict('PASS', triage([finding('UNRESOLVED')]), [], 'uncertain').verdict).toBe('INCONCLUSIVE')
+  })
+
+  it('lowers a PASS over a confirmed scaffolding defect to PARTIAL', () => {
+    expect(reconcileVerdict('PASS', triage([finding('TOOLING_DEFECT')]), [], 'claimed pass').verdict).toBe('PARTIAL')
+  })
+
+  it('caps a PASS with an unconfirmed auto-repairable concern at PARTIAL', () => {
+    expect(reconcileVerdict('PASS', triage([finding('BUG', false)]), [], 'claimed pass').verdict).toBe('PARTIAL')
+  })
+
   it('allows a PASS over findings that are only reported', () => {
-    const result = reconcileVerdict('PASS', triage([finding('STYLE_ONLY')]), 'all good')
+    const result = reconcileVerdict('PASS', triage([finding('STYLE_ONLY')]), [], 'all good')
 
     expect(result.verdict).toBe('PASS')
     expect(result.corrected).toBe(false)
@@ -110,14 +129,14 @@ describe('holding a verdict to its own findings', () => {
 
   it('turns any verdict into BLOCKED while a decision is outstanding', () => {
     for (const claimed of ['PASS', 'PARTIAL', 'FAIL', 'INCONCLUSIVE'] as const) {
-      expect(reconcileVerdict(claimed, triage([finding('DESIGN_DECISION')]), 's').verdict).toBe('BLOCKED')
+      expect(reconcileVerdict(claimed, triage([finding('DESIGN_DECISION')]), [], 's').verdict).toBe('BLOCKED')
     }
   })
 
   it('invents no verdict outside the approved vocabulary', () => {
     const vocabulary = ['PASS', 'PARTIAL', 'FAIL', 'INCONCLUSIVE', 'BLOCKED']
     for (const claimed of ['PASS', 'PARTIAL', 'FAIL', 'INCONCLUSIVE', 'BLOCKED'] as const) {
-      expect(vocabulary).toContain(reconcileVerdict(claimed, triage([finding('BUG')]), 's').verdict)
+      expect(vocabulary).toContain(reconcileVerdict(claimed, triage([finding('BUG')]), [], 's').verdict)
     }
   })
 })

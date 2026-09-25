@@ -131,7 +131,7 @@ async function checkout(
 
 /** The envelope an ordinary stage prints to pass. */
 function passing(role: string): string {
-  const envelope = { verdict: 'PASS', summary: `${role} found nothing`, findings: [], evidence: [] }
+  const envelope = { verdict: 'PASS', summary: `${role} found nothing`, findings: [], constraints: [], evidence: [] }
   return `Looked it over.\n${RESULT_MARKER} ${JSON.stringify(envelope)}`
 }
 
@@ -167,6 +167,7 @@ function conformanceOutput(
     verdict: 'PASS',
     summary: 'conformance ran',
     findings: [],
+    constraints: [],
     evidence: [],
     conformance: {
       specSha256: manifest.specSha256,
