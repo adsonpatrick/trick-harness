@@ -17,7 +17,7 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 /** The deployment file the host reads, relative to the project root. */
 export const DEPLOYMENT_CONFIG_FILE = 'plurora-harness.json'
@@ -79,6 +79,7 @@ const KNOWN_KEYS = new Set([
   'project',
   'projectRepository',
   'modelRegistry',
+  'approvedArtifactSources',
 ])
 
 /** The keys `database` may declare. */
@@ -86,6 +87,9 @@ const KNOWN_DATABASE_KEYS = new Set(['strategy', 'projectRef'])
 
 /** The keys `project` may declare. */
 const KNOWN_PROJECT_KEYS = new Set(['protectedBranch'])
+
+const ARTIFACT_SOURCE_ID = /^[a-z][a-z0-9-]{0,63}$/
+const REPOSITORY_SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
 /**
  * A plain branch name, and nothing Git's revision grammar reads as an operator.
@@ -129,6 +133,8 @@ export interface PluroraDeploymentConfig {
    */
   readonly projectRepository: typeof PROJECT_REPOSITORY
   readonly modelRegistry: Readonly<Record<string, string>>
+  /** Explicit local checkouts that may supply immutable approved artifacts. */
+  readonly approvedArtifactSources?: Readonly<Record<string, { readonly repository: string; readonly checkout: string }>>
 }
 
 /** Fail with a message that names the field rather than the shape. */
@@ -249,6 +255,22 @@ function requireModelRegistry(source: Record<string, unknown>): Readonly<Record<
   return { ...registry as Record<string, string> }
 }
 
+function requireApprovedArtifactSources(source: Record<string, unknown>): PluroraDeploymentConfig['approvedArtifactSources'] {
+  const value = source['approvedArtifactSources']
+  if (value === undefined) return undefined
+  if (!isRecord(value)) refuse('approvedArtifactSources must be a JSON object')
+  const sources: Record<string, { readonly repository: string; readonly checkout: string }> = {}
+  for (const [id, entry] of Object.entries(value)) {
+    if (!ARTIFACT_SOURCE_ID.test(id) || !isRecord(entry)) refuse('approvedArtifactSources must use registered source identifiers')
+    refuseUnknownKeys(entry, new Set(['repository', 'checkout']), `approvedArtifactSources.${id}.`)
+    const repository = requireText(entry, 'repository')
+    const checkout = requireText(entry, 'checkout')
+    if (!REPOSITORY_SLUG.test(repository) || !isAbsolute(checkout)) refuse('approvedArtifactSources must name a repository and absolute checkout')
+    sources[id] = { repository, checkout }
+  }
+  return Object.freeze(sources)
+}
+
 /**
  * Validate an already-parsed deployment document.
  *
@@ -266,6 +288,7 @@ export function parseDeploymentConfig(raw: unknown): PluroraDeploymentConfig {
     refuse(`revision must be an exact 40-character lowercase commit sha, got ${JSON.stringify(revision)}`)
   }
 
+  const approvedArtifactSources = requireApprovedArtifactSources(raw)
   return {
     repository: requireExactly(raw, 'repository', REPOSITORY),
     revision,
@@ -277,6 +300,7 @@ export function parseDeploymentConfig(raw: unknown): PluroraDeploymentConfig {
     project: requireProject(raw),
     projectRepository: requireExactly(raw, 'projectRepository', PROJECT_REPOSITORY),
     modelRegistry: requireModelRegistry(raw),
+    ...approvedArtifactSources === undefined ? {} : { approvedArtifactSources },
   }
 }
 

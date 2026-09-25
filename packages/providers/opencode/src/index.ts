@@ -20,6 +20,12 @@ import type {
 } from '@trick-harness/executor'
 import { permissionConfig, parseModel, OpencodeRouteError } from './config.ts'
 import { OpencodeStartupTimeoutError } from './startup-error.ts'
+import {
+  OpencodeMalformedResponseError,
+  OpencodePromptFailureError,
+  OpencodeServerStartError,
+  OpencodeSessionAbortedError,
+} from './runtime-errors.ts'
 import type { OpencodeAdapter, OpencodeClientHandle, OpencodeServerHandle } from './types.ts'
 
 export type * from './types.ts'
@@ -29,6 +35,12 @@ export { OpencodeRouteError, permissionConfig, parseModel } from './config.ts'
 // living behind a subpath that could never be built.
 export { createSdkAdapter } from './adapter.ts'
 export { OpencodeStartupTimeoutError } from './startup-error.ts'
+export {
+  OpencodeMalformedResponseError,
+  OpencodePromptFailureError,
+  OpencodeServerStartError,
+  OpencodeSessionAbortedError,
+} from './runtime-errors.ts'
 
 /** The provider name routes select this executor by. */
 export const OPENCODE_EXECUTOR = 'opencode'
@@ -71,16 +83,20 @@ function finalText(parts: readonly { type: string; text?: string }[]): string {
 /**
  * Classify a thrown error into a safe structured failure.
  *
- * The message is deliberately the error's own `name` plus a short reason, never
- * the raw cause, stack, environment, or response body: this value reaches
- * durable event logs and PR comments, and OpenCode talks to providers the user
- * is authenticated against.
+ * Every message is fixed safe text, never derived from the raw cause, error
+ * name, stack, environment, or response body: this value reaches durable event
+ * logs and PR comments, and OpenCode talks to providers the user is
+ * authenticated against.
  * @param error - whatever the adapter threw.
  * @returns a failure carrying no credential-bearing text.
  */
 function classify(error: unknown): ExecutorFailure {
   if (error instanceof OpencodeStartupTimeoutError) {
-    return { category: 'provider-error', availability: false, safeDiagnostic: error.message }
+    return {
+      category: 'transport-unavailable',
+      code: 'opencode.server.startup-timeout',
+      safeDiagnostic: 'OpenCode server did not become ready before the startup deadline',
+    }
   }
   if (error instanceof OpencodeRouteError) {
     // Not an availability failure. The executor is reachable and refusing a
@@ -88,13 +104,42 @@ function classify(error: unknown): ExecutorFailure {
     // deterministic: a fallback route would spend a second run to be told the
     // same thing by a different product, and would file the outage of a healthy
     // executor as the cause.
-    return { category: 'route-unsupported', availability: false, safeDiagnostic: error.message }
+    return { category: 'bad-request', code: 'opencode.route.unsupported', safeDiagnostic: 'OpenCode cannot express the routed request' }
   }
-  const name = error instanceof Error ? error.name : 'Error'
+  if (error instanceof OpencodeSessionAbortedError) {
+    return {
+      category: 'other',
+      code: 'opencode.prompt.session-aborted',
+      safeDiagnostic: 'OpenCode aborted the active session before returning a valid result',
+    }
+  }
+  if (error instanceof OpencodeMalformedResponseError) {
+    return {
+      category: 'other',
+      code: error.code === 'session-id-missing'
+        ? 'opencode.session.id-missing'
+        : 'opencode.prompt.response-missing-data',
+      safeDiagnostic: 'OpenCode returned an incomplete SDK response',
+    }
+  }
+  if (error instanceof OpencodeServerStartError) {
+    return {
+      category: 'other',
+      code: 'opencode.server.start-failed',
+      safeDiagnostic: 'OpenCode server failed before becoming ready',
+    }
+  }
+  if (error instanceof OpencodePromptFailureError) {
+    return {
+      category: 'other',
+      code: 'opencode.prompt.failed',
+      safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
+    }
+  }
   return {
-    category: 'provider-error',
-    availability: false,
-    safeDiagnostic: `opencode run failed (${name})`,
+    category: 'other',
+    code: 'opencode.run.failed',
+    safeDiagnostic: 'OpenCode run failed before returning a valid result',
   }
 }
 
@@ -169,12 +214,19 @@ async function runOnce(
 
     if (aborted()) return { status: 'aborted', output: '' }
 
-    const result = await client.prompt({
-      sessionId,
-      directory: request.cwd,
-      ...(model === undefined ? {} : { model }),
-      text: request.task,
-    })
+    let result
+    try {
+      result = await client.prompt({
+        sessionId,
+        directory: request.cwd,
+        ...(model === undefined ? {} : { model }),
+        text: request.task,
+      })
+    } catch (error) {
+      if (error instanceof OpencodeSessionAbortedError || error instanceof OpencodeMalformedResponseError) throw error
+      if (error instanceof Error && error.name === 'MessageAbortedError') throw new OpencodeSessionAbortedError()
+      throw new OpencodePromptFailureError()
+    }
     if (aborted()) return { status: 'aborted', output: '' }
     settled = true
     return { status: 'completed', output: finalText(result.parts) }

@@ -20,6 +20,7 @@ import type {
   EvidenceRef,
   ExternalCertificationState,
   Finding,
+  StageConstraint,
   RouteDecision,
   Risk,
   Role,
@@ -54,6 +55,8 @@ export const HARNESS_EVENT_TYPES = [
   'harness/capability-start',
   'harness/capability-end',
   'harness/finding',
+  'harness/stage-constraint',
+  'harness/repair-authorization',
   'harness/diagnosis',
   'harness/verdict',
   'harness/delivery',
@@ -158,6 +161,18 @@ export interface BlockerRecord {
   readonly summary: string
   readonly evidence: readonly EvidenceRef[]
 }
+export interface ConstraintRecord {
+  readonly stageId: string
+  readonly constraint: StageConstraint
+}
+export interface RepairAuthorizationRecord {
+  readonly stageId: string
+  readonly findingId: string
+  readonly scopeSha256: string
+  readonly allowedPathCount: number
+  readonly allowedSurfaces: readonly string[]
+  readonly reasonCodes: readonly string[]
+}
 
 /** The whole state of one workflow, rebuilt from its events. */
 export interface WorkflowProjection {
@@ -186,6 +201,8 @@ export interface WorkflowProjection {
   }
   readonly routes: readonly RouteRecord[]
   readonly findings: readonly Finding[]
+  readonly constraints: readonly ConstraintRecord[]
+  readonly repairAuthorizations: readonly RepairAuthorizationRecord[]
   readonly diagnoses: readonly DiagnosisContract[]
   readonly verdicts: readonly VerdictRecord[]
   readonly deliveries: readonly DeliveryRecord[]
@@ -460,6 +477,7 @@ export class WorkflowJournal {
     outcome: ExecutorOutcome,
     durationMs: number,
     failureClass?: string,
+    failureCode?: string,
   ): void {
     this.#session.append('harness/executor-end', {
       workflowId: this.#workflowId,
@@ -468,7 +486,17 @@ export class WorkflowJournal {
       outcome,
       durationMs,
       ...failureClass === undefined ? {} : { failureClass },
+      ...failureCode === undefined ? {} : { failureCode },
     })
+  }
+
+  stageConstraint(stageId: string, constraint: StageConstraint): void {
+    this.#session.append('harness/stage-constraint', { workflowId: this.#workflowId, stageId, constraint: { id: constraint.id, class: constraint.class, raisedBy: constraint.raisedBy, summary: constraint.summary, evidence: constraint.evidence.map(reference => ({ ...reference })) } })
+  }
+
+  async repairAuthorization(input: RepairAuthorizationRecord): Promise<void> {
+    this.#session.append('harness/repair-authorization', { workflowId: this.#workflowId, stageId: input.stageId, findingId: input.findingId, scopeSha256: input.scopeSha256, allowedPathCount: input.allowedPathCount, allowedSurfaces: [...input.allowedSurfaces], reasonCodes: [...input.reasonCodes] })
+    await this.#durable()
   }
 
   /**
@@ -538,6 +566,7 @@ export class WorkflowJournal {
         raisedBy: finding.raisedBy,
         summary: finding.summary,
         confirmed: finding.confirmed,
+        affectedPaths: [...finding.affectedPaths],
         evidence: finding.evidence.map(reference => ({ ...reference })),
       },
     })
@@ -566,6 +595,7 @@ export class WorkflowJournal {
         confidence: diagnosis.confidence,
         regressionTestSeam: diagnosis.regressionTestSeam,
         minimalRepairSurface: diagnosis.minimalRepairSurface,
+        proposedRepairPaths: [...diagnosis.proposedRepairPaths],
         unknowns: [...diagnosis.unknowns],
         securityRelevance: diagnosis.securityRelevance,
         ...diagnosis.productDecisionDependency === undefined
@@ -790,6 +820,8 @@ interface Projected {
   changeImpact?: { planned?: ChangeImpactStatusSummary; actual?: ChangeImpactStatusSummary }
   routes: RouteRecord[]
   findings: Finding[]
+  constraints: ConstraintRecord[]
+  repairAuthorizations: RepairAuthorizationRecord[]
   diagnoses: DiagnosisContract[]
   verdicts: VerdictRecord[]
   deliveries: DeliveryRecord[]
@@ -915,6 +947,24 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
       state.findings.push((data as unknown as { finding: Finding }).finding)
       return
     }
+    case 'harness/stage-constraint': {
+      const payload = data as unknown as ConstraintRecord
+      state.constraints.push({ stageId: payload.stageId, constraint: {
+        id: payload.constraint.id, class: payload.constraint.class, raisedBy: payload.constraint.raisedBy,
+        summary: payload.constraint.summary,
+        evidence: Object.freeze(payload.constraint.evidence.map(reference => ({ ...reference }))),
+      } })
+      return
+    }
+    case 'harness/repair-authorization': {
+      const payload = data as unknown as RepairAuthorizationRecord
+      state.repairAuthorizations.push({
+        stageId: payload.stageId, findingId: payload.findingId, scopeSha256: payload.scopeSha256,
+        allowedPathCount: payload.allowedPathCount, allowedSurfaces: Object.freeze([...payload.allowedSurfaces]),
+        reasonCodes: Object.freeze([...payload.reasonCodes]),
+      })
+      return
+    }
     case 'harness/diagnosis': {
       state.diagnoses.push((data as unknown as { diagnosis: DiagnosisContract }).diagnosis)
       return
@@ -997,6 +1047,8 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
   const state: Projected = {
     routes: [],
     findings: [],
+    constraints: [],
+    repairAuthorizations: [],
     diagnoses: [],
     verdicts: [],
     deliveries: [],
@@ -1020,6 +1072,8 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     workflowId,
     routes: Object.freeze(state.routes),
     findings: Object.freeze(state.findings),
+    constraints: Object.freeze(state.constraints),
+    repairAuthorizations: Object.freeze(state.repairAuthorizations),
     diagnoses: Object.freeze(state.diagnoses),
     verdicts: Object.freeze(state.verdicts),
     deliveries: Object.freeze(state.deliveries),

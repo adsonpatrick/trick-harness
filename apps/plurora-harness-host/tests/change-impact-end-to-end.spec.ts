@@ -143,12 +143,12 @@ const DEBUG_PROMPT = 'You are the debug stage'
 
 /** The envelope an ordinary stage prints to pass. */
 function passing(): string {
-  const envelope = { verdict: 'PASS', summary: 'the stage found nothing', findings: [], evidence: [] }
+  const envelope = { verdict: 'PASS', summary: 'the stage found nothing', findings: [], constraints: [], evidence: [] }
   return `Looked it over.\n${RESULT_MARKER} ${JSON.stringify(envelope)}`
 }
 
 /** The envelope a QA stage prints when it found one confirmed defect. */
-function failing(): string {
+function failing(repairPath: string): string {
   const envelope = {
     verdict: 'FAIL',
     summary: 'the gate renders empty rather than unknown',
@@ -158,19 +158,22 @@ function failing(): string {
       raisedBy: 'qa',
       summary: 'an absent gate renders as an empty string',
       confirmed: true,
+      affectedPaths: [repairPath],
       evidence: [{ kind: 'test', locator: 'gate.spec.ts:absent', summary: 'red' }],
     }],
+    constraints: [],
     evidence: [],
   }
   return `Ran the suite.\n${RESULT_MARKER} ${JSON.stringify(envelope)}`
 }
 
 /** The envelope a debug stage prints, which is where a diagnosis comes from. */
-function diagnosing(): string {
+function diagnosing(repairPath: string): string {
   const envelope = {
     verdict: 'PASS',
     summary: 'the null branch falls through to the empty string',
     findings: [],
+    constraints: [],
     evidence: [],
     diagnosis: {
       symptom: 'an absent gate renders as an empty string',
@@ -183,6 +186,7 @@ function diagnosing(): string {
       confidence: 'high',
       regressionTestSeam: 'gate.spec.ts absent suite',
       minimalRepairSurface: 'the null branch in gate.tsx',
+      proposedRepairPaths: [repairPath],
       unknowns: [],
       securityRelevance: 'none',
     },
@@ -196,6 +200,7 @@ function repairing(): string {
     verdict: 'PASS',
     summary: 'the null branch renders unknown',
     findings: [],
+    constraints: [],
     evidence: [],
     repair: {
       regressionTest: { kind: 'test', locator: 'gate.spec.ts:absent', summary: 'red first' },
@@ -221,6 +226,7 @@ function conformanceOutput(manifest: ConformanceManifest): string {
     verdict: 'PASS',
     summary: 'conformance ran',
     findings: [],
+    constraints: [],
     evidence: [],
     conformance: {
       specSha256: manifest.specSha256,
@@ -308,11 +314,12 @@ async function runLifecycle(scenario: Scenario): Promise<RunRecord> {
       if (request.task.startsWith(CONFORMANCE_PROMPT)) {
         return { status: 'completed', output: conformanceOutput(manifest) }
       }
-      if (request.task.startsWith(DEBUG_PROMPT)) return { status: 'completed', output: diagnosing() }
+      const repairPath = scenario.planned[0] ?? UI
+      if (request.task.startsWith(DEBUG_PROMPT)) return { status: 'completed', output: diagnosing(repairPath) }
       if (request.task.startsWith(REPAIR_PROMPT)) return { status: 'completed', output: repairing() }
       if (scenario.qaFailsOnce === true && request.task.startsWith(QA_PROMPT)) {
         qaRuns += 1
-        if (qaRuns === 1) return { status: 'completed', output: failing() }
+        if (qaRuns === 1) return { status: 'completed', output: failing(repairPath) }
       }
       return { status: 'completed', output: passing() }
     }))
@@ -419,13 +426,12 @@ describe('a migration nobody declared', () => {
 })
 
 describe('a repair that widened the change after the bar was set', () => {
-  it('recertifies the branch the repair published, not the one it replaced', async () => {
-    // The first delivery was the planned UI change and bought QA. QA found a
-    // defect, the repair reached into a route policy, and the branch a person
-    // would now review is a critical auth change — so the second certification
-    // pass buys what that costs.
+  it('recertifies a branch after an authorized repair within the approved critical scope', async () => {
+    // The Plan authorizes both paths. The first delivery has only the UI change;
+    // after QA and its in-scope repair, the route policy appears in the second
+    // delivered change set and the run must still certify that current branch.
     const { outcome } = await runLifecycle({
-      planned: [UI],
+      planned: [UI, AUTH],
       actual: [[UI], [UI, AUTH]],
       qaFailsOnce: true,
     })
@@ -435,10 +441,10 @@ describe('a repair that widened the change after the bar was set', () => {
   })
 
   it('never buys less on the second pass than the first pass already bought', async () => {
-    // The repair took the auth file back out. What the branch touched at any
-    // point in this run is still what a person is being asked to trust.
+    // Even if the second delivery no longer reports the auth path, the first
+    // certification pass already bought the critical security bar.
     const { outcome } = await runLifecycle({
-      planned: [UI],
+      planned: [UI, AUTH],
       actual: [[UI, AUTH], [UI]],
       qaFailsOnce: true,
     })

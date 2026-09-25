@@ -31,6 +31,7 @@ import type { JournalFlush } from '@trick-harness/journal'
  * this deployment's runs, and a host pointed at a second checkout must not
  * append its history onto the first one's.
  */
+export const SESSION_REPOSITORY_PATH = '.plurora-harness/sessions'
 export const SESSION_DIRECTORY = join('.plurora-harness', 'sessions')
 
 /** What the durable session needs from the deployment. */

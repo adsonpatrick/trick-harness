@@ -5,6 +5,7 @@
  */
 
 import type { CodexRoutedSandbox } from '@deepseek-ai/dsh-subagent-codex'
+import type { ExecutorFailureCategory } from '@trick-harness/contracts'
 import type { ExecutorFailure, ExecutorPermissionMode } from '@trick-harness/executor'
 
 /** A route this provider cannot express on the Codex wire. */
@@ -61,7 +62,7 @@ export function sandboxMode(mode: ExecutorPermissionMode): CodexRoutedSandbox {
  * properties of the request, the workspace, or the account, and would fail the
  * same way on a fallback route.
  */
-const CODEX_FAILURE_MAP: Readonly<Record<string, string>> = Object.freeze({
+const CODEX_FAILURE_MAP: Readonly<Record<string, ExecutorFailureCategory>> = Object.freeze({
   usageLimitExceeded: 'usage-limit-exceeded',
   sessionBudgetExceeded: 'session-budget-exceeded',
   serverOverloaded: 'server-overloaded',
@@ -88,15 +89,6 @@ const CODEX_FAILURE_MAP: Readonly<Record<string, string>> = Object.freeze({
  * another product.
  */
 const UNRECOGNISED = 'other'
-
-/** The routing categories that mean the executor could not serve the run. */
-const AVAILABILITY_CATEGORIES: ReadonlySet<string> = new Set([
-  'usage-limit-exceeded',
-  'session-budget-exceeded',
-  'server-overloaded',
-  'internal-server-error',
-  'transport-unavailable',
-])
 
 /**
  * The native variants this provider asserts are never availability failures.
@@ -127,17 +119,8 @@ export const NON_AVAILABILITY_CATEGORIES = QUALITY_CATEGORIES
  * @param category - the parsed `codexErrorInfo` variant, or any opaque string.
  * @returns the normalized routing category.
  */
-export function normalizeFailure(category: string): string {
+export function normalizeFailure(category: string): ExecutorFailureCategory {
   return CODEX_FAILURE_MAP[category] ?? UNRECOGNISED
-}
-
-/**
- * Decide whether a Codex error-info variant means "try again or try elsewhere".
- * @param category - the parsed `codexErrorInfo` variant or stage category.
- * @returns true when the executor's reachability explains the failure.
- */
-export function isAvailabilityFailure(category: string): boolean {
-  return AVAILABILITY_CATEGORIES.has(normalizeFailure(category))
 }
 
 /**
@@ -154,7 +137,7 @@ export function executorFailure(category: string, httpStatus?: number): Executor
   const normalized = normalizeFailure(category)
   return {
     category: normalized,
-    availability: AVAILABILITY_CATEGORIES.has(normalized),
+    code: `codex.${normalized}`,
     safeDiagnostic: `codex run failed (${normalized})`,
     ...httpStatus === undefined ? {} : { httpStatus },
   }

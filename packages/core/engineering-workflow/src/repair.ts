@@ -10,9 +10,11 @@
  * @packageDocumentation
  */
 
+import { createHash } from 'node:crypto'
+import { classifyChangeImpact, normalizeRepositoryPath } from '@trick-harness/change-impact'
 import { AUTO_REPAIRABLE_FINDINGS, parseDiagnosisContract } from '@trick-harness/contracts'
 import type { DiagnosisContract, EvidenceRef, Finding } from '@trick-harness/contracts'
-import type { SecurityRepairRule } from '@trick-harness/profile'
+import type { ChangeImpactPolicyDefinition, SecurityRepairRule } from '@trick-harness/profile'
 
 /**
  * Finding classes whose repair may skip diagnosis.
@@ -44,6 +46,7 @@ export class RepairError extends Error {
     | 'unsupported-root-cause'
     | 'product-decision'
     | 'security-unauthorized'
+    | 'scope-unauthorized'
 
   /**
    * @param code - Machine-readable cause.
@@ -136,10 +139,43 @@ export interface RepairAuthorization {
   readonly findingId: string
   /** Why it was allowed, in codes a durable record can carry. */
   readonly reasonCodes: readonly string[]
+  /** The deterministic path and surface boundary this repair may mutate. */
+  readonly scope: RepairScope
   /** Whether a regression test that failed first has to exist afterwards. */
   readonly requiresRegressionTest: boolean
   /** The root cause the repair has to address, or undefined for a mechanical fix. */
   readonly rootCause: string | undefined
+}
+
+/** The exact planned paths and classified surfaces a repair is confined to. */
+export interface RepairScope {
+  readonly allowedPaths: readonly string[]
+  readonly allowedSurfaces: readonly string[]
+}
+
+/** Normalize the approved Plan's path set and classify its surfaces. */
+export function buildRepairScope(
+  plannedPaths: readonly string[],
+  changeImpactPolicy: ChangeImpactPolicyDefinition,
+): RepairScope {
+  let allowedPaths: string[]
+  try {
+    allowedPaths = [...new Set(plannedPaths.map(normalizeRepositoryPath))].sort()
+  } catch {
+    throw new RepairError('scope-unauthorized', 'the approved write set contains an invalid repository path')
+  }
+  const impact = classifyChangeImpact({ source: 'planned', paths: allowedPaths, policy: changeImpactPolicy })
+  return Object.freeze({
+    allowedPaths: Object.freeze(allowedPaths),
+    allowedSurfaces: Object.freeze([...impact.surfaces].sort()),
+  })
+}
+
+/** Hash the canonical sorted path/surface scope for durable authorization evidence. */
+export function repairScopeDigest(scope: RepairScope): string {
+  const paths = [...scope.allowedPaths].sort()
+  const surfaces = [...scope.allowedSurfaces].sort()
+  return createHash('sha256').update(JSON.stringify([paths, surfaces]), 'utf8').digest('hex')
 }
 
 /** What a finished repair claims, offered back to the gate for judgement. */
@@ -225,15 +261,18 @@ export function validateDiagnosis(value: unknown): DiagnosisContract {
  * any of it matters, because inventing product behavior is the one failure a
  * later review could not detect.
  * @param finding - The confirmed defect the repair would act on.
- * @param diagnosis - What the read-only debugger established, if it ran.
- * @param securityRepairRules - The boundaries a person wrote down in advance as safe to repair a security defect on; empty means none.
+ * @param options - The diagnosis, deterministic plan scope, classifier policy, and security rules.
  * @returns What the repair is authorized to do and what it still owes.
  * @throws {RepairError} when the repair may not start.
  */
 export function authorizeRepair(
   finding: Finding,
-  diagnosis?: unknown,
-  securityRepairRules: readonly SecurityRepairRule[] = [],
+  options: {
+    readonly diagnosis?: unknown
+    readonly scope: RepairScope
+    readonly changeImpactPolicy: ChangeImpactPolicyDefinition
+    readonly securityRepairRules?: readonly SecurityRepairRule[]
+  },
 ): RepairAuthorization {
   if (!AUTO_REPAIRABLE_FINDINGS.includes(finding.class)) {
     throw new RepairError('not-repairable',
@@ -243,7 +282,41 @@ export function authorizeRepair(
     throw new RepairError('unconfirmed', 'the finding is suspected rather than established, so there is nothing to fix yet')
   }
 
-  if (diagnosis === undefined) {
+  const diagnosis = options.diagnosis
+  let contract: DiagnosisContract | undefined
+  if (diagnosis !== undefined) contract = validateDiagnosis(diagnosis)
+  const proposedPaths = contract?.proposedRepairPaths ?? finding.affectedPaths
+  let normalizedPaths: string[]
+  try {
+    normalizedPaths = [...new Set(proposedPaths.map(normalizeRepositoryPath))].sort()
+  } catch {
+    throw new RepairError('scope-unauthorized', 'the repair proposal contains an invalid repository path')
+  }
+  if (normalizedPaths.length === 0) {
+    throw new RepairError('scope-unauthorized', 'automatic repair requires at least one concrete proposed path')
+  }
+  let authorizedScope: RepairScope
+  try {
+    authorizedScope = Object.freeze({
+      allowedPaths: Object.freeze([...new Set(options.scope.allowedPaths.map(normalizeRepositoryPath))].sort()),
+      allowedSurfaces: Object.freeze([...new Set(options.scope.allowedSurfaces)].sort()),
+    })
+  } catch {
+    throw new RepairError('scope-unauthorized', 'the authorized write set contains an invalid repository path')
+  }
+  const allowed = new Set(authorizedScope.allowedPaths)
+  if (normalizedPaths.some(path => !allowed.has(path))) {
+    throw new RepairError('scope-unauthorized', 'the repair proposal exceeds the approved planned paths')
+  }
+  const proposedImpact = classifyChangeImpact({
+    source: 'planned', paths: normalizedPaths, policy: options.changeImpactPolicy,
+  })
+  const allowedSurfaces = new Set(authorizedScope.allowedSurfaces)
+  if (proposedImpact.surfaces.some(surface => !allowedSurfaces.has(surface))) {
+    throw new RepairError('scope-unauthorized', 'the repair proposal exceeds the approved planned surfaces')
+  }
+
+  if (contract === undefined) {
     // A security defect never reaches the mechanical path: there is no boundary
     // to check it against, so the allowlist could not have allowed it.
     if (finding.class === 'SECURITY_BUG') {
@@ -257,17 +330,17 @@ export function authorizeRepair(
     return Object.freeze({
       findingId: finding.id,
       reasonCodes: Object.freeze(['repair:mechanically-obvious', `repair:class-${finding.class}`]),
+      scope: authorizedScope,
       requiresRegressionTest: false,
       rootCause: undefined,
     })
   }
 
-  const contract = validateDiagnosis(diagnosis)
   if (stated(contract.productDecisionDependency)) {
     throw new RepairError('product-decision',
       'the defect depends on an unmade product decision; the run stops rather than inventing the behavior')
   }
-  const security = authorizeSecurityRepair(finding, contract.affectedBoundary, securityRepairRules)
+  const security = authorizeSecurityRepair(finding, contract.affectedBoundary, options.securityRepairRules)
   if (!security.allowed) {
     throw new RepairError('security-unauthorized',
       `a security defect may not be repaired automatically here (${security.reasonCode})`)
@@ -280,6 +353,7 @@ export function authorizeRepair(
       `repair:class-${finding.class}`,
       `repair:confidence-${contract.confidence}`,
     ]),
+    scope: authorizedScope,
     requiresRegressionTest: BEHAVIOR_FINDINGS.includes(finding.class),
     rootCause: contract.rootCauseHypothesis,
   })

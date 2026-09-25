@@ -128,6 +128,7 @@ const DIAGNOSIS: DiagnosisContract = Object.freeze({
   confidence: 'high',
   regressionTestSeam: 'cart.spec.ts totals suite',
   minimalRepairSurface: 'total.ts rounding order',
+  proposedRepairPaths: ['src/cart.ts'],
   unknowns: Object.freeze([]),
   securityRelevance: 'none',
 })
@@ -151,6 +152,7 @@ function bug(id: string, raisedBy: Finding['raisedBy'] = 'review'): Finding {
     raisedBy,
     summary: `${id}: totals are a cent short`,
     confirmed: true,
+    affectedPaths: ['src/cart.ts'],
     evidence: [{ kind: 'test', locator: 'cart.spec.ts:totals', summary: 'red' }],
   }
 }
@@ -167,6 +169,7 @@ function improvement(id: string): Finding {
     raisedBy: 'review',
     summary: `${id}: this module would read better split in two`,
     confirmed: true,
+    affectedPaths: [],
     evidence: [],
   }
 }
@@ -183,6 +186,7 @@ function productDecision(id: string): Finding {
     raisedBy: 'review',
     summary: `${id}: should an empty cart show zero or a dash?`,
     confirmed: false,
+    affectedPaths: [],
     evidence: [],
   }
 }
@@ -226,6 +230,7 @@ function interpret(stage: StageSpec, executor: string): StageResult {
     verdict: blocking ? 'BLOCKED' : material ? 'FAIL' : 'PASS',
     summary: `${stage.role} ran`,
     findings,
+    constraints: [],
     evidence: [],
   }
 }
@@ -267,9 +272,12 @@ async function runLifecycle(
   ) as Partial<typeof CONFORMS>
   const outcome = await runner.run({
     objective,
-    plan: planPullRequestStages,
     interpret,
     task: taskFor,
+    changeImpact: {
+      plannedPaths: async () => ['src/cart.ts'],
+      actualPaths: async () => ['src/cart.ts'],
+    },
     ...handlers,
     diagnose: () => DIAGNOSIS,
     repairEvidence: () => REPAIRED,
@@ -286,6 +294,7 @@ const PASSING = Object.freeze({
   verdict: 'PASS' as const,
   summary: 'verify ran',
   findings: Object.freeze([]),
+  constraints: [],
   evidence: Object.freeze([]),
   durationMs: 1,
 })
@@ -381,9 +390,9 @@ describe('the reading that closes the run', () => {
     // The final verification is a stage of its own, started after the repair
     // and after the re-delivery, so nothing is called ready on a reading taken
     // before the branch reached its current state.
-    expect(ids.at(-1)).toBe('verify-final')
-    expect(ids.indexOf('verify-final')).toBeGreaterThan(ids.indexOf('repair-1'))
-    expect(ids.indexOf('verify-final')).toBeGreaterThan(ids.indexOf('delivery-2'))
+    expect(ids.at(-1)).toBe('verify-final-2')
+    expect(ids.indexOf('verify-final-2')).toBeGreaterThan(ids.indexOf('repair-1'))
+    expect(ids.indexOf('verify-final-2')).toBeGreaterThan(ids.indexOf('delivery-2'))
     // It reads rather than writes, and it is not the executor that last wrote.
     const final = started.at(-1)
     expect(final?.route.permissionMode).toBe('read-only')
@@ -415,7 +424,7 @@ describe('two confirmed bugs and one improvement', () => {
     expect(roles).toEqual([
       'implement-1', 'verify-1', 'delivery-1', 'review-1',
       'debug-1', 'repair-1', 'verify-2', 'delivery-2', 'review-2',
-      'conformance-1', 'verify-final',
+      'conformance-2', 'verify-final-2',
     ])
   })
 

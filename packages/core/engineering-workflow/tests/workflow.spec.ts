@@ -25,7 +25,10 @@ import type {
   DatabaseVerificationCapabilityPort,
   DeliveryCapabilityPort,
   StageSpec,
+  WorkspaceSnapshot,
+  WorkspaceStateReader,
   WorkflowOutcome,
+  WorkflowDeliveryInput,
 } from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
@@ -112,6 +115,7 @@ function interpretAllPass(stage: StageSpec, executor: string): StageResult {
     verdict: 'PASS',
     summary: `${stage.role} ok`,
     findings: [],
+    constraints: [],
     evidence: [],
   }
 }
@@ -169,6 +173,7 @@ const DIAGNOSIS: DiagnosisContract = Object.freeze({
   confidence: 'high',
   regressionTestSeam: 'cart.spec.ts totals suite',
   minimalRepairSurface: 'total.ts rounding order',
+  proposedRepairPaths: ['src/thing.ts'],
   unknowns: Object.freeze([]),
   securityRelevance: 'none',
 })
@@ -180,6 +185,7 @@ function bug(id = 'f-1', findingClass: Finding['class'] = 'BUG'): Finding {
     raisedBy: 'verify',
     summary: 'totals are a cent short',
     confirmed: true,
+    affectedPaths: ['src/thing.ts'],
     evidence: [{ kind: 'test', locator: 'cart.spec.ts:totals', summary: 'red' }],
   }
 }
@@ -188,6 +194,11 @@ const REPAIRED = Object.freeze({
   regressionTest: Object.freeze({ kind: 'test' as const, locator: 'cart.spec.ts:totals', summary: 'red first' }),
   focusedGreen: Object.freeze({ kind: 'test' as const, locator: 'cart.spec.ts:totals', summary: 'green after' }),
   rootCauseAddressed: true,
+})
+
+const REPAIR_CHANGE_IMPACT = Object.freeze({
+  plannedPaths: async () => ['src/thing.ts'],
+  actualPaths: async () => ['src/thing.ts'],
 })
 
 describe('the stage plan', () => {
@@ -371,19 +382,71 @@ describe('a run that goes wrong', () => {
       output: '',
       failure: {
         category: 'transport-unavailable',
-        availability: true,
+        code: 'fixture.transport-unavailable',
         safeDiagnostic: 'provider did not start',
       },
     })))
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    // The single registered executor cannot serve, and there is nobody to
-    // reroute to. Blocking is the expected outcome of that, not a defect: the
-    // alternative is inventing a route to a product this runtime does not have.
-    expect(outcome.state).toBe('blocked')
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
     expect(JSON.stringify(session.events)).toContain('transport-unavailable')
     expect(JSON.stringify(session.events)).toContain('provider did not start')
+  })
+
+  it('keeps a non-reroutable provider error inconclusive without opening repair', async () => {
+    executors.register(provider('builder', async () => ({
+      status: 'error',
+      output: '',
+      failure: { category: 'other', code: 'fixture.prompt.failed', safeDiagnostic: 'fixture executor failed safely' },
+    })))
+
+    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.repairCycles).toBe(0)
+    expect(outcome.stages[0]?.verdict).toBe('INCONCLUSIVE')
+    expect(projectWorkflow(session.events, 'wf-1').end?.verdict).toBe('INCONCLUSIVE')
+  })
+
+  it('does not repair a certifying PARTIAL result without a confirmed repair target', async () => {
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'PARTIAL', summary: 'some evidence is incomplete', findings: [], constraints: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.verdict).toBe('PARTIAL')
+    expect(outcome.repairCycles).toBe(0)
+    expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify'])
+  })
+
+  it('reconciles PASS plus a stage constraint to inconclusive without repair', async () => {
+    executors.register(provider('builder', async () => passing('builder')))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? {
+          role: stage.role, executor, verdict: 'PASS', summary: 'claimed pass', findings: [],
+          constraints: [{ id: 'sandbox', class: 'SANDBOX_LIMITATION', raisedBy: 'verify', summary: 'external runtime is unreadable', evidence: [] }],
+          evidence: [],
+        }
+        : interpretAllPass(stage, executor),
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.repairCycles).toBe(0)
+    expect(projectWorkflow(session.events, 'wf-1').constraints).toHaveLength(1)
   })
 
   it('blocks rather than guessing when a stage returns a product decision', async () => {
@@ -404,8 +467,10 @@ describe('a run that goes wrong', () => {
             raisedBy: 'verify',
             summary: 'rounding currency unspecified',
             confirmed: true,
+            affectedPaths: [],
             evidence: [],
           }],
+          constraints: [],
           evidence: [],
         }
         : interpretAllPass(stage, executor),
@@ -422,7 +487,11 @@ describe('a run that goes wrong', () => {
   it('repairs a failed verification through a read-only diagnosis first', async () => {
     let verifications = 0
     const modes: string[] = []
-    executors.register(provider('builder', async () => passing('builder')))
+    let repairTask = ''
+    executors.register(provider('builder', async (request) => {
+      if (request.task.startsWith('repair:')) repairTask = request.task
+      return passing('builder')
+    }))
     executors.register(provider('reviewer', async (request) => {
       modes.push(request.route.permissionMode)
       return passing('reviewer')
@@ -439,12 +508,13 @@ describe('a run that goes wrong', () => {
           verdict: verifications === 1 ? 'FAIL' : 'PASS',
           summary: verifications === 1 ? 'focused suite red' : 'focused suite green',
           findings: verifications === 1 ? [bug()] : [],
+          constraints: [],
           evidence: [],
         }
       },
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor, ...CONFORMS,
+      task: taskFor, changeImpact: REPAIR_CHANGE_IMPACT, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('completed')
@@ -456,6 +526,12 @@ describe('a run that goes wrong', () => {
     expect(modes).toEqual(['read-only', 'read-only', 'read-only', 'read-only', 'read-only', 'read-only'])
     for (const stage of outcome.stages) expect(stage.permissionMode).toBe(permissionModeFor(stage.role))
     expect(JSON.stringify(session.events)).toContain('harness/diagnosis')
+    expect(repairTask).toContain('modify only repository-relative paths in this exact JSON array')
+    expect(repairTask).toContain('["src/thing.ts"]')
+    const authority = projectWorkflow(session.events, 'wf-1').repairAuthorizations[0]
+    expect(authority?.findingId).toBe('f-1')
+    expect(authority?.allowedPathCount).toBe(1)
+    expect(authority?.scopeSha256).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('blocks rather than repairing when the failed verification names no defect', async () => {
@@ -465,7 +541,7 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       task: taskFor, ...CONFORMS,
     })
@@ -482,7 +558,7 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => undefined,
       task: taskFor, ...CONFORMS,
@@ -491,6 +567,31 @@ describe('a run that goes wrong', () => {
     expect(outcome.state).toBe('blocked')
     expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'debug'])
     expect(outcome.stages.some(stage => stage.role === 'repair')).toBe(false)
+  })
+
+  it('refuses repair before writable dispatch when no deterministic planned paths exist', async () => {
+    let writableStarts = 0
+    executors.register(provider('builder', async (request) => {
+      if (request.route.permissionMode === 'workspace-write') writableStarts += 1
+      return passing('builder')
+    }))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(outcome.repairCycles).toBe(0)
+    expect(writableStarts).toBe(1)
+    expect(outcome.stages.map(stage => stage.role)).toEqual(['implement', 'verify', 'debug'])
   })
 
   it('blocks before any mutation when the defect depends on an unmade product decision', async () => {
@@ -504,7 +605,7 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => ({ ...DIAGNOSIS, productDecisionDependency: 'nobody said which currency to round to' }),
       task: taskFor, ...CONFORMS,
@@ -524,11 +625,11 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => ({ focusedGreen: REPAIRED.focusedGreen, rootCauseAddressed: true }),
-      task: taskFor, ...CONFORMS,
+      task: taskFor, changeImpact: REPAIR_CHANGE_IMPACT, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('failed')
@@ -552,11 +653,12 @@ describe('a run that goes wrong', () => {
           verdict: verifications === 1 ? 'FAIL' : 'PASS',
           summary: 'suite',
           findings: verifications === 1 ? [bug('f-2', 'TEST_DEFECT')] : [],
+          constraints: [],
           evidence: [],
         }
       },
       repairEvidence: () => REPAIRED,
-      task: taskFor, ...CONFORMS,
+      task: taskFor, changeImpact: REPAIR_CHANGE_IMPACT, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('completed')
@@ -572,11 +674,11 @@ describe('a run that goes wrong', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'still red', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor, ...CONFORMS,
+      task: taskFor, changeImpact: REPAIR_CHANGE_IMPACT, ...CONFORMS,
     })
 
     expect(outcome.repairCycles).toBe(PROFILE.workflowPolicy.maxRepairCycles)
@@ -600,6 +702,160 @@ describe('a run that goes wrong', () => {
 
     expect(outcome.executorStarts).toBe(2)
     expect(outcome.state).toBe('blocked')
+  })
+})
+
+describe('workspace snapshot gates', () => {
+  it('passes only paths changed after the run baseline to delivery', async () => {
+    const revision = 'a'.repeat(40)
+    const snapshots: WorkspaceSnapshot[] = [
+      { revision, entries: [{ path: 'preexisting.txt', fingerprint: 'dirty-before' }] },
+      { revision, entries: [
+        { path: 'preexisting.txt', fingerprint: 'dirty-before' },
+        { path: 'feature.ts', fingerprint: 'new-change' },
+      ] },
+      { revision: 'b'.repeat(40), entries: [{ path: 'preexisting.txt', fingerprint: 'dirty-before' }] },
+    ]
+    const workspaceState: WorkspaceStateReader = {
+      snapshot: async () => snapshots.shift() as WorkspaceSnapshot,
+    }
+    const changed: string[][] = []
+    const delivery: DeliveryCapabilityPort = {
+      deliver: async (input: WorkflowDeliveryInput) => {
+        changed.push([...(input.changedPaths ?? [])])
+        return { delivered: true, summary: 'published', evidence: [], findings: [] }
+      },
+    }
+    const localSession = Session.create(SessionId('s'))
+    const localExecutors = createExecutorRuntime()
+    const localRunner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors: localExecutors,
+      journal: new WorkflowJournal(localSession, 'wf-1', async () => true),
+      capabilities: { delivery },
+    })
+    localExecutors.register(provider('builder', async () => passing('builder')))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      workspaceState,
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(changed).toEqual([['feature.ts']])
+  })
+
+  it('blocks and skips delivery if repair changes any path outside its authorized scope', async () => {
+    const revision = 'a'.repeat(40)
+    const snapshots: WorkspaceSnapshot[] = [
+      { revision, entries: [] },
+      { revision, entries: [{ path: 'src/thing.ts', fingerprint: 'before-repair' }] },
+      { revision, entries: [
+        { path: 'src/thing.ts', fingerprint: 'after-repair' },
+        { path: 'outside.txt', fingerprint: 'unauthorized' },
+      ] },
+    ]
+    const workspaceState: WorkspaceStateReader = {
+      snapshot: async () => snapshots.shift() as WorkspaceSnapshot,
+    }
+    let deliveryCalls = 0
+    let verificationCount = 0
+    const delivery: DeliveryCapabilityPort = {
+      deliver: async () => {
+        deliveryCalls += 1
+        return { delivered: true, summary: 'published', evidence: [], findings: [] }
+      },
+    }
+    const localSession = Session.create(SessionId('s'))
+    const localExecutors = createExecutorRuntime()
+    const localRunner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors: localExecutors,
+      journal: new WorkflowJournal(localSession, 'wf-1', async () => true),
+      capabilities: { delivery },
+    })
+    localExecutors.register(provider('builder', async () => passing('builder')))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? ++verificationCount === 1
+          ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
+          : interpretAllPass(stage, executor)
+        : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      changeImpact: REPAIR_CHANGE_IMPACT,
+      workspaceState,
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('blocked')
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(outcome.repairCycles).toBe(1)
+    expect(outcome.stages.map(stage => stage.role)).not.toContain('delivery')
+    expect(deliveryCalls).toBe(0)
+    expect(projectWorkflow(localSession.events, 'wf-1').blockers.at(-1)).toMatchObject({
+      kind: 'external',
+      evidence: [{ kind: 'gate', locator: 'harness:repair-scope' }],
+    })
+  })
+
+  it('blocks after a repair if its post-repair snapshot cannot be read', async () => {
+    const revision = 'a'.repeat(40)
+    let snapshotCalls = 0
+    const workspaceState: WorkspaceStateReader = {
+      snapshot: async () => {
+        snapshotCalls += 1
+        if (snapshotCalls === 3) throw new Error('raw path-bearing filesystem error')
+        return { revision, entries: [] }
+      },
+    }
+    let deliveryCalls = 0
+    const delivery: DeliveryCapabilityPort = {
+      deliver: async () => {
+        deliveryCalls += 1
+        return { delivered: true, summary: 'published', evidence: [], findings: [] }
+      },
+    }
+    const localSession = Session.create(SessionId('s'))
+    const localExecutors = createExecutorRuntime()
+    const localRunner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors: localExecutors,
+      journal: new WorkflowJournal(localSession, 'wf-1', async () => true),
+      capabilities: { delivery },
+    })
+    localExecutors.register(provider('builder', async () => passing('builder')))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+    let verificationCount = 0
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify' && ++verificationCount === 1
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug()], constraints: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      changeImpact: REPAIR_CHANGE_IMPACT,
+      workspaceState,
+      ...CONFORMS,
+    })
+
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(outcome.repairCycles).toBe(1)
+    expect(deliveryCalls).toBe(0)
+    expect(JSON.stringify(localSession.events)).not.toContain('raw path-bearing filesystem error')
   })
 })
 
@@ -804,11 +1060,11 @@ describe('triage inside a run', () => {
     const outcome = await runner.run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'verify'
-        ? { role: stage.role, executor, verdict: 'PASS', summary: 'looks fine', findings: [bug()], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'PASS', summary: 'looks fine', findings: [bug()], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor, ...CONFORMS,
+      task: taskFor, changeImpact: REPAIR_CHANGE_IMPACT, ...CONFORMS,
     })
 
     // The claimed PASS became a FAIL, which is what opened the repair cycle.
@@ -826,6 +1082,7 @@ describe('triage inside a run', () => {
           verdict: 'PASS',
           summary: 'shipped it',
           findings: [{ ...bug(), class: 'PRODUCT_DECISION', summary: 'which currency rounds?' }],
+          constraints: [],
           evidence: [],
         }
         : interpretAllPass(stage, executor),
@@ -850,18 +1107,19 @@ describe('triage inside a run', () => {
           verdict: qaRuns === 1 ? 'FAIL' : 'PASS',
           summary: qaRuns === 1 ? 'negative path throws' : 'negative path handled',
           findings: qaRuns === 1 ? [{ ...bug(), raisedBy: 'qa' }] : [],
+          constraints: [],
           evidence: [],
         }
       },
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor, ...CONFORMS,
+      task: taskFor, changeImpact: REPAIR_CHANGE_IMPACT, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
       'implement', 'verify', 'delivery', 'review', 'qa',
-      'debug', 'repair', 'verify', 'delivery', 'qa',
+      'debug', 'repair', 'verify', 'delivery', 'review', 'qa',
       'conformance', 'verify',
     ])
     expect(outcome.stages.filter(stage => stage.role === 'qa').map(stage => stage.stageId))
@@ -883,12 +1141,13 @@ describe('triage inside a run', () => {
           findings: verifications === 1
             ? [{ ...bug('f-tool', 'TOOLING_DEFECT') }, { ...bug('f-sec', 'SECURITY_BUG') }]
             : [],
+          constraints: [],
           evidence: [],
         }
       },
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
-      task: taskFor, ...CONFORMS,
+      task: taskFor, changeImpact: REPAIR_CHANGE_IMPACT, ...CONFORMS,
     })
 
     // A tooling defect alone would have skipped diagnosis; the security bug did not.
@@ -915,13 +1174,14 @@ describe('triage inside a run', () => {
           verdict: verifications === 1 ? 'FAIL' : 'PASS',
           summary: 'suite',
           findings: verifications === 1 ? [{ ...bug('f-sec', 'SECURITY_BUG') }] : [],
+          constraints: [],
           evidence: [],
         }
       },
       // The diagnosis is complete and honest; it simply names ground no rule covers.
       diagnose: () => ({ ...DIAGNOSIS, affectedBoundary: 'packages/billing/src/charge.ts' }),
       repairEvidence: () => REPAIRED,
-      task: taskFor, ...CONFORMS,
+      task: taskFor, changeImpact: REPAIR_CHANGE_IMPACT, ...CONFORMS,
     })
 
     expect(outcome.state).toBe('blocked')
@@ -1089,16 +1349,16 @@ describe('an executor that stops serving mid-run', () => {
     runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
-  function failing(name: string, category: string, availability: boolean, seen: string[]): ExecutorProvider {
+  function failing(name: string, category: 'usage-limit-exceeded' | 'server-overloaded' | 'bad-request' | 'other', seen: string[]): ExecutorProvider {
     return provider(name, async () => {
       seen.push(name)
-      return { status: 'error', output: '', failure: { category, availability, safeDiagnostic: `${name} declined` } }
+      return { status: 'error', output: '', failure: { category, code: `fixture.${category}`, safeDiagnostic: `${name} declined` } }
     })
   }
 
   it('moves the stage to another product when the first one cannot serve', async () => {
     const seen: string[] = []
-    executors.register(failing('builder', 'usage-limit-exceeded', true, seen))
+    executors.register(failing('builder', 'usage-limit-exceeded', seen))
     executors.register(provider('reviewer', async () => passing('reviewer')))
     executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
 
@@ -1117,7 +1377,7 @@ describe('an executor that stops serving mid-run', () => {
 
   it('does not ask a second product the same question after a wrong answer', async () => {
     const seen: string[] = []
-    executors.register(failing('builder', 'bad-request', false, seen))
+    executors.register(failing('builder', 'bad-request', seen))
     executors.register(provider('reviewer', async () => passing('reviewer')))
     executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
 
@@ -1132,14 +1392,15 @@ describe('an executor that stops serving mid-run', () => {
 
   it('counts every reroute against the start budget the run was given', async () => {
     const seen: string[] = []
-    executors.register(failing('builder', 'server-overloaded', true, seen))
-    executors.register(failing('spare', 'server-overloaded', true, seen))
+    executors.register(failing('builder', 'server-overloaded', seen))
+    executors.register(failing('spare', 'server-overloaded', seen))
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
     expect(seen).toEqual(['builder', 'spare'])
     expect(outcome.executorStarts).toBe(2)
-    expect(outcome.state).toBe('blocked')
+    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.repairCycles).toBe(0)
   })
 })
 
@@ -1987,9 +2248,12 @@ describe('recertifying what a repair turned the change into', () => {
         qaRuns += 1
         return qaRuns > 1
           ? interpretAllPass(stage, executor)
-          : { role: stage.role, executor, verdict: 'FAIL', summary: 'red', findings: [bug('f-1')], evidence: [] }
+          : {
+            role: stage.role, executor, verdict: 'FAIL', summary: 'red',
+            findings: [{ ...bug('f-1'), affectedPaths: [UI] }], constraints: [], evidence: [],
+          }
       },
-      diagnose: () => DIAGNOSIS,
+      diagnose: () => ({ ...DIAGNOSIS, proposedRepairPaths: [UI] }),
       repairEvidence: () => REPAIRED,
       task: taskFor,
       changeImpact,
@@ -2256,12 +2520,14 @@ describe('marking a delivered revision as pending certification', () => {
           verdict: qaRuns === 1 ? 'FAIL' : 'PASS',
           summary: qaRuns === 1 ? 'negative path throws' : 'negative path handled',
           findings: qaRuns === 1 ? [{ ...bug(), raisedBy: 'qa' }] : [],
+          constraints: [],
           evidence: [],
         }
       },
       diagnose: () => DIAGNOSIS,
       repairEvidence: () => REPAIRED,
       task: taskFor,
+      changeImpact: REPAIR_CHANGE_IMPACT,
       ...CONFORMS,
     })
 
@@ -2270,7 +2536,7 @@ describe('marking a delivered revision as pending certification', () => {
     // and the branch that replaces it is marked pending in its own right.
     expect(log).toEqual([
       'implement', 'verify', `pending(${FIRST_REVISION})`, 'review', 'qa',
-      'debug', 'repair', 'verify', `pending(${SECOND_REVISION})`, 'qa',
+      'debug', 'repair', 'verify', `pending(${SECOND_REVISION})`, 'review', 'qa',
       'conformance', 'verify', `success(${SECOND_REVISION})`,
     ])
     // Two windows opened and both closed: a certification that began and never
@@ -2438,7 +2704,7 @@ describe('publishing the terminal certification', () => {
     const outcome = await runnerWith(certification.port).run({
       objective: OBJECTIVE,
       interpret: (stage, executor) => stage.role === 'conformance'
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'an obligation is unmet', findings: [], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'an obligation is unmet', findings: [], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       task: taskFor,
       ...CONFORMS,
@@ -2460,6 +2726,7 @@ describe('publishing the terminal certification', () => {
           verdict: 'BLOCKED',
           summary: 'this needs a person',
           findings: [],
+          constraints: [],
           evidence: [],
         }
         : interpretAllPass(stage, executor),

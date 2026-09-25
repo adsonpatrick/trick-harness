@@ -26,6 +26,10 @@ Every SDK call uses `throwOnError: true`. The generated client otherwise returns
 
 The adapter requires an explicit `startupTimeoutMs`: positive integer milliseconds, no greater than `2147483647`. It applies only while the SDK waits for its child server to announce readiness, not while a session runs a prompt. The SDK owns startup timeout termination; the caller's abort signal remains active. `OpencodeStartupTimeoutError` reports the deadline without copying raw SDK output, and remains a provider failure without automatic fallback.
 
+## Safe failure taxonomy
+
+Provider failures use canonical executor categories and stable `opencode.*` codes. Startup timeouts map to `transport-unavailable`; unsupported routes map to `bad-request`; malformed SDK responses, internal session aborts, and unknown failures map to `other`. A `MessageAbortedError` from OpenCode is not caller cancellation: only the Harness abort signal produces `status: 'aborted'`. Failure diagnostics are fixed safe text and never include SDK messages, response bodies, or untrusted error names.
+
 ## Usage
 
 ```ts

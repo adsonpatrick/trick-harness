@@ -116,6 +116,38 @@ export const FINDING_CLASSES = [
 /** One finding class. */
 export type FindingClass = typeof FINDING_CLASSES[number]
 
+/** Conditions that limit a stage's ability to judge an artifact. */
+export const STAGE_CONSTRAINT_CLASSES = [
+  'SANDBOX_LIMITATION',
+  'MISSING_TOOL',
+  'EXTERNAL_RUNTIME_UNREADABLE',
+  'EXECUTOR_CAPABILITY_GAP',
+  'EXTERNAL_SERVICE_UNAVAILABLE',
+] as const
+
+/** One closed class of non-artifact stage constraint. */
+export type StageConstraintClass = typeof STAGE_CONSTRAINT_CLASSES[number]
+
+/** Stable provider-neutral executor failure categories. */
+export const EXECUTOR_FAILURE_CATEGORIES = [
+  'usage-limit-exceeded',
+  'session-budget-exceeded',
+  'server-overloaded',
+  'internal-server-error',
+  'transport-unavailable',
+  'context-window-exceeded',
+  'bad-request',
+  'sandbox-denied',
+  'cyber-policy-refusal',
+  'unauthorized',
+  'wrong-answer',
+  'failed-verification',
+  'other',
+] as const
+
+/** One canonical executor failure category. */
+export type ExecutorFailureCategory = typeof EXECUTOR_FAILURE_CATEGORIES[number]
+
 /**
  * Finding classes an automated repair may act on at all.
  *
@@ -190,7 +222,18 @@ export interface Finding {
   readonly summary: string
   /** Whether a stage established this is real, rather than suspected. */
   readonly confirmed: boolean
+  /** Paths the stage claims this finding concerns; scope remains control-plane owned. */
+  readonly affectedPaths: readonly string[]
   /** Evidence a later reader can follow; may be empty for an unconfirmed finding. */
+  readonly evidence: readonly EvidenceRef[]
+}
+
+/** A bounded reason a stage cannot completely judge the artifact. */
+export interface StageConstraint {
+  readonly id: string
+  readonly class: StageConstraintClass
+  readonly raisedBy: Role
+  readonly summary: string
   readonly evidence: readonly EvidenceRef[]
 }
 
@@ -224,6 +267,8 @@ export interface DiagnosisContract {
   readonly regressionTestSeam: string
   /** The smallest coherent surface a fix would touch. */
   readonly minimalRepairSurface: string
+  /** Paths proposed for repair; never grants writable authority by itself. */
+  readonly proposedRepairPaths: readonly string[]
   /** What remains unexplained; empty is a claim that nothing does. */
   readonly unknowns: readonly string[]
   /** Whether fixing this has security consequences. */
@@ -332,12 +377,22 @@ export interface ApprovedArtifactRef {
   readonly sha256: string
 }
 
+/** One deployment-registered checkout holding an immutable approved artifact set. */
+export interface ApprovedArtifactSourceRef {
+  /** Stable deployment registry key; never a URL or filesystem path. */
+  readonly id: string
+  /** Exact commit the registered checkout must expose before either document is read. */
+  readonly revision: string
+}
+
 /** The documents a human approved before the work was allowed to start. */
 export interface ApprovedArtifactSet {
   /** The approved specification. */
   readonly spec: ApprovedArtifactRef
   /** The approved implementation plan. */
   readonly plan: ApprovedArtifactRef
+  /** Absent means both documents live in the implementation checkout. */
+  readonly source?: ApprovedArtifactSourceRef
 }
 
 /**
@@ -640,6 +695,8 @@ export interface StageResult {
   readonly summary: string
   /** Findings this stage raised. */
   readonly findings: readonly Finding[]
+  /** Conditions that prevented a complete judgement, separate from findings. */
+  readonly constraints: readonly StageConstraint[]
   /** Evidence supporting the verdict. */
   readonly evidence: readonly EvidenceRef[]
 }

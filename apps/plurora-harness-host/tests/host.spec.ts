@@ -132,7 +132,7 @@ function compose(
     flush: async () => true,
     workflow: {
       interpret: (stage, executor) => ({
-        role: stage.role, executor, verdict: 'PASS', summary: 'passed', findings: [], evidence: [],
+        role: stage.role, executor, verdict: 'PASS', summary: 'passed', findings: [], constraints: [], evidence: [],
       }),
       task: stage => `${stage.role}: do the work`,
     },

@@ -105,6 +105,7 @@ const DIAGNOSIS: DiagnosisContract = Object.freeze({
   confidence: 'high',
   regressionTestSeam: 'thing.spec.ts',
   minimalRepairSurface: 'thing.ts',
+  proposedRepairPaths: ['src/thing.ts'],
   unknowns: Object.freeze([]),
   securityRelevance: 'none',
 })
@@ -123,6 +124,7 @@ const BUG: Finding = Object.freeze({
   raisedBy: 'review',
   summary: 'the thing rounds too early',
   confirmed: true,
+  affectedPaths: ['src/thing.ts'],
   evidence: Object.freeze([EVIDENCE]),
 })
 
@@ -277,7 +279,7 @@ function scriptedProvider(name: string, output: string): ExecutorProvider {
 
 /** Read one stage's result the way a run where everything passed reads it. */
 function passing(stage: { role: string }, executor: string): StageResult {
-  return { role: stage.role, executor, verdict: 'PASS', summary: `${stage.role} passed`, findings: [], evidence: [] }
+  return { role: stage.role, executor, verdict: 'PASS', summary: `${stage.role} passed`, findings: [], constraints: [], evidence: [] }
 }
 
 /**
@@ -291,7 +293,7 @@ function failing(
   verdict: 'FAIL' | 'INCONCLUSIVE' | 'BLOCKED',
 ): (stage: { role: string; stageId: string }, executor: string) => StageResult {
   return (stage, executor) => stage.role === role
-    ? { role: stage.role, executor, verdict, summary: `${stage.role} did not pass`, findings: [], evidence: [] }
+    ? { role: stage.role, executor, verdict, summary: `${stage.role} did not pass`, findings: [], constraints: [], evidence: [] }
     : passing(stage, executor)
 }
 
@@ -340,14 +342,10 @@ describe('what Plurora actually publishes on a pull request', () => {
         // The paths are read from the delivery rather than declared twice: a
         // reader that could disagree with what was staged would be choosing
         // which certifying stages ran.
-        ...options.files === undefined
-          ? {}
-          : {
-            changeImpact: {
-              plannedPaths: async () => [...options.files ?? []],
-              actualPaths: async () => [...options.files ?? []],
-            },
-          },
+        changeImpact: {
+          plannedPaths: async () => [...options.files ?? ['src/thing.ts']],
+          actualPaths: async () => [...options.files ?? ['src/thing.ts']],
+        },
         ...CONFORMS,
         diagnose: () => DIAGNOSIS,
         repairEvidence: () => REPAIRED,
@@ -431,7 +429,7 @@ describe('what Plurora actually publishes on a pull request', () => {
 
     await run(github, {
       interpret: (stage, executor) => stage.stageId.startsWith('verify-final')
-        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'the final check did not pass', findings: [], evidence: [] }
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'the final check did not pass', findings: [], constraints: [], evidence: [] }
         : passing(stage, executor),
     })
 
@@ -527,7 +525,7 @@ describe('what Plurora actually publishes on a pull request', () => {
         if (stage.role !== 'review') return passing(stage, executor)
         reviews += 1
         return reviews === 1
-          ? { role: stage.role, executor, verdict: 'FAIL', summary: 'a defect', findings: [BUG], evidence: [] }
+          ? { role: stage.role, executor, verdict: 'FAIL', summary: 'a defect', findings: [BUG], constraints: [], evidence: [] }
           : passing(stage, executor)
       },
     })
@@ -595,6 +593,7 @@ describe('what Plurora actually publishes on a pull request', () => {
         verdict: 'PASS',
         summary: `${stage.role}: ${secret} at ${path}`,
         findings: [],
+        constraints: [],
         evidence: [],
       }),
     })

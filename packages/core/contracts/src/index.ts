@@ -28,6 +28,7 @@ import {
   ROLES,
   ROUTED_PERMISSION_MODES,
   SECURITY_RELEVANCES,
+  STAGE_CONSTRAINT_CLASSES,
   WORKFLOW_VERDICTS,
   WORKLOADS,
   WRITE_VOLUMES,
@@ -46,6 +47,7 @@ import type {
   Risk,
   RouteDecision,
   StageResult,
+  StageConstraint,
   StageRouteOverride,
   WorkflowObjective,
 } from './types.ts'
@@ -189,6 +191,19 @@ export function parseFinding(value: unknown, path = 'finding'): Finding {
     raisedBy: member(source, 'raisedBy', ROLES, path),
     summary: text(source, 'summary', path),
     confirmed: flag(source, 'confirmed', path),
+    affectedPaths: list(source, 'affectedPaths', path, textItem),
+    evidence: list(source, 'evidence', path, parseEvidenceRef),
+  })
+}
+
+/** Read one stage constraint back, separately from a product finding. */
+export function parseStageConstraint(value: unknown, path = 'constraint'): StageConstraint {
+  const source = asRecord(value, path)
+  return Object.freeze({
+    id: text(source, 'id', path),
+    class: member(source, 'class', STAGE_CONSTRAINT_CLASSES, path),
+    raisedBy: member(source, 'raisedBy', ROLES, path),
+    summary: text(source, 'summary', path),
     evidence: list(source, 'evidence', path, parseEvidenceRef),
   })
 }
@@ -218,6 +233,7 @@ export function parseDiagnosisContract(value: unknown, path = 'diagnosis'): Diag
     confidence: member(source, 'confidence', CONFIDENCE_LEVELS, path),
     regressionTestSeam: text(source, 'regressionTestSeam', path),
     minimalRepairSurface: text(source, 'minimalRepairSurface', path),
+    proposedRepairPaths: list(source, 'proposedRepairPaths', path, textItem),
     unknowns: list(source, 'unknowns', path, textItem),
     securityRelevance: member(source, 'securityRelevance', SECURITY_RELEVANCES, path),
     ...dependency === undefined
@@ -271,6 +287,7 @@ export function parseStageResult(value: unknown, path = 'stage'): StageResult {
     verdict: member(source, 'verdict', WORKFLOW_VERDICTS, path),
     summary: text(source, 'summary', path),
     findings: list(source, 'findings', path, parseFinding),
+    constraints: list(source, 'constraints', path, parseStageConstraint),
     evidence: list(source, 'evidence', path, parseEvidenceRef),
   })
 }
@@ -301,6 +318,12 @@ export function parseStageRouteOverride(value: unknown, path = 'routeOverride'):
 
 /** A lowercase 64-hex SHA-256 digest and nothing else. */
 const SHA256 = /^[0-9a-f]{64}$/
+
+/** A deployment registry key, deliberately narrower than a URL or path. */
+const ARTIFACT_SOURCE_ID = /^[a-z][a-z0-9-]{0,63}$/
+
+/** An immutable Git commit accepted for an external approved-artifact source. */
+const GIT_REVISION = /^[0-9a-f]{40}$/
 
 /** Read a required field that must be a SHA-256 digest. */
 function digest(source: Record<string, unknown>, key: string, path: string): string {
@@ -445,9 +468,24 @@ export function parseEffectiveChangeImpact(value: unknown, path = 'effectiveImpa
  */
 export function parseApprovedArtifactSet(value: unknown, path = 'approvedArtifacts'): ApprovedArtifactSet {
   const source = asRecord(value, path)
+  const external = source['source']
+  let artifactSource: import('./types.ts').ApprovedArtifactSourceRef | undefined
+  if (external !== undefined) {
+    const externalRecord = asRecord(external, `${path}.source`)
+    const id = text(externalRecord, 'id', `${path}.source`)
+    const revision = text(externalRecord, 'revision', `${path}.source`)
+    if (!ARTIFACT_SOURCE_ID.test(id)) {
+      throw new ContractError(`${path}.source.id`, 'must be a registered source identifier')
+    }
+    if (!GIT_REVISION.test(revision)) {
+      throw new ContractError(`${path}.source.revision`, 'must be an exact lowercase 40-character commit SHA')
+    }
+    artifactSource = Object.freeze({ id, revision })
+  }
   return Object.freeze({
     spec: parseApprovedArtifactRef(source['spec'], `${path}.spec`),
     plan: parseApprovedArtifactRef(source['plan'], `${path}.plan`),
+    ...artifactSource === undefined ? {} : { source: artifactSource },
   })
 }
 

@@ -143,6 +143,8 @@ export interface HarnessWorkflowHandlers {
    * to plan that half from.
    */
   readonly changeImpact?: ChangeImpactReader
+  /** Reads the checkout state used to derive the run's measured delivery paths. */
+  readonly workspaceState?: WorkflowRunRequest['workspaceState']
 }
 
 /**
@@ -571,6 +573,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
       ...workflow.conformance === undefined ? {} : { conformance: workflow.conformance },
       ...workflow.dodObligations === undefined ? {} : { dodObligations: workflow.dodObligations },
       ...workflow.changeImpact === undefined ? {} : { changeImpact: workflow.changeImpact },
+      ...workflow.workspaceState === undefined ? {} : { workspaceState: workflow.workspaceState },
       ...routeOverride === undefined ? {} : { routeOverride },
       ...change === undefined ? {} : { databaseChange: change },
     })

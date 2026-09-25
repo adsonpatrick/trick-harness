@@ -10,10 +10,10 @@
  */
 
 import { AUTO_REPAIRABLE_FINDINGS } from '@trick-harness/contracts'
-import type { Finding, FindingClass, Risk, Role, WorkflowVerdict } from '@trick-harness/contracts'
+import type { Finding, FindingClass, Risk, Role, StageConstraint, WorkflowVerdict } from '@trick-harness/contracts'
 
 /** What the run does about one finding. */
-export type TriageDisposition = 'repair' | 'block' | 'report'
+export type TriageDisposition = 'repair' | 'block' | 'report' | 'inconclusive'
 
 /** One finding, with the disposition triage gave it and why. */
 export interface TriagedFinding {
@@ -28,6 +28,7 @@ export interface Triage {
   readonly repairable: readonly Finding[]
   /** Findings only a person can settle; their presence blocks the run. */
   readonly blocking: readonly Finding[]
+  readonly uncertain: readonly Finding[]
   /** Findings that are carried and reported, and never acted on. */
   readonly reported: readonly Finding[]
   /** Whether a confirmed defect that changes behaviour is among them. */
@@ -46,8 +47,8 @@ export interface Triage {
 export const BLOCKING_FINDINGS: readonly FindingClass[] = [
   'PRODUCT_DECISION',
   'DESIGN_DECISION',
-  'UNRESOLVED',
 ]
+export const INCONCLUSIVE_FINDINGS: readonly FindingClass[] = ['UNRESOLVED']
 
 /** Classes whose confirmed instances make a `PASS` impossible. */
 export const MATERIAL_FINDINGS: readonly FindingClass[] = ['BUG', 'SECURITY_BUG']
@@ -77,6 +78,7 @@ export function triageFinding(finding: Finding): TriagedFinding {
       reason: `a ${finding.class} finding is a question for a person, not work for a repair`,
     })
   }
+  if (INCONCLUSIVE_FINDINGS.includes(finding.class)) return Object.freeze({ finding, disposition: 'inconclusive' as const, reason: 'the stage could not establish an artifact judgement' })
   if (!AUTO_REPAIRABLE_FINDINGS.includes(finding.class)) {
     return Object.freeze({
       finding,
@@ -113,6 +115,7 @@ export function triage(findings: readonly Finding[]): Triage {
   return Object.freeze({
     repairable: Object.freeze(repairable),
     blocking: Object.freeze(of('block')),
+    uncertain: Object.freeze(of('inconclusive')),
     reported: Object.freeze(of('report')),
     material: findings.some(finding => finding.confirmed && MATERIAL_FINDINGS.includes(finding.class)),
     entries: Object.freeze(entries),
@@ -143,8 +146,10 @@ export interface ReconciledVerdict {
 export function reconcileVerdict(
   claimed: WorkflowVerdict,
   result: Triage,
+  constraints: readonly StageConstraint[],
   summary: string,
 ): ReconciledVerdict {
+  if (constraints.length > 0) return Object.freeze({ verdict: 'INCONCLUSIVE' as const, corrected: claimed !== 'INCONCLUSIVE', summary: 'a required stage constraint prevented a complete judgement' })
   if (result.blocking.length > 0 && claimed !== 'BLOCKED') {
     return Object.freeze({
       verdict: 'BLOCKED' as const,
@@ -153,11 +158,23 @@ export function reconcileVerdict(
         + result.blocking.map(finding => finding.summary).join('; '),
     })
   }
-  if (claimed === 'PASS' && result.material) {
+  if (result.uncertain.length > 0) return Object.freeze({ verdict: 'INCONCLUSIVE' as const, corrected: claimed !== 'INCONCLUSIVE', summary: 'the stage left an artifact question unresolved' })
+  if (result.material) {
     return Object.freeze({
       verdict: 'FAIL' as const,
+      corrected: claimed !== 'FAIL',
+      summary: 'a confirmed material defect was established',
+    })
+  }
+  const scaffoldingDefect = result.repairable.some(finding => finding.class === 'TEST_DEFECT' || finding.class === 'TOOLING_DEFECT')
+  const unconfirmedRepairable = result.reported.some(finding => AUTO_REPAIRABLE_FINDINGS.includes(finding.class))
+  if (claimed === 'PASS' && (scaffoldingDefect || unconfirmedRepairable)) {
+    return Object.freeze({
+      verdict: 'PARTIAL' as const,
       corrected: true,
-      summary: 'the stage reported PASS over a confirmed material defect, which is not a pass',
+      summary: scaffoldingDefect
+        ? 'the stage reported PASS over a confirmed scaffolding defect'
+        : 'the stage reported PASS while an auto-repairable concern remained unconfirmed',
     })
   }
   return Object.freeze({ verdict: claimed, corrected: false, summary })

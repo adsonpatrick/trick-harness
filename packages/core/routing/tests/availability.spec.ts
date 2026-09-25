@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { EXECUTOR_FAILURE_CATEGORIES } from '@trick-harness/contracts'
 import type { RouteDecision, RoutingContext, WorkflowVerdict } from '@trick-harness/contracts'
 import {
   AVAILABILITY_FAILURES,
@@ -42,6 +43,11 @@ const policy: RoutingPolicy = {
   ],
   registry: DEFAULT_MODEL_REGISTRY,
 }
+
+it('partitions the canonical executor failure vocabulary', () => {
+  expect(new Set([...AVAILABILITY_FAILURES, ...QUALITY_FAILURES]))
+    .toEqual(new Set(EXECUTOR_FAILURE_CATEGORIES))
+})
 
 function context(overrides: Partial<RoutingContext> = {}): RoutingContext {
   return {

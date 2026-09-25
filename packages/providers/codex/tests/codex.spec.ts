@@ -16,7 +16,6 @@ import {
   CODEX_RUN_DISPOSE_CLEANUP,
   createCodexProvider,
   executorFailure,
-  isAvailabilityFailure,
   NON_AVAILABILITY_CATEGORIES,
   sandboxMode,
   CodexRouteError,
@@ -212,10 +211,10 @@ describe('declared capabilities', () => {
       route: route({ permissionMode: 'full-access' as never }),
     }))
     expect(result.status).toBe('error')
-    expect(result.failure?.category).toBe('route-unsupported')
+    expect(result.failure).toMatchObject({ category: 'bad-request', code: 'codex.route.unsupported' })
     // Reachable and refusing: a fallback would pay for a second run to hear the
     // same refusal from a different product.
-    expect(result.failure?.availability).toBe(false)
+    expect(result.failure?.code).toBe('codex.route.unsupported')
     expect(spawn).not.toHaveBeenCalled()
   })
 
@@ -355,8 +354,8 @@ describe('failure normalization at the provider boundary', () => {
     ['cyberPolicy', 'cyber-policy-refusal', false],
     ['unauthorized', 'unauthorized', false],
     ['threadRollbackFailed', 'other', false],
-  ])('normalizes %s to %s', (native, normalized, availability) => {
-    expect(executorFailure(native)).toMatchObject({ category: normalized, availability })
+  ])('normalizes %s to %s', (native, normalized) => {
+    expect(executorFailure(native)).toMatchObject({ category: normalized, code: `codex.${normalized}` })
   })
 
   it.each(['unknown', 'process-exit', 'someVariantShippedNextQuarter'])(
@@ -365,7 +364,7 @@ describe('failure normalization at the provider boundary', () => {
       // Fail-closed: a variant this package has never seen must not become an
       // outage, or every future upstream rename buys itself a free second run
       // on the other executor.
-      expect(executorFailure(native)).toMatchObject({ category: 'other', availability: false })
+      expect(executorFailure(native)).toMatchObject({ category: 'other', code: 'codex.other' })
     },
   )
 
@@ -387,29 +386,6 @@ describe('failure normalization at the provider boundary', () => {
 })
 
 describe('failure classification', () => {
-  it('treats quota, budget, overload, and transport as availability failures', () => {
-    for (const category of [
-      'usageLimitExceeded',
-      'sessionBudgetExceeded',
-      'serverOverloaded',
-      'internalServerError',
-      'httpConnectionFailed',
-      'responseStreamConnectionFailed',
-      'responseStreamDisconnected',
-      'responseTooManyFailedAttempts',
-    ]) {
-      expect(isAvailabilityFailure(category)).toBe(true)
-    }
-  })
-
-  it('never treats a request, workspace, account, or refusal fault as availability', () => {
-    for (const category of NON_AVAILABILITY_CATEGORIES) {
-      expect(isAvailabilityFailure(category)).toBe(false)
-    }
-    expect(isAvailabilityFailure('unknown')).toBe(false)
-    expect(isAvailabilityFailure('process-exit')).toBe(false)
-  })
-
   it('reports a quota exhaustion as an availability failure end to end', async () => {
     const driven = await drive(startRequest())
     driven.finish(failedTurn('usageLimitExceeded'))
@@ -417,7 +393,7 @@ describe('failure classification', () => {
     expect(result.status).toBe('error')
     expect(result.failure).toEqual({
       category: 'usage-limit-exceeded',
-      availability: true,
+      code: 'codex.usage-limit-exceeded',
       safeDiagnostic: 'codex run failed (usage-limit-exceeded)',
     })
   })
@@ -428,7 +404,7 @@ describe('failure classification', () => {
     const result = await driven.result as { status: string; failure?: JsonObject }
     expect(result.failure).toMatchObject({
       category: 'context-window-exceeded',
-      availability: false,
+      code: 'codex.context-window-exceeded',
     })
   })
 
@@ -438,7 +414,7 @@ describe('failure classification', () => {
     const result = await driven.result as { status: string; failure?: JsonObject }
     expect(result.failure).toEqual({
       category: 'transport-unavailable',
-      availability: true,
+      code: 'codex.transport-unavailable',
       safeDiagnostic: 'codex run failed (transport-unavailable)',
       httpStatus: 503,
     })

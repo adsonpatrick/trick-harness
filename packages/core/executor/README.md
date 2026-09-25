@@ -16,7 +16,7 @@ The runtime decides which provider a route selects, whether that provider can ho
 
 **The provider sees a chained signal, not the caller's.** The runtime must be able to end a run the caller has no reason to cancel — disposal, budget exhaustion — so it owns the signal that reaches the provider. Aborting must terminate the owned process tree to quiescence, not merely return.
 
-**Failures are structured and safe.** `ExecutorFailure` carries a category, an availability flag that drives fallback routing, and a redacted diagnostic. Raw stderr, environment, and credentials are not part of the public result: providers talk to products the user is authenticated against, and anything that escapes here reaches durable event logs and PR comments.
+**Failures are structured and safe.** `ExecutorFailure` carries a canonical category, stable code, and redacted diagnostic. Routing classifies the category against its closed availability and quality sets before considering fallback; the provider does not attach a separate routing decision to the failure. Raw stderr, environment, and credentials are not part of the public result: providers talk to products the user is authenticated against, and anything that escapes here reaches durable event logs and PR comments.
 
 **Results are bounded.** `output` is the final result, never the child transcript.
 

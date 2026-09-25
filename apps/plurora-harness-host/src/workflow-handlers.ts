@@ -24,12 +24,13 @@ import { readFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { HarnessWorkflowHandlers } from '@trick-harness/composition'
 import type {
-  ApprovedArtifactRef, DiagnosisContract, EvidenceRef, StageResult, WorkflowObjective,
+  ApprovedArtifactRef, DiagnosisContract, EvidenceRef, StageConstraint, StageResult, WorkflowObjective,
 } from '@trick-harness/contracts'
 import {
   ContractError,
   FINDING_CLASSES,
   ROLES,
+  STAGE_CONSTRAINT_CLASSES,
   parseConformanceContract,
   parseDiagnosisContract,
   parseStageResult,
@@ -40,6 +41,7 @@ import type { ChangeImpactReader, StageSpec } from '@trick-harness/engineering-w
 import type { ExecutorResult } from '@trick-harness/executor'
 import type { ProjectChangeSetReader } from './change-set.ts'
 import { looksLikeSecret } from './redaction.ts'
+import { loadApprovedArtifacts, type ApprovedArtifactResolverOptions } from './approved-artifacts.ts'
 
 /**
  * The line a stage is required to end with.
@@ -51,16 +53,19 @@ import { looksLikeSecret } from './redaction.ts'
 export const RESULT_MARKER = 'HARNESS-RESULT:'
 
 /** A complete ordinary result shown to stages that must report one. */
-const STAGE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"evidence":[{"kind":"diff","locator":"repository-relative/path","summary":"one line"}]}'
+const STAGE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"constraints":[],"evidence":[]}'
 
 /** A complete conformance result showing both readings the workflow performs. */
-const CONFORMANCE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"evidence":[],"conformance":{"items":[],"verdict":"PASS","summary":"one line"}}'
+const CONFORMANCE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"constraints":[],"evidence":[],"conformance":{"items":[],"verdict":"INCONCLUSIVE","summary":"one line"}}'
 
 /** Model-visible spelling of every finding class the result parser accepts. */
 const STAGE_RESULT_FINDING_CLASSES = FINDING_CLASSES.map(value => JSON.stringify(value)).join(', ')
 
 /** Model-visible spelling of every role a finding may name as its author. */
 const STAGE_RESULT_ROLES = ROLES.map(value => JSON.stringify(value)).join(', ')
+
+/** Model-visible spelling of every stage-constraint class the result parser accepts. */
+const STAGE_CONSTRAINT_CLASS_NAMES = STAGE_CONSTRAINT_CLASSES.map(value => JSON.stringify(value)).join(', ')
 
 /** How much of a stage's own summary this deployment journals. */
 export const MAX_SUMMARY_CHARS = 400
@@ -82,6 +87,7 @@ export interface PluroraWorkflowHandlerOptions {
    * classification taken from an approximation is a bar set on a guess.
    */
   readonly changeSet?: ProjectChangeSetReader
+  readonly approvedArtifacts?: ApprovedArtifactResolverOptions
 }
 
 /** The default base for every pull request this deployment opens. */
@@ -133,22 +139,23 @@ function envelopeOf(output: string): Record<string, unknown> | undefined {
 /**
  * The result for a stage that did not state one this host can read.
  *
- * BLOCKED rather than FAIL, and the distinction matters: a stage whose report
+ * INCONCLUSIVE rather than FAIL, and the distinction matters: a stage whose report
  * could not be read has established nothing either way, and recording that as a
  * failure would send the run into a repair cycle for a defect nobody found.
  *
  * @param stage - the stage that ran.
  * @param executor - who ran it.
  * @param reason - what a reader needs, quoting nothing the stage wrote.
- * @returns a BLOCKED stage result.
+ * @returns an INCONCLUSIVE stage result.
  */
 function unreadable(stage: StageSpec, executor: string, reason: string): StageResult {
   return {
     role: stage.role,
     executor,
-    verdict: 'BLOCKED',
+    verdict: 'INCONCLUSIVE',
     summary: `${reason}, so this stage established nothing`,
     findings: [],
+    constraints: [],
     evidence: [],
   }
 }
@@ -174,6 +181,7 @@ function interpret(stage: StageSpec, executor: string, result: ExecutorResult): 
       // is bounded again here because this host decides what its log holds.
       summary: safeSummary(result.failure?.safeDiagnostic ?? 'the executor failed without saying why'),
       findings: [],
+      constraints: [],
       evidence: [],
     }
   }
@@ -203,6 +211,7 @@ function interpret(stage: StageSpec, executor: string, result: ExecutorResult): 
     ...parsed,
     summary: safeSummary(parsed.summary),
     evidence: safeEvidence(parsed.evidence),
+    constraints: safeConstraints(parsed.constraints),
     // A finding carries an evidence list of its own, and the promise this host
     // makes is about what reaches the journal rather than about one field of it.
     findings: parsed.findings
@@ -219,6 +228,15 @@ function interpret(stage: StageSpec, executor: string, result: ExecutorResult): 
  */
 function safeEvidence(evidence: readonly EvidenceRef[]): readonly EvidenceRef[] {
   return evidence.filter(item => !looksLikeSecret(item.locator) && !looksLikeSecret(item.summary))
+}
+
+/** Keep bounded, credential-safe constraints while preserving their authority-neutral claims. */
+function safeConstraints(constraints: readonly StageConstraint[]): readonly StageConstraint[] {
+  return constraints.map(item => ({
+    ...item,
+    summary: safeSummary(item.summary),
+    evidence: safeEvidence(item.evidence),
+  }))
 }
 
 /** Raised when an approved document cannot be read the way this host will read one. */
@@ -299,16 +317,18 @@ async function readApproved(root: string, artifact: ApprovedArtifactRef): Promis
  * @param changeSet - this checkout's delivered change-set reader.
  * @returns the reader the runtime classifies the run from.
  */
-function changeImpactReader(changeSet: ProjectChangeSetReader): ChangeImpactReader {
+function changeImpactReader(changeSet: ProjectChangeSetReader, resolver?: ApprovedArtifactResolverOptions): ChangeImpactReader {
   return {
-    async plannedPaths(objective) {
-      const plan = await readApproved(objective.cwd, objective.approvedArtifacts.plan)
-      if (plan.sha256 !== objective.approvedArtifacts.plan.sha256) {
+    async plannedPaths(objective, signal) {
+      const plan = resolver === undefined
+        ? await readApproved(objective.cwd, objective.approvedArtifacts.plan)
+        : await loadApprovedArtifacts(objective.cwd, objective.approvedArtifacts, resolver, signal)
+      if (('planSha256' in plan ? plan.planSha256 : plan.sha256) !== objective.approvedArtifacts.plan.sha256) {
         // Named without quoting either hash: this refusal is journalled, and
         // the run stops here rather than classifying itself from the edit.
         throw new ApprovedArtifactError('the approved Plan on disk is not the one this objective was approved against')
       }
-      return extractApprovedPlanWriteSet(plan.text)
+      return extractApprovedPlanWriteSet('planText' in plan ? plan.planText : plan.text)
     },
     async actualPaths(_objective, signal) {
       return await changeSet.actualPaths(signal)
@@ -344,10 +364,12 @@ function conformanceTask(stage: StageSpec, objective: WorkflowObjective): string
     '',
     `End your final message with exactly one final line, with no code fence or text after it: ${RESULT_MARKER} ${CONFORMANCE_RESULT_EXAMPLE}`,
     'Replace the example values and populate conformance.items with every obligation.',
-    'At the top-level include "verdict", "summary", "findings" and "evidence"; findings and evidence are'
-    + ' arrays and may be empty. Also include a "conformance" object with the fields items (array of'
+    'At the top-level include "verdict", "summary", "findings", "constraints" and "evidence"; these arrays'
+    + ' may be empty. Also include a "conformance" object with the fields items (array of'
     + ' {id, source, requirement, status, implementationEvidence, verificationEvidence, summary}), verdict'
-    + ' ("PASS", "FAIL" or "BLOCKED") and summary (one line).',
+    + ' ("PASS", "PARTIAL", "INCONCLUSIVE", "FAIL" or "BLOCKED") and summary (one line). Item status is'
+    + ' one of "PASS", "MISSING", "PARTIAL", "FAIL", "BLOCKED" or "INCONCLUSIVE". A required obligation'
+    + ' that cannot be evaluated because of a stage constraint is INCONCLUSIVE, not MISSING.',
     'Keep the top-level verdict and summary equal to the conformance verdict and summary.',
     'Restate the id, source and requirement of each obligation exactly as they were given to you; a'
     + ' restated requirement is an answer to something nobody approved.',
@@ -362,32 +384,51 @@ function task(stage: StageSpec, objective: WorkflowObjective): string {
     `You are the ${stage.role} stage (${stage.stageId}) of one engineering workflow.`,
     `Objective: ${objective.requirement}`,
     `Risk: ${objective.risk}. Workload: ${objective.workload}.`,
-    'Do only the work this role covers. You may read and change the working tree.',
+    'Do only the work this role covers.',
+    ...(['implement', 'repair'].includes(stage.role)
+      ? ['You may read and change the working tree.']
+      : ['This stage is read-only and may not change the working tree.']),
     'You may not commit, push, open a pull request, merge, release, or touch a database:'
     + ' those are performed for you once this workflow decides they are warranted.',
     '',
     `End your final message with exactly one final line, with no code fence or text after it: ${RESULT_MARKER} ${STAGE_RESULT_EXAMPLE}`,
     'Replace the example values, keep every key, and emit valid JSON. Verdict is one of "PASS", "PARTIAL",'
-    + ' "FAIL", "INCONCLUSIVE" or "BLOCKED". Evidence is an array of {kind, locator, summary}, where kind is'
+    + ' "FAIL", "INCONCLUSIVE" or "BLOCKED". Constraints is an array of {id, class, raisedBy, summary, evidence};'
+    + ` class is one of ${STAGE_CONSTRAINT_CLASS_NAMES}; report required checks that could not run here as constraints.`
+    + ' Evidence is an array of {kind, locator, summary}, where kind is'
     + ' one of test, diff, log, file, pr, commit or gate. A non-empty finding has id, class, raisedBy, summary,'
     + ' confirmed and evidence.',
     `Finding class is one of ${STAGE_RESULT_FINDING_CLASSES}; raisedBy is one of ${STAGE_RESULT_ROLES}.`,
+    'Every finding includes affectedPaths (repository-relative path strings, [] if none). These are claims for'
+    + ' control-plane validation, not permission to write or deliver those paths.',
     'Findings and evidence may be [] when none apply.',
-    'Cite every file you changed as evidence of kind "diff" with the repository-relative path as its'
-    + ' locator; a path you do not cite is a path this workflow will not publish.',
+    ...(stage.role === 'debug' ? [
+      'Include a diagnosis object in the result JSON with symptom, reproduction, expectedVsActual, observedEvidence, affectedBoundary,',
+      'ruledOutHypotheses, rootCauseHypothesis, confidence, regressionTestSeam, minimalRepairSurface,',
+      'proposedRepairPaths and unknowns. proposedRepairPaths are claims only and do not grant write authority.',
+    ] : []),
+    ...(['verify', 'review', 'security', 'qa'].includes(stage.role) ? [
+      'If a required check cannot run because of sandbox, missing tool, unreadable external runtime, executor capability,',
+      'or unavailable external service, report it in constraints and use INCONCLUSIVE.',
+      'Do not classify that condition as TOOLING_DEFECT unless the defect is in the repository artifact itself.',
+    ] : []),
+    'Changed-file diff evidence helps reviewers understand the work, but evidence locators do not authorize delivery;'
+    + ' delivery uses only the deterministic path set supplied by the control plane.',
     'Include no credential, connection string or token in any of those fields.',
   ].join('\n')
 }
 
+/** A bounded deployment refusal, with no model- or path-supplied text. */
+export class PluroraDeliveryError extends Error {
+  override readonly name = 'PluroraDeliveryError'
+
+  constructor() {
+    super('Plurora delivery requires a deterministic workspace mutation set')
+  }
+}
+
 /**
  * Build this deployment's workflow handlers.
- *
- * The returned handlers accumulate the write set across the run: every `diff`
- * locator any stage cited becomes a path delivery is allowed to stage, and
- * nothing else does. That is why a stage that changed a file and did not cite
- * it leaves that file unpublished — the alternative is a delivery whose scope is
- * whatever the working tree happens to hold, which is unbounded by definition.
- *
  * @param options - the checkout branch, optional PR base and change-set reader.
  * @returns the handlers the composition reads provider output through.
  */
@@ -395,23 +436,22 @@ export function createPluroraWorkflowHandlers(
   options: PluroraWorkflowHandlerOptions,
 ): HarnessWorkflowHandlers {
   const base = options.baseBranch ?? DEFAULT_BASE_BRANCH
-  const writeSet = new Set<string>()
-
   return {
     interpret(stage, executor, result) {
-      const interpreted = interpret(stage, executor, result)
-      for (const item of interpreted.evidence) {
-        if (item.kind === 'diff') writeSet.add(item.locator.replaceAll('\\', '/'))
-      }
-      return interpreted
+      return interpret(stage, executor, result)
     },
     task,
     dodObligations: pluroraDodObligations,
     // Absent rather than present-and-undefined: the runtime tells the two
     // apart, and a run holding a reader that answers nothing would plan its
     // certification from a change set nobody read.
-    ...options.changeSet === undefined ? {} : { changeImpact: changeImpactReader(options.changeSet) },
+    ...options.changeSet === undefined ? {} : { changeImpact: changeImpactReader(options.changeSet, options.approvedArtifacts) },
     async loadApprovedArtifacts(objective) {
+      if (options.approvedArtifacts !== undefined) {
+        return await loadApprovedArtifacts(
+          objective.cwd, objective.approvedArtifacts, options.approvedArtifacts, new AbortController().signal,
+        )
+      }
       const [spec, plan] = await Promise.all([
         readApproved(objective.cwd, objective.approvedArtifacts.spec),
         readApproved(objective.cwd, objective.approvedArtifacts.plan),
@@ -467,11 +507,14 @@ export function createPluroraWorkflowHandlers(
       }
     },
     describeDelivery(input) {
+      if (input.changedPaths === undefined) {
+        throw new PluroraDeliveryError()
+      }
       return {
         branch: options.branch,
         // Sorted so two runs over the same set produce the same request, and a
         // reviewer comparing two deliveries is comparing content, not order.
-        files: [...writeSet].toSorted(),
+        files: [...input.changedPaths].toSorted(),
         // Objectives are natural language and may violate a checkout's commit
         // policy. Keep their description in the PR title and use one stable,
         // repository-neutral Conventional Commit subject for the Git record.
