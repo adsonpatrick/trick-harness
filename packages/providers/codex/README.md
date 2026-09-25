@@ -20,9 +20,9 @@ No `CODEX_HOME`, Codex profile, or config file is read, written, or synthesised 
 
 The route's permission mode fixes the sandbox: `read-only` and `workspace-write` map onto the `SandboxMode` values of the same names. The approval policy stays `never`, because a routed worker has no human to answer an approval request.
 
-## Availability is distinguished from quality
+## Failure categories are distinguished from fallback policy
 
-`ExecutorFailure.availability` drives fallback routing, so it answers one question only: does the executor's reachability explain this failure? Quota exhaustion, session budget, server overload, internal server errors, and the four transport variants are availability failures — they change on their own or on a different executor. A context-window overflow, a bad request, a sandbox error, a non-steerable turn, a cyber-policy refusal, an unauthorized account, and a failed thread rollback are not: they are properties of the request, the workspace, or the account, and a fallback route would fail the same way. A completed run that did poor work is not a failure at all and never reaches this map.
+The provider maps native Codex faults to canonical `ExecutorFailure.category` values. Routing classifies those categories using its closed availability and quality sets before considering fallback: quota exhaustion, session budget, server overload, internal server errors, and transport failures can make a fallback appropriate; context-window overflow, a bad request, sandbox denial, policy refusal, an unauthorized account, and unknown faults cannot. A completed run that did poor work is not an executor failure at all.
 
 Diagnostics are composed from parsed facts, never forwarded from the child, so no product prose, stderr, path, or protocol payload can reach a durable event log through this value.
 

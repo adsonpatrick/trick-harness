@@ -1451,7 +1451,7 @@ Expected: no unintended snapshot or dependency-boundary drift.
 
 Observed: `corepack pnpm run constraints` passes, and the activation delivery plus stage-result prompt snapshots pass (3 tests). The full `corepack pnpm run test:snapshot` run was not green on this Windows host: transcript/headless/SDK snapshot suites failed or stalled at 27–48 second test durations. It was interrupted after several independent failures and emitted no final summary; no snapshot files were refreshed from that run.
 
-- [ ] **Step 5: Inspect the final diff for forbidden regressions**
+- [x] **Step 5: Inspect the final diff for forbidden regressions**
 
 Explicitly verify:
 - no `provider-error` or `route-unsupported` is emitted as an executor failure category;
@@ -1462,7 +1462,7 @@ Explicitly verify:
 
 Use repository search plus the final diff; do not rely only on tests.
 
-The code search found no emitted `provider-error` / `route-unsupported` categories, no `ExecutorFailure.availability` field in implementation/types, no model-diff-derived delivery write set, and all workflow-result fixtures include `constraints`. One legacy paragraph in `packages/providers/codex/README.md` still describes the removed `ExecutorFailure.availability` property and must be corrected before this audit is complete. Repair dispatch calls the deterministic scope builder and authorization gate before journaling authority and starting the repair.
+The code search found no emitted `provider-error` / `route-unsupported` categories or `ExecutorFailure.availability` references, no model-diff-derived delivery write set, and all workflow-result fixtures include `constraints`. Repair dispatch calls the deterministic scope builder and authorization gate before journaling authority and starting the repair. The executor and Codex READMEs now document category-based fallback classification accurately.
 
 - [ ] **Step 6: Push the implementation branch and open a PR**
 
