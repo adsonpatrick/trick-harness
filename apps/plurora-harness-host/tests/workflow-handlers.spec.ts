@@ -220,7 +220,7 @@ describe('the Plurora task text', () => {
     const text = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)
 
     expect(text).toContain('exactly one final line')
-    expect(text).toContain(`${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"constraints":[],"evidence":[]}`)
+    expect(text).toContain(`${RESULT_MARKER} {"verdict":"PARTIAL","summary":"the required evaluation is complete with one optional improvement","findings":[{"id":"F-1"`)
     expect(text).toContain('affectedPaths')
     expect(text).toContain('evidence locators do not authorize delivery')
   })
@@ -545,11 +545,22 @@ describe('reading a conformance result back', () => {
     expect(prompt).toContain(RESULT_MARKER)
     expect(prompt).toContain('conformance')
     expect(prompt).toContain('implementationEvidence')
-    expect(prompt).toContain('top-level include "verdict", "summary", "findings", "constraints" and "evidence"')
-    expect(prompt).toContain(
-      `${RESULT_MARKER} {"verdict":"PASS","summary":"one line","findings":[],"constraints":[],"evidence":[],`
-      + '"conformance":{"items":[],"verdict":"INCONCLUSIVE","summary":"one line"}}',
-    )
+    expect(prompt).toContain('StageResult fields are role, executor')
+    expect(prompt).toContain('{id, class, raisedBy, summary, confirmed, affectedPaths, evidence}')
+    expect(prompt).toContain('"confirmed":false')
+    expect(prompt).toContain('"affectedPaths":[]')
+    expect(prompt).toContain('"raisedBy":"conformance"')
+    expect(prompt).toContain('"conformance":{"items":[],"verdict":"INCONCLUSIVE"')
     expect(prompt).toContain('"PASS", "PARTIAL", "INCONCLUSIVE", "FAIL" or "BLOCKED"')
+  })
+
+  it('uses the same complete Finding instructions in ordinary stage prompts', () => {
+    const prompt = createPluroraWorkflowHandlers({ branch: 'test/canary' }).task(STAGE, OBJECTIVE)
+
+    expect(prompt).toContain('StageResult fields are role, executor')
+    expect(prompt).toContain('{id, class, raisedBy, summary, confirmed, affectedPaths, evidence}')
+    expect(prompt).toContain('"raisedBy":"implement"')
+    expect(prompt).toContain('"confirmed":false')
+    expect(prompt).toContain('"affectedPaths":[]')
   })
 })

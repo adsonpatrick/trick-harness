@@ -163,11 +163,12 @@ function conformanceOutput(
   extra: readonly Record<string, unknown>[] = [],
   omit: readonly string[] = [],
   constraints: readonly Record<string, unknown>[] = [],
+  findings: readonly Record<string, unknown>[] = [],
 ): string {
   const envelope = {
     verdict: 'PASS',
     summary: 'conformance ran',
-    findings: [],
+    findings,
     constraints,
     evidence: [],
     conformance: {
@@ -216,6 +217,7 @@ async function runLifecycle(
     manifest?: ConformanceManifest
     executors?: readonly string[]
     constraints?: readonly Record<string, unknown>[]
+    findings?: readonly Record<string, unknown>[]
   } = {},
 ): Promise<PullRequestOutcome> {
   const manifest = options.manifest ?? expectedManifest()
@@ -229,7 +231,7 @@ async function runLifecycle(
         return { status: 'completed', output: passing('the stage') }
       }
       return { status: 'completed', output: conformanceOutput(
-        manifest, options.answer, options.extra, options.omit, options.constraints,
+        manifest, options.answer, options.extra, options.omit, options.constraints, options.findings,
       ) }
     }))
   }
@@ -318,6 +320,24 @@ describe('a pull request that reaches a human', () => {
 })
 
 describe('the ways a branch could otherwise be called ready', () => {
+  it('does not certify when conformance emits a malformed Finding', async () => {
+    const outcome = await runLifecycle(await checkout(), {
+      findings: [{
+        id: 'F-1',
+        class: 'NOT_A_CLASS',
+        raisedBy: 'conformance',
+        summary: 'malformed finding',
+        confirmed: true,
+        affectedPaths: [],
+        evidence: [],
+      }],
+    })
+
+    expect(outcome.state).toBe('INCONCLUSIVE')
+    expect(outcome.state).not.toBe('PR_READY')
+    expect(outcome.outcome.stages.find(stage => stage.role === 'conformance')?.verdict).toBe('INCONCLUSIVE')
+  })
+
   it('reports a constrained missing obligation as inconclusive rather than missing', async () => {
     const outcome = await runLifecycle(await checkout(), {
       answer: obligation => ({
