@@ -1,6 +1,6 @@
 # Trick Harness Model Refresh & Qualification Design
 
-**Status:** REVIEW — concept approved; written specification pending final approval.  
+**Status:** APPROVED.  
 **Date:** 2026-09-26  
 **Implementation timing:** Deferred until the current Trick Harness activation/hardening work is complete and the runtime is demonstrably stable.
 
