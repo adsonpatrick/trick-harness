@@ -662,7 +662,7 @@ describe('Plurora policy driving a live run', () => {
       expect(outcome.state).toBe('completed')
       expect(outcome.repairCycles).toBe(1)
       expect(ids).toEqual([
-        'implement-1', 'verify-1', 'delivery-1', 'review-1',
+        'implement-1', 'verify-1', 'conformance-preflight', 'delivery-1', 'review-1',
         'debug-1', 'repair-1', 'verify-2', 'delivery-2', 'review-2',
         'qa-2', 'conformance-2', 'verify-final-2',
       ])
@@ -677,7 +677,7 @@ describe('Plurora policy driving a live run', () => {
 
       expect(outcome.state).toBe('completed')
       expect(outcome.stages.map(stage => stage.role)).toEqual([
-        'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
+        'implement', 'verify', 'conformance', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
       ])
       expect(outcome.stages.at(-1)?.stageId).toBe('verify-final')
       noMutationAuthorityInPrompts(seen)

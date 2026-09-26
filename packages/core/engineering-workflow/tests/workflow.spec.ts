@@ -204,20 +204,20 @@ const REPAIR_CHANGE_IMPACT = Object.freeze({
 describe('the stage plan', () => {
   it('delivers before it certifies, and ends on a fresh verification', () => {
     expect(planStages(OBJECTIVE).map(stage => stage.role))
-      .toEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
+      .toEqual(['implement', 'verify', 'conformance', 'delivery', 'review', 'conformance', 'verify'])
     expect(planStages(OBJECTIVE).at(-1)?.stageId).toBe('verify-final')
   })
 
   it('buys QA from medium risk upwards', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'high' })
     expect(stages.map(stage => stage.role))
-      .toEqual(['implement', 'verify', 'delivery', 'review', 'qa', 'conformance', 'verify'])
+      .toEqual(['implement', 'verify', 'conformance', 'delivery', 'review', 'qa', 'conformance', 'verify'])
   })
 
   it('adds a security stage for a critical objective', () => {
     const stages = planStages({ ...OBJECTIVE, risk: 'critical' })
     expect(stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
+      'implement', 'verify', 'conformance', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
     ])
   })
 
@@ -292,12 +292,12 @@ describe('a normal run', () => {
     expect(outcome.state).toBe('completed')
     expect(outcome.verdict).toBe('PASS')
     expect(outcome.stages.map(stage => stage.role))
-      .toEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
+      .toEqual(['implement', 'verify', 'conformance', 'delivery', 'review', 'conformance', 'verify'])
     // No executor was asked for delivery: publishing is a bounded command
     // sequence, not a question put to a model.
     expect(seen).toEqual([
       'builder:workspace-write', 'reviewer:read-only', 'reviewer:read-only', 'reviewer:read-only',
-      'reviewer:read-only',
+      'reviewer:read-only', 'reviewer:read-only',
     ])
   })
 
@@ -323,8 +323,8 @@ describe('a normal run', () => {
 
     expect(projection.objective?.id).toBe('obj-1')
     // Five routed stages, six verdicts: delivery reports one without being routed.
-    expect(projection.routes).toHaveLength(5)
-    expect(projection.verdicts).toHaveLength(6)
+    expect(projection.routes).toHaveLength(6)
+    expect(projection.verdicts).toHaveLength(7)
     // The capability window opened and closed, so nothing is left open.
     expect(projection.openCapabilities).toEqual([])
     expect(JSON.stringify(session.events)).toContain('github-delivery')
@@ -520,10 +520,10 @@ describe('a run that goes wrong', () => {
     expect(outcome.state).toBe('completed')
     expect(outcome.repairCycles).toBe(1)
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'debug', 'repair', 'verify', 'delivery', 'review', 'conformance', 'verify',
+      'implement', 'verify', 'debug', 'repair', 'verify', 'conformance', 'delivery', 'review', 'conformance', 'verify',
     ])
     expect(outcome.stages.find(stage => stage.role === 'debug')?.permissionMode).toBe('read-only')
-    expect(modes).toEqual(['read-only', 'read-only', 'read-only', 'read-only', 'read-only', 'read-only'])
+    expect(modes).toEqual(['read-only', 'read-only', 'read-only', 'read-only', 'read-only', 'read-only', 'read-only'])
     for (const stage of outcome.stages) expect(stage.permissionMode).toBe(permissionModeFor(stage.role))
     expect(JSON.stringify(session.events)).toContain('harness/diagnosis')
     expect(repairTask).toContain('modify only repository-relative paths in this exact JSON array')
@@ -663,7 +663,7 @@ describe('a run that goes wrong', () => {
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'repair', 'verify', 'delivery', 'review', 'conformance', 'verify',
+      'implement', 'verify', 'repair', 'verify', 'conformance', 'delivery', 'review', 'conformance', 'verify',
     ])
   })
 
@@ -1118,7 +1118,7 @@ describe('triage inside a run', () => {
 
     expect(outcome.state).toBe('completed')
     expect(outcome.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'delivery', 'review', 'qa',
+      'implement', 'verify', 'conformance', 'delivery', 'review', 'qa',
       'debug', 'repair', 'verify', 'delivery', 'review', 'qa',
       'conformance', 'verify',
     ])
@@ -1666,11 +1666,11 @@ describe('who is allowed to publish the work', () => {
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    expect(outcome.stages).toHaveLength(6)
+    expect(outcome.stages).toHaveLength(7)
     // Implement, verify, review and the final verify. The budget bounds how
     // often a model is asked, and a bounded command sequence is not one of
     // those times.
-    expect(outcome.executorStarts).toBe(5)
+    expect(outcome.executorStarts).toBe(6)
   })
 })
 
@@ -1774,12 +1774,12 @@ describe('a run that changes a database', () => {
     })
 
     expect(outcome.state).toBe('completed')
-    expect(order.slice(0, 3)).toEqual(['implement', 'verify', 'database-verification'])
+    expect(order.slice(0, 4)).toEqual(['implement', 'verify', 'verify', 'database-verification'])
     expect(delivered).toEqual(['delivery-1'])
     expect(outcome.stages.map(stage => stage.stageId)).toContain('delivery-1-database')
     // A bounded command sequence, so the budget that counts questions to models
     // is untouched by it.
-    expect(outcome.executorStarts).toBe(5)
+    expect(outcome.executorStarts).toBe(6)
   })
 
   it('leaves a run that changes no database alone', async () => {
@@ -1880,20 +1880,20 @@ describe('splitting a pull-request run at delivery', () => {
     const roles = await rolesFor(reader([], ['src/auth/session.ts']))
 
     expect(roles).toStrictEqual([
-      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
+      'implement', 'verify', 'conformance', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
     ])
   })
 
   it('buys the QA a surface asks for without buying a security reading nobody asked for', async () => {
     const roles = await rolesFor(reader([], ['src/ui/button.tsx']))
 
-    expect(roles).toStrictEqual(['implement', 'verify', 'delivery', 'review', 'qa', 'conformance', 'verify'])
+    expect(roles).toStrictEqual(['implement', 'verify', 'conformance', 'delivery', 'review', 'qa', 'conformance', 'verify'])
   })
 
   it('still reads and verifies a change no rule spoke about', async () => {
     const roles = await rolesFor(reader(['docs/readme.md'], ['docs/readme.md']))
 
-    expect(roles).toStrictEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
+    expect(roles).toStrictEqual(['implement', 'verify', 'conformance', 'delivery', 'review', 'conformance', 'verify'])
   })
 
   it('keeps what the approved plan already bought when the diff no longer shows it', async () => {
@@ -2535,7 +2535,7 @@ describe('marking a delivered revision as pending certification', () => {
     // The first revision is marked pending, reviewed, found wanting, repaired,
     // and the branch that replaces it is marked pending in its own right.
     expect(log).toEqual([
-      'implement', 'verify', `pending(${FIRST_REVISION})`, 'review', 'qa',
+      'implement', 'verify', 'conformance', `pending(${FIRST_REVISION})`, 'review', 'qa',
       'debug', 'repair', 'verify', `pending(${SECOND_REVISION})`, 'review', 'qa',
       'conformance', 'verify', `success(${SECOND_REVISION})`,
     ])
@@ -2703,7 +2703,7 @@ describe('publishing the terminal certification', () => {
     const certification = recorder()
     const outcome = await runnerWith(certification.port).run({
       objective: OBJECTIVE,
-      interpret: (stage, executor) => stage.role === 'conformance'
+      interpret: (stage, executor) => stage.stageId === 'conformance-1'
         ? { role: stage.role, executor, verdict: 'FAIL', summary: 'an obligation is unmet', findings: [], constraints: [], evidence: [] }
         : interpretAllPass(stage, executor),
       task: taskFor,

@@ -207,9 +207,9 @@ describe('holding the run to what its certification requires', () => {
 })
 
 describe('planning the two halves of a pull-request run', () => {
-  it('implements, verifies and delivers before anything certifies', () => {
+  it('implements, verifies and reads pre-delivery conformance before publishing', () => {
     expect(planPullRequestImplementationStages().map(stage => stage.role))
-      .toStrictEqual(['implement', 'verify', 'delivery'])
+      .toStrictEqual(['implement', 'verify', 'conformance', 'delivery'])
   })
 
   it('reviews, then buys what the impact requires, then closes on conformance', () => {

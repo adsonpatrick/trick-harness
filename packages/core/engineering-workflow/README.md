@@ -6,7 +6,7 @@ This is a fork-local package: private to `adsonpatrick/trick-harness`, never pub
 
 ## The plan is a function of the objective
 
-`planStages` is the default, and it is the pull-request lifecycle: implement, verify, deliver, review, and a fresh verification to close. It reads the objective's risk and nothing else, so the same objective plans the same way on every machine and in every replay. Risk adds certification rather than changing what implementation does — QA from medium, a security stage at critical — which keeps "what will this run do" answerable before anything is dispatched, from the objective alone. A database change adds no stage: the isolated preview is a capability the delivery stage runs before it publishes, not somewhere a model could be routed.
+`planStages` is the default, and it is the pull-request lifecycle: implement, verify, conformance preflight, deliver, review, and a fresh verification to close. The first delivery runs only after conformance returns a valid pass; certification after publication still reads the diff a human reviewer sees. It reads the objective's risk and nothing else, so the same objective plans the same way on every machine and in every replay. Risk adds certification rather than changing what implementation does — QA from medium, a security stage at critical — which keeps "what will this run do" answerable before anything is dispatched, from the objective alone. A database change adds no stage: the isolated preview is a capability the delivery stage runs before it publishes, not somewhere a model could be routed.
 
 ## One owner, one signal
 
@@ -56,7 +56,7 @@ When the diagnosis names a `productDecisionDependency`, the gate returns a `prod
 
 ## A pull request is certified after it is published, not before
 
-`planPullRequestStages` is what `planStages` returns, and the thing that matters about it is where delivery sits: the branch is delivered as soon as implementation verifies, and every certifying stage after that reads the same published diff a person would. A review of an unpublished working tree reviews something nobody can comment on. Risk still decides how much certification is bought — QA above `low`, security at `critical` — and every plan ends on a fresh `verify-final`, so nothing is called ready on a reading taken before the last repair.
+`planPullRequestStages` is what `planStages` returns. After implementation and verification, `conformance-preflight` must establish a valid pass before the first delivery capability call; a missing, malformed, or non-passing result ends the run without that call. Delivery then publishes the verified branch before review, so every post-publication certifying stage reads the diff a person can inspect. Risk still decides how much certification is bought — QA above `low`, security at `critical` — and every plan ends on a fresh `verify-final`, so nothing is called ready on the strength of a reading taken before the last repair. The final conformance reading remains necessary for `PR_READY`; preflight does not certify the published revision by itself.
 
 A repair inside that plan is verified and then re-delivered before it is re-read. The runtime re-queues a fresh `verify-N` and then `delivery-N` between the repair and the re-run of the stage that failed, so an unverified fix is never published and the next review reads the fix rather than the diff that provoked it. When verification is itself the stage that failed, its own re-run is that proof and no second one is queued.
 

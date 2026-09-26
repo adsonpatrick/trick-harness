@@ -291,8 +291,9 @@ function passing(stage: { role: string }, executor: string): StageResult {
 function failing(
   role: string,
   verdict: 'FAIL' | 'INCONCLUSIVE' | 'BLOCKED',
+  stageId?: string,
 ): (stage: { role: string; stageId: string }, executor: string) => StageResult {
-  return (stage, executor) => stage.role === role
+  return (stage, executor) => stage.role === role && (stageId === undefined || stage.stageId === stageId)
     ? { role: stage.role, executor, verdict, summary: `${stage.role} did not pass`, findings: [], constraints: [], evidence: [] }
     : passing(stage, executor)
 }
@@ -404,7 +405,7 @@ describe('what Plurora actually publishes on a pull request', () => {
     // the branch is what the approved spec and plan asked for.
     const github = remote()
 
-    const { outcome } = await run(github, { interpret: failing('conformance', 'FAIL') })
+    const { outcome } = await run(github, { interpret: failing('conformance', 'FAIL', 'conformance-1') })
 
     expect(github.posts.map(post => post.state)).toEqual(['pending', 'failure'])
     expect(outcome.verdict).not.toBe('PASS')
@@ -416,7 +417,7 @@ describe('what Plurora actually publishes on a pull request', () => {
     // claim that the branch satisfies what was approved, and silence is not it.
     const github = remote()
 
-    await run(github, { interpret: failing('conformance', 'INCONCLUSIVE') })
+    await run(github, { interpret: failing('conformance', 'INCONCLUSIVE', 'conformance-1') })
 
     expect(github.posts.map(post => post.state)).toEqual(['pending', 'failure'])
   })
@@ -475,7 +476,7 @@ describe('what Plurora actually publishes on a pull request', () => {
       revision: REVISION,
     })
 
-    await run(github, { interpret: failing('conformance', 'FAIL') })
+    await run(github, { interpret: failing('conformance', 'FAIL', 'conformance-1') })
 
     // Latest wins on GitHub, and this run's first act was to make the latest
     // one pending. The stale success never described the work being done now.
@@ -488,7 +489,7 @@ describe('what Plurora actually publishes on a pull request', () => {
     const { outcome } = await run(github, {
       interpret: (stage, executor) => {
         // Somebody pushed while the certifying half was reading the branch.
-        if (stage.role === 'conformance') {
+        if (stage.stageId === 'conformance-1') {
           github.state.head = MOVED_REVISION
           github.state.pullRequest.sha = MOVED_REVISION
         }
