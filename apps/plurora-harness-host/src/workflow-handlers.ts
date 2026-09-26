@@ -31,6 +31,7 @@ import {
   FINDING_CLASSES,
   ROLES,
   STAGE_CONSTRAINT_CLASSES,
+  WORKFLOW_VERDICTS,
   parseConformanceContract,
   parseDiagnosisContract,
   parseStageResult,
@@ -52,20 +53,52 @@ import { loadApprovedArtifacts, type ApprovedArtifactResolverOptions } from './a
  */
 export const RESULT_MARKER = 'HARNESS-RESULT:'
 
-/** A complete ordinary result shown to stages that must report one. */
-const STAGE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"constraints":[],"evidence":[]}'
-
-/** A complete conformance result showing both readings the workflow performs. */
-const CONFORMANCE_RESULT_EXAMPLE = '{"verdict":"PASS","summary":"one line","findings":[],"constraints":[],"evidence":[],"conformance":{"items":[],"verdict":"INCONCLUSIVE","summary":"one line"}}'
-
 /** Model-visible spelling of every finding class the result parser accepts. */
-const STAGE_RESULT_FINDING_CLASSES = FINDING_CLASSES.map(value => JSON.stringify(value)).join(', ')
+const FINDING_CLASS_NAMES = FINDING_CLASSES.map(value => JSON.stringify(value)).join(', ')
 
 /** Model-visible spelling of every role a finding may name as its author. */
-const STAGE_RESULT_ROLES = ROLES.map(value => JSON.stringify(value)).join(', ')
+const ROLE_NAMES = ROLES.map(value => JSON.stringify(value)).join(', ')
 
 /** Model-visible spelling of every stage-constraint class the result parser accepts. */
 const STAGE_CONSTRAINT_CLASS_NAMES = STAGE_CONSTRAINT_CLASSES.map(value => JSON.stringify(value)).join(', ')
+
+/** Model-visible spelling of every stage verdict the result parser accepts. */
+const WORKFLOW_VERDICT_NAMES = WORKFLOW_VERDICTS.map(value => JSON.stringify(value)).join(', ')
+
+/** Build the one canonical stage-result contract fragment shared by stage prompts. */
+function stageResultContract(role: StageSpec['role']): {
+  readonly example: string
+  readonly exampleValue: Readonly<Record<string, unknown>>
+  readonly instructions: readonly string[]
+} {
+  const finding = {
+    id: 'F-1',
+    class: 'IMPROVEMENT',
+    raisedBy: role,
+    summary: 'one optional improvement remains',
+    confirmed: false,
+    affectedPaths: [],
+    evidence: [{ kind: 'file', locator: 'src/example.ts', summary: 'the relevant implementation' }],
+  }
+  const exampleValue = {
+    verdict: 'PARTIAL',
+    summary: 'the required evaluation is complete with one optional improvement',
+    findings: [finding],
+    constraints: [],
+    evidence: [],
+  }
+  return {
+    example: JSON.stringify(exampleValue),
+    exampleValue,
+    instructions: [
+      `StageResult fields are role, executor, verdict (${WORKFLOW_VERDICT_NAMES}), summary (one line), findings (Finding[]), constraints (StageConstraint[]) and evidence (EvidenceRef[]). The host supplies role and executor; your envelope supplies the other fields.`,
+      `Each Finding is {id, class, raisedBy, summary, confirmed, affectedPaths, evidence}; class is one of ${FINDING_CLASS_NAMES}; raisedBy is one of ${ROLE_NAMES}; confirmed is boolean; affectedPaths is an array of repository-relative paths (use [] when none); evidence is an array of {kind, locator, summary}, where kind is test, diff, log, file, pr, commit or gate.`,
+      `Each StageConstraint is {id, class, raisedBy, summary, evidence}; class is one of ${STAGE_CONSTRAINT_CLASS_NAMES}.`,
+      'Each EvidenceRef is {kind, locator, summary}; kind is test, diff, log, file, pr, commit or gate.',
+      'The example finding demonstrates the complete Finding fields only; remove it when no finding applies. Findings, constraints and evidence may each be [].',
+    ],
+  }
+}
 
 /** How much of a stage's own summary this deployment journals. */
 export const MAX_SUMMARY_CHARS = 400
@@ -351,6 +384,13 @@ function changeImpactReader(changeSet: ProjectChangeSetReader, resolver?: Approv
  */
 function conformanceTask(stage: StageSpec, objective: WorkflowObjective): string {
   const { spec, plan } = objective.approvedArtifacts
+  const stageResult = stageResultContract(stage.role)
+  const conformanceExample = JSON.stringify({
+    ...stageResult.exampleValue,
+    verdict: 'INCONCLUSIVE',
+    summary: 'the conformance reading is incomplete',
+    conformance: { items: [], verdict: 'INCONCLUSIVE', summary: 'the conformance reading is incomplete' },
+  })
   return [
     `You are the conformance stage (${stage.stageId}) of one engineering workflow.`,
     `Objective: ${objective.requirement}`,
@@ -362,10 +402,10 @@ function conformanceTask(stage: StageSpec, objective: WorkflowObjective): string
     'This stage is read-only: you may not change the working tree, and work you fixed while judging'
     + ' it is work nobody reviewed.',
     '',
-    `End your final message with exactly one final line, with no code fence or text after it: ${RESULT_MARKER} ${CONFORMANCE_RESULT_EXAMPLE}`,
+    `End your final message with exactly one final line, with no code fence or text after it: ${RESULT_MARKER} ${conformanceExample}`,
     'Replace the example values and populate conformance.items with every obligation.',
-    'At the top-level include "verdict", "summary", "findings", "constraints" and "evidence"; these arrays'
-    + ' may be empty. Also include a "conformance" object with the fields items (array of'
+    ...stageResult.instructions,
+    'Also include a "conformance" object with the fields items (array of'
     + ' {id, source, requirement, status, implementationEvidence, verificationEvidence, summary}), verdict'
     + ' ("PASS", "PARTIAL", "INCONCLUSIVE", "FAIL" or "BLOCKED") and summary (one line). Item status is'
     + ' one of "PASS", "MISSING", "PARTIAL", "FAIL", "BLOCKED" or "INCONCLUSIVE". A required obligation'
@@ -380,6 +420,7 @@ function conformanceTask(stage: StageSpec, objective: WorkflowObjective): string
 /** Prompt text for one stage, stating the envelope every stage owes back. */
 function task(stage: StageSpec, objective: WorkflowObjective): string {
   if (stage.role === 'conformance') return conformanceTask(stage, objective)
+  const stageResult = stageResultContract(stage.role)
   return [
     `You are the ${stage.role} stage (${stage.stageId}) of one engineering workflow.`,
     `Objective: ${objective.requirement}`,
@@ -391,17 +432,11 @@ function task(stage: StageSpec, objective: WorkflowObjective): string {
     'You may not commit, push, open a pull request, merge, release, or touch a database:'
     + ' those are performed for you once this workflow decides they are warranted.',
     '',
-    `End your final message with exactly one final line, with no code fence or text after it: ${RESULT_MARKER} ${STAGE_RESULT_EXAMPLE}`,
-    'Replace the example values, keep every key, and emit valid JSON. Verdict is one of "PASS", "PARTIAL",'
-    + ' "FAIL", "INCONCLUSIVE" or "BLOCKED". Constraints is an array of {id, class, raisedBy, summary, evidence};'
-    + ` class is one of ${STAGE_CONSTRAINT_CLASS_NAMES}; report required checks that could not run here as constraints.`
-    + ' Evidence is an array of {kind, locator, summary}, where kind is'
-    + ' one of test, diff, log, file, pr, commit or gate. A non-empty finding has id, class, raisedBy, summary,'
-    + ' confirmed and evidence.',
-    `Finding class is one of ${STAGE_RESULT_FINDING_CLASSES}; raisedBy is one of ${STAGE_RESULT_ROLES}.`,
-    'Every finding includes affectedPaths (repository-relative path strings, [] if none). These are claims for'
-    + ' control-plane validation, not permission to write or deliver those paths.',
-    'Findings and evidence may be [] when none apply.',
+    `End your final message with exactly one final line, with no code fence or text after it: ${RESULT_MARKER} ${stageResult.example}`,
+    'Replace the example values, keep every key, and emit valid JSON.',
+    ...stageResult.instructions,
+    'Report required checks that could not run here as constraints.',
+    'Finding affectedPaths are claims for control-plane validation, not permission to write or deliver those paths.',
     ...(stage.role === 'debug' ? [
       'Include a diagnosis object in the result JSON with symptom, reproduction, expectedVsActual, observedEvidence, affectedBoundary,',
       'ruledOutHypotheses, rootCauseHypothesis, confidence, regressionTestSeam, minimalRepairSurface,',

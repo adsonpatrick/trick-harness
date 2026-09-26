@@ -75,6 +75,7 @@ let session: Session
 let executors: HarnessExecutorRuntime
 let runner: WorkflowRunner
 let started: ExecutorStartRequest[]
+let deliveries: number
 
 /**
  * The obligation set a conformance stage is answering, built here rather than
@@ -163,11 +164,12 @@ function conformanceOutput(
   extra: readonly Record<string, unknown>[] = [],
   omit: readonly string[] = [],
   constraints: readonly Record<string, unknown>[] = [],
+  findings: readonly Record<string, unknown>[] = [],
 ): string {
   const envelope = {
     verdict: 'PASS',
     summary: 'conformance ran',
-    findings: [],
+    findings,
     constraints,
     evidence: [],
     conformance: {
@@ -192,12 +194,15 @@ function provider(name: string, start: (request: ExecutorStartRequest) => Promis
 
 /** A delivery capability that publishes without touching a remote. */
 const DELIVERY: DeliveryCapabilityPort = {
-  deliver: async () => ({
-    delivered: true,
-    summary: 'the branch was pushed and its pull request updated',
-    evidence: [],
-    findings: [],
-  }),
+  deliver: async () => {
+    deliveries += 1
+    return {
+      delivered: true,
+      summary: 'the branch was pushed and its pull request updated',
+      evidence: [],
+      findings: [],
+    }
+  },
 }
 
 /**
@@ -216,9 +221,12 @@ async function runLifecycle(
     manifest?: ConformanceManifest
     executors?: readonly string[]
     constraints?: readonly Record<string, unknown>[]
+    findings?: readonly Record<string, unknown>[]
+    malformedFindingOn?: number
   } = {},
 ): Promise<PullRequestOutcome> {
   const manifest = options.manifest ?? expectedManifest()
+  let conformanceCalls = 0
   for (const name of options.executors ?? ['codex', 'opencode']) {
     executors.register(provider(name, async (request) => {
       started.push(request)
@@ -228,8 +236,20 @@ async function runLifecycle(
       if (!request.task.startsWith(CONFORMANCE_PROMPT)) {
         return { status: 'completed', output: passing('the stage') }
       }
+      conformanceCalls += 1
+      const malformedFindings = options.malformedFindingOn === conformanceCalls
+        ? [{
+          id: 'F-1',
+          class: 'NOT_A_CLASS',
+          raisedBy: 'conformance',
+          summary: 'malformed finding',
+          confirmed: true,
+          affectedPaths: [],
+          evidence: [],
+        }]
+        : options.findings
       return { status: 'completed', output: conformanceOutput(
-        manifest, options.answer, options.extra, options.omit, options.constraints,
+        manifest, options.answer, options.extra, options.omit, options.constraints, malformedFindings,
       ) }
     }))
   }
@@ -262,6 +282,7 @@ beforeEach(async () => {
     capabilities: { delivery: DELIVERY },
   })
   started = []
+  deliveries = 0
 })
 
 describe('a pull request that reaches a human', () => {
@@ -283,9 +304,11 @@ describe('a pull request that reaches a human', () => {
     const ids = outcome.outcome.stages.map(stage => stage.stageId)
 
     expect(outcome.state).toBe('PR_READY')
+    expect(ids.indexOf('conformance-preflight')).toBeLessThan(ids.indexOf('delivery-1'))
     expect(ids.lastIndexOf('verify-final')).toBeGreaterThan(ids.lastIndexOf('conformance-1'))
     expect(outcome.outcome.stages.findLast(stage => stage.role === 'conformance')?.verdict).toBe('PASS')
     expect(outcome.outcome.stages.at(-1)?.verdict).toBe('PASS')
+    expect(deliveries).toBe(1)
   })
 
   it('reads a routine conformance on the balanced Codex tier at high reasoning effort', async () => {
@@ -318,6 +341,25 @@ describe('a pull request that reaches a human', () => {
 })
 
 describe('the ways a branch could otherwise be called ready', () => {
+  it('does not certify when conformance emits a malformed Finding', async () => {
+    const outcome = await runLifecycle(await checkout(), {
+      malformedFindingOn: 1,
+    })
+
+    expect(outcome.state).toBe('INCONCLUSIVE')
+    expect(outcome.state).not.toBe('PR_READY')
+    expect(outcome.outcome.stages.find(stage => stage.role === 'conformance')?.verdict).toBe('INCONCLUSIVE')
+    expect(deliveries).toBe(0)
+  })
+
+  it('does not certify a published branch when final conformance is malformed', async () => {
+    const outcome = await runLifecycle(await checkout(), { malformedFindingOn: 2 })
+
+    expect(deliveries).toBe(1)
+    expect(outcome.state).toBe('INCONCLUSIVE')
+    expect(outcome.outcome.stages.findLast(stage => stage.role === 'conformance')?.verdict).toBe('INCONCLUSIVE')
+  })
+
   it('reports a constrained missing obligation as inconclusive rather than missing', async () => {
     const outcome = await runLifecycle(await checkout(), {
       answer: obligation => ({
@@ -333,6 +375,7 @@ describe('the ways a branch could otherwise be called ready', () => {
     expect(outcome.state).toBe('INCONCLUSIVE')
     expect(outcome.outcome.conformance?.counts.MISSING).toBe(0)
     expect(outcome.outcome.conformance?.counts.INCONCLUSIVE).toBe(1)
+    expect(deliveries).toBe(0)
   })
 
   it('will not certify while an approved Plan task goes unanswered', async () => {

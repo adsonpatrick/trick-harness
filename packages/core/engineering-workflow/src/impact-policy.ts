@@ -152,6 +152,7 @@ export function planPullRequestImplementationStages(): readonly StageSpec[] {
   return Object.freeze([
     { stageId: 'implement-1', role: 'implement' },
     { stageId: 'verify-1', role: 'verify' },
+    { stageId: 'conformance-preflight', role: 'conformance' },
     { stageId: 'delivery-1', role: 'delivery' },
   ] as const satisfies readonly StageSpec[])
 }

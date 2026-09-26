@@ -491,11 +491,11 @@ describe('a workflow through the real control-server entry path', () => {
     expect(status.state).toBe('completed')
     expect(status.verdict).toBe('PASS')
     expect(status.stages.map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'delivery', 'review', 'conformance', 'verify',
+      'implement', 'verify', 'conformance', 'delivery', 'review', 'conformance', 'verify',
     ])
-    // Five starts for six stages: delivery is the one nothing was asked about.
+    // Six starts for seven stages: delivery is the one nothing was asked about.
     expect(started.map(request => request.route.model)).toEqual([
-      'mimo-v2.5', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash',
+      'mimo-v2.5', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash', 'deepseek-v4-flash',
     ])
   })
 

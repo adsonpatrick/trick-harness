@@ -210,6 +210,7 @@ let executors: HarnessExecutorRuntime
 let journal: WorkflowJournal
 let runner: WorkflowRunner
 let started: ExecutorStartRequest[]
+let deliveries: number
 
 /** Findings each stage id reports, consumed once so a re-run can differ. */
 let scripted: Map<string, readonly Finding[]>
@@ -303,6 +304,7 @@ const PASSING = Object.freeze({
 function deliveryStub(stageIds?: string[]): DeliveryCapabilityPort {
   return {
     deliver: async (input) => {
+      deliveries += 1
       stageIds?.push(input.stageId)
       return { delivered: true, summary: 'the branch was pushed and its pull request updated', evidence: [], findings: [] }
     },
@@ -317,6 +319,7 @@ beforeEach(() => {
   journal = new WorkflowJournal(session, 'wf-1', async () => true)
   runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   started = []
+  deliveries = 0
   scripted = new Map()
   for (const name of ['builder', 'reviewer', 'spare-builder', 'spare-reviewer']) {
     executors.register(provider(name, async (request) => {
@@ -331,12 +334,12 @@ describe('the pull request lifecycle plan', () => {
     const roles = planPullRequestStages(OBJECTIVE).map(stage => stage.role)
 
     expect(roles.indexOf('delivery')).toBeLessThan(roles.indexOf('review'))
-    expect(roles).toEqual(['implement', 'verify', 'delivery', 'review', 'conformance', 'verify'])
+    expect(roles).toEqual(['implement', 'verify', 'conformance', 'delivery', 'review', 'conformance', 'verify'])
   })
 
   it('adds QA and security as risk rises, and always ends on a fresh verification', () => {
     expect(planPullRequestStages({ ...OBJECTIVE, risk: 'critical' }).map(stage => stage.role)).toEqual([
-      'implement', 'verify', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
+      'implement', 'verify', 'conformance', 'delivery', 'review', 'qa', 'security', 'conformance', 'verify',
     ])
     expect(planPullRequestStages({ ...OBJECTIVE, risk: 'critical' }).at(-1)?.stageId).toBe('verify-final')
   })
@@ -344,6 +347,7 @@ describe('the pull request lifecycle plan', () => {
   it.each(['low', 'medium', 'high', 'critical'] as const)('publishes before it certifies at %s risk', (risk) => {
     const roles = planPullRequestStages({ ...OBJECTIVE, risk }).map(stage => stage.role)
 
+    expect(roles.indexOf('conformance')).toBeLessThan(roles.indexOf('delivery'))
     expect(roles.indexOf('delivery')).toBeLessThan(roles.indexOf('review'))
     expect(roles.at(-1)).toBe('verify')
     expect(roles.lastIndexOf('verify')).toBeGreaterThan(roles.indexOf('delivery'))
@@ -422,7 +426,7 @@ describe('two confirmed bugs and one improvement', () => {
     const roles = result.outcome.stages.map(stage => stage.stageId)
 
     expect(roles).toEqual([
-      'implement-1', 'verify-1', 'delivery-1', 'review-1',
+      'implement-1', 'verify-1', 'conformance-preflight', 'delivery-1', 'review-1',
       'debug-1', 'repair-1', 'verify-2', 'delivery-2', 'review-2',
       'conformance-2', 'verify-final-2',
     ])
@@ -493,7 +497,8 @@ describe('conformance standing between a green run and a ready pull request', ()
 
     expect(roles.at(-2)).toBe('conformance')
     expect(roles.at(-1)).toBe('verify')
-    expect(roles.indexOf('conformance')).toBeGreaterThan(roles.indexOf('security'))
+    expect(roles.lastIndexOf('conformance')).toBeGreaterThan(roles.indexOf('security'))
+    expect(roles.indexOf('conformance')).toBeLessThan(roles.indexOf('delivery'))
   })
 
   it('establishes nothing, and is not ready, when the run cannot read a conformance result', async () => {
@@ -502,6 +507,7 @@ describe('conformance standing between a green run and a ready pull request', ()
     expect(result.state).not.toBe('PR_READY')
     expect(result.state).toBe('INCONCLUSIVE')
     expect(result.outcome.verdict).toBe('INCONCLUSIVE')
+    expect(deliveries).toBe(0)
   })
 
   it('is not ready when the result does not answer every approved obligation', async () => {
@@ -574,10 +580,11 @@ describe('conformance standing between a green run and a ready pull request', ()
     const roles = result.outcome.stages.map(stage => stage.role)
 
     expect(result.state).toBe('BLOCKED')
-    // Past everything that writes, and stopped before conformance scored the
-    // work against a Plan that is no longer the approved one.
-    expect(roles).toContain('review')
-    expect(roles).not.toContain('conformance')
+    // The pre-delivery conformance check detects the Plan change and stops
+    // before delivery or review.
+    expect(roles).toContain('conformance')
+    expect(roles).not.toContain('delivery')
+    expect(roles).not.toContain('review')
   })
 
   it('reads conformance again after a repair, so the answer describes the branch as it now stands', async () => {
@@ -588,7 +595,7 @@ describe('conformance standing between a green run and a ready pull request', ()
     const result = await runLifecycle()
     const roles = result.outcome.stages.map(stage => stage.role)
 
-    expect(roles.filter(role => role === 'conformance')).toHaveLength(2)
+    expect(roles.filter(role => role === 'conformance')).toHaveLength(3)
     expect(roles.lastIndexOf('conformance')).toBeGreaterThan(roles.lastIndexOf('repair'))
     expect(result.state).toBe('PR_READY')
   })

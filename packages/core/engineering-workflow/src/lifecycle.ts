@@ -3,9 +3,10 @@
  * branch a person can see, and when the branch is ready for one.
  *
  * The ordinary stage plan certifies a working tree. This one certifies a pull
- * request, which is a different thing: the branch is delivered as soon as
- * implementation verifies, and every certifying stage after that reads the same
- * published diff a human reviewer would. A repair therefore does not just edit
+ * request, which is a different thing: implementation is verified and checked
+ * against the approved artifacts before first delivery; every remaining
+ * certifying stage reads the same published diff as a human reviewer. A repair
+ * therefore does not just edit
  * the tree — it is followed by a fresh delivery, so the next review reads the
  * fix rather than the diff that provoked it.
  *
@@ -58,10 +59,11 @@ export interface PullRequestOutcome {
 /**
  * The stages a pull-request run performs, decided before anything is dispatched.
  *
- * Delivery moves ahead of certification here, which is the whole difference
- * from the working-tree plan: a review that reads an unpublished tree is
- * reviewing something no person can comment on. Risk still decides how much
- * certification is bought, and the run finishes with a fresh verification
+ * A pre-delivery conformance reading prevents an invalid or unreadable result
+ * from publishing the branch. Delivery still precedes review, because a review
+ * that reads an unpublished tree is reviewing something no person can comment on.
+ * Risk determines which additional certification stages run, and the plan
+ * finishes with a fresh verification
  * whatever else ran, so nothing is declared ready on the strength of a reading
  * taken before the last repair.
  * @param objective - The approved objective.
@@ -71,6 +73,7 @@ export function planPullRequestStages(objective: WorkflowObjective): readonly St
   const stages: StageSpec[] = [
     { stageId: 'implement-1', role: 'implement' },
     { stageId: 'verify-1', role: 'verify' },
+    { stageId: 'conformance-preflight', role: 'conformance' },
     { stageId: 'delivery-1', role: 'delivery' },
     { stageId: 'review-1', role: 'review' },
   ]

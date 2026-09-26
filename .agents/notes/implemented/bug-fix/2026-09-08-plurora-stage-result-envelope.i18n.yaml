@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-08-plurora-stage-result-envelope.md
-2026-09-08-plurora-stage-result-envelope.md: 7e588c669c5fa231439ae36a94f85b87035af227
-2026-09-08-plurora-stage-result-envelope.zh.md: cd2ecbea5d0b034f27b41ed393939b61e14ab515
+2026-09-08-plurora-stage-result-envelope.md: 8291a2764f1e74aa3a4f780ae421043089881d9c
+2026-09-08-plurora-stage-result-envelope.zh.md: 7c8789e1a9f3feead5a14becb08ee26d53fc7208
