@@ -86,7 +86,7 @@ This is a hypothesis, not an approved final registry.
 
 Use `superpowers:using-git-worktrees` at execution time. Do not run candidate work from either normal checkout.
 
-Expected: one clean Trick Harness worktree and one clean NeuroVia worktree, both recording their starting SHAs.
+Expected: one clean Trick Harness worktree and one clean NeuroVia worktree, both recording their starting SHAs. Record their absolute paths as the execution variables `TRICK_WORKTREE` and `NEUROVIA_WORKTREE`; all later commands use those two values.
 
 - [ ] **Step 2: Run the Trick Harness stability gates**
 
@@ -183,7 +183,7 @@ Keep `codex.frontier` and both OpenCode entries at baseline.
 Run from the Trick Harness worktree:
 
 ```bash
-pnpm run plurora-host -- validate --project-root <ABSOLUTE_NEUROVIA_WORKTREE>
+pnpm run plurora-host -- validate --project-root "$NEUROVIA_WORKTREE"
 ```
 
 Expected: `plurora-host: deployment is valid`.
@@ -460,7 +460,7 @@ Expected: production remains unchanged after this task.
 - Test: `adsonpatrick/neuro-via/scripts/harness/config.test.mjs`
 - Test: `adsonpatrick/neuro-via/scripts/harness/runtime-checkout.test.mjs`
 - Test: `adsonpatrick/neuro-via/scripts/harness/neurovia.test.mjs`
-- Create: `adsonpatrick/neuro-via/docs/verification/<execution-date>-model-refresh-001-promotion.md`
+- Create: `adsonpatrick/neuro-via/docs/verification/model-refresh-001-promotion.md`
 
 **Interfaces:**
 - Consumes: Task 4 promotion-ready decision plus explicit human approval.
@@ -512,7 +512,7 @@ npm run test:harness
 Then from the pinned Trick Harness checkout:
 
 ```bash
-pnpm run plurora-host -- validate --project-root <ABSOLUTE_NEUROVIA_WORKTREE>
+pnpm run plurora-host -- validate --project-root "$NEUROVIA_WORKTREE"
 ```
 
 Expected: all PASS.
@@ -527,7 +527,7 @@ On failure, use the existing atomic rollback/demotion procedure; do not repair b
 
 - [ ] **Step 7: Record promotion evidence and commit**
 
-Write `docs/verification/<execution-date>-model-refresh-001-promotion.md` with:
+Write `docs/verification/model-refresh-001-promotion.md` with:
 
 - Task 4 decision reference;
 - exact promoted mappings;
@@ -582,9 +582,9 @@ Record only evidence-backed conclusions from MODEL-REFRESH-001.
 Examples of valid output shape:
 
 ```text
-codex.balanced → <approved target>
-opencode.reasoning-fast → <approved target>
-opencode.workhorse → <approved target>
+codex.balanced → record the target authorized by the Task 4 decision
+opencode.reasoning-fast → record the target authorized by the Task 4 decision
+opencode.workhorse → record the target authorized by the Task 4 decision
 codex.frontier → unchanged
 routing-policy refinement → none | separate follow-up required
 ```
