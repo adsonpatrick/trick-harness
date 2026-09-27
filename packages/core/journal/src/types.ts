@@ -105,7 +105,14 @@ export interface WorkspaceReconciliationRecord {
     | 'UNOBSERVABLE_MUTATION_SURFACE'
   readonly changedPaths: readonly string[]
   readonly writerQuiescent: boolean
-  readonly writerProof?: { readonly kind: 'owned-process-tree-exited'; readonly processId: number; readonly observedAtMs: number }
+  readonly writerQuiescenceReasonCode?:
+    | 'ATTEMPT_UNKNOWN'
+    | 'WRITER_STILL_ACTIVE'
+    | 'CONTAINMENT_UNAVAILABLE'
+    | 'QUIESCENCE_DEADLINE_EXCEEDED'
+  readonly writerProof?:
+    | { readonly kind: 'owned-process-tree-exited'; readonly processId: number; readonly observedAtMs: number }
+    | { readonly kind: 'write-authority-revoked'; readonly evidenceId: string; readonly observedAtMs: number }
   readonly conclusive: boolean
   readonly recordedAtMs: number
 }

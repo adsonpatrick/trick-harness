@@ -65,6 +65,12 @@ function context(overrides: Partial<RoutingContext> = {}): RoutingContext {
 }
 
 describe('telling an outage apart from a wrong answer', () => {
+  it('keeps the provider-neutral other category out of automatic availability recovery', () => {
+    expect(classifyFailure('other')).toBe('quality')
+    expect(isAvailabilityFailure('other')).toBe(false)
+    expect(disablesExecutor('other')).toBe(false)
+  })
+
   it('treats quota, rate, capacity and transient infra as availability', () => {
     for (const failure of AVAILABILITY_FAILURES) {
       expect(classifyFailure(failure), failure).toBe('availability')

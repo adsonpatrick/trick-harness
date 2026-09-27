@@ -87,7 +87,7 @@ export interface OpencodeClientHandle {
 /** Everything the provider needs from OpenCode, and nothing more. */
 export interface OpencodeAdapter {
   startServer(options: OpencodeServerOptions): Promise<OpencodeServerHandle>
-  connect(url: string, directory: string): OpencodeClientHandle
+  connect(url: string, directory: string, signal: AbortSignal): OpencodeClientHandle
 }
 
 /** Deployment settings for the real SDK binding. */

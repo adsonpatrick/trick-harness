@@ -10,7 +10,7 @@
  * @module @trick-harness/executor
  */
 
-import type { ExecutorCleanupFailure } from './types.ts'
+import type { ExecutorCleanupFailure, ExecutorFailurePhase } from './types.ts'
 
 /**
  * What an error class name is allowed to look like before it may be quoted.
@@ -33,8 +33,16 @@ const UNNAMED = 'Error'
  * @returns a frozen fact carrying the category and a class name, and no other
  * byte of the error.
  */
-export function cleanupFailure(category: string, error: unknown): ExecutorCleanupFailure {
+export function cleanupFailure(
+  category: string,
+  error: unknown,
+  failurePhase?: ExecutorFailurePhase,
+): ExecutorCleanupFailure {
   const name = error instanceof Error ? error.name : UNNAMED
   const safe = typeof name === 'string' && CLASS_NAME.test(name) ? name : UNNAMED
-  return Object.freeze({ category, safeDiagnostic: `${category} failed (${safe})` })
+  return Object.freeze({
+    category,
+    safeDiagnostic: `${category} failed (${safe})`,
+    ...(failurePhase === undefined ? {} : { failurePhase }),
+  })
 }

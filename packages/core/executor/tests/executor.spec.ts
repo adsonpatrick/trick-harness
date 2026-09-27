@@ -173,6 +173,24 @@ describe('capability validation', () => {
 })
 
 describe('dispatch and run lifecycle', () => {
+  it('revalidates writer quiescence against the completed attempt and workspace identity', async () => {
+    const runtime = createExecutorRuntime()
+    runtime.register(provider('codex', fullCapabilities, async () => ({
+      status: 'error',
+      output: '',
+      writerQuiescence: { kind: 'owned-process-tree-exited', processId: 42, observedAtMs: 500 },
+    })))
+    await runtime.start(request({ attemptId: 'wf:implement:1', workspaceId: '/work/repo' }))
+
+    await expect(runtime.ensureWriterQuiescence('wf:implement:1', '/work/other', 1_000))
+      .resolves.toEqual({ status: 'UNPROVEN', reasonCode: 'ATTEMPT_UNKNOWN' })
+    // The mismatched lookup consumed no evidence for the rightful workspace.
+    await expect(runtime.ensureWriterQuiescence('wf:implement:1', '/work/repo', 1_000))
+      .resolves.toEqual({ status: 'QUIESCENT', proof: { kind: 'owned-process-tree-exited', processId: 42, observedAtMs: 500 } })
+    await expect(runtime.ensureWriterQuiescence('wf:implement:1', '/work/repo', 1_000))
+      .resolves.toEqual({ status: 'UNPROVEN', reasonCode: 'ATTEMPT_UNKNOWN' })
+  })
+
   it('hands the request through to the selected provider', async () => {
     const runtime = createExecutorRuntime()
     const start = vi.fn<ProviderStart>(async () => ({ status: 'completed', output: 'ok' }))

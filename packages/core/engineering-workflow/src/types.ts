@@ -280,6 +280,28 @@ export interface WorkspaceStateReader {
   snapshot(objective: WorkflowObjective, signal: AbortSignal): Promise<WorkspaceSnapshot>
 }
 
+/** Bounded evidence that a cancelled or expired writer can no longer mutate a workspace. */
+export type WriterQuiescenceResult =
+  | {
+    readonly status: 'QUIESCENT'
+    readonly proof:
+      | { readonly kind: 'owned-process-tree-exited'; readonly processId: number; readonly observedAtMs: number }
+      | { readonly kind: 'write-authority-revoked'; readonly evidenceId: string; readonly observedAtMs: number }
+  }
+  | {
+    readonly status: 'UNPROVEN'
+    readonly reasonCode: 'ATTEMPT_UNKNOWN' | 'WRITER_STILL_ACTIVE' | 'CONTAINMENT_UNAVAILABLE' | 'QUIESCENCE_DEADLINE_EXCEEDED'
+  }
+
+/** Trusted host boundary for establishing that one interrupted attempt cannot write again. */
+export interface WriterQuiescencePort {
+  ensureWriterQuiescence(
+    attemptId: string,
+    workspaceId: string,
+    deadlineAt: number,
+  ): Promise<WriterQuiescenceResult>
+}
+
 /** What a delivery capability reports back, in the vocabulary a stage records. */
 export interface WorkflowDeliveryResult {
   /** True when the commit, the push and the pull request all landed. */

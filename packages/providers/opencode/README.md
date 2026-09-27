@@ -18,17 +18,17 @@ Routing policy may still *state* an effort. It is advisory metadata recorded wit
 
 ## The adapter seam
 
-`OpencodeAdapter` is the narrow OpenCode surface the provider depends on: start a server, connect a client, create a session, prompt, abort. `createSdkAdapter({ startupTimeoutMs })` binds it to the real product; tests supply a fake. That keeps translation and lifecycle behaviour testable without a product process, and confines an SDK change to one module.
+`OpencodeAdapter` is the narrow OpenCode surface the provider depends on: start a server, connect a client, create a session, prompt, abort. `createSdkAdapter({ startupTimeoutMs, spawn, cwd })` binds it to the real product; tests supply a fake. Production composition supplies managed subprocess ownership so teardown can join the full server process tree.
 
 Every SDK call uses `throwOnError: true`. The generated client otherwise returns a result tuple whose `error` is an easily ignored field, and an ignored transport error would surface as a successful run with empty output.
 
 ## Server readiness deadline
 
-The adapter requires an explicit `startupTimeoutMs`: positive integer milliseconds, no greater than `2147483647`. It applies only while the SDK waits for its child server to announce readiness, not while a session runs a prompt. The SDK owns startup timeout termination; the caller's abort signal remains active. `OpencodeStartupTimeoutError` reports the deadline without copying raw SDK output, and remains a provider failure without automatic fallback.
+The adapter requires an explicit `startupTimeoutMs`: positive integer milliseconds, no greater than `2147483647`. Each executor request also carries an absolute Harness-owned `deadlineAtMs` from the role recovery policy. The provider combines the request cancellation signal with that deadline and passes it to every SDK request, including `session.prompt()`. A timed-out prompt returns a transport failure only after the owned server has been closed; absent process-tree exit proof, workspace reconciliation remains inconclusive.
 
 ## Safe failure taxonomy
 
-Provider failures use canonical executor categories and stable `opencode.*` codes. Startup timeouts map to `transport-unavailable`; unsupported routes map to `bad-request`; malformed SDK responses, internal session aborts, and unknown failures map to `other`. A `MessageAbortedError` from OpenCode is not caller cancellation: only the Harness abort signal produces `status: 'aborted'`. Failure diagnostics are fixed safe text and never include SDK messages, response bodies, or untrusted error names.
+Provider failures use canonical executor categories, stable `opencode.*` codes and a bounded `failurePhase` (`STARTUP`, `SESSION_CREATE`, `PROMPT`, `SESSION_ABORT` or `CLEANUP`). The adapter classifies allowlisted HTTP status and Node transport codes without persisting response bodies or arbitrary error fields. Unknown errors remain `other`, which routing does not automatically retry or reroute. The pinned SDK compatibility tests assert one HTTP request per prompt, signal propagation, status capture and malformed-response behavior.
 
 ## Usage
 
@@ -45,6 +45,7 @@ const result = await runtime.start({
   task: 'implement the parser',
   route: { executor: 'opencode', model: 'anthropic/claude-opus-5', permissionMode: 'workspace-write' },
   signal: controller.signal,
+  deadlineAtMs: Date.now() + 60_000,
 })
 ```
 
@@ -54,7 +55,7 @@ const result = await runtime.start({
 
 ## Known Limitations and Deferred Work
 
-- **Termination is verified against the adapter seam, not a real process tree.** The tests prove the provider aborts the session and closes the server on every path; proving the OS process tree reaches quiescence needs the live smoke described below.
+- **Process-tree joining is tested through the managed subprocess contract, not a live OpenCode process.** A keyless smoke that starts and terminates the installed OpenCode server remains separate from unit CI.
 - **No live model smoke runs in unit CI.** SDK startup deadline tests simulate the external server; a local server-start smoke needs OpenCode installed but makes no model request. Real prompt execution still requires the user's OpenCode authentication and quota.
 - **A model name must already be a `provider/model` pair.** Resolving a semantic tier to that pair belongs to the profile above this seam; this package rejects a bare id rather than guessing which configured provider was meant.
 - **The prompt is a single text part.** File and subtask parts that the SDK accepts are not exposed, because the executor contract carries one task string.

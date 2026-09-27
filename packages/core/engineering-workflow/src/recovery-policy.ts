@@ -33,6 +33,9 @@ export interface RecoveryBudgetPolicy {
   readonly quiescenceDeadlineMs: number
 }
 
+/** Node timers reject larger delays by coercing them to one millisecond. */
+const MAX_QUIESCENCE_DEADLINE_MS = 2_147_483_647
+
 /** The immutable, hashed recovery limits admitted for one workflow. */
 export type FrozenRecoveryBudgetPolicy = RecoveryBudgetPolicy & { readonly sha256: string }
 
@@ -163,6 +166,9 @@ export function validateRecoveryBudgetPolicy(policy: RecoveryBudgetPolicy): void
       throw new RecoveryPolicyError(`POLICY_CONFIGURATION_INVALID: ${key} must be a positive finite integer`)
     }
   }
+  if (policy.quiescenceDeadlineMs > MAX_QUIESCENCE_DEADLINE_MS) {
+    throw new RecoveryPolicyError('POLICY_CONFIGURATION_INVALID: quiescenceDeadlineMs exceeds the timer limit')
+  }
   if (!Number.isFinite(policy.backoffMultiplier) || policy.backoffMultiplier < 1) {
     throw new RecoveryPolicyError('POLICY_CONFIGURATION_INVALID: backoffMultiplier must be finite and at least one')
   }
@@ -197,8 +203,8 @@ export function decideRecovery(context: RecoveryContext): RecoveryDecision {
       && context.permissionMode === 'workspace-write'
       && context.workspace.state !== 'reconciled')
   if (workspaceUncertain) {
-    if (!context.workspace.writerQuiescent
-      || !context.workspace.attributionProven
+    if (!context.workspace.writerQuiescent) return pause('WRITER_QUIESCENCE_UNPROVEN')
+    if (!context.workspace.attributionProven
       || !context.workspace.scopeProven
       || context.workspace.checkpointId === undefined
       || !isIdentifier(context.workspace.checkpointId)) return pause('WORKSPACE_RECONCILIATION_UNPROVEN')

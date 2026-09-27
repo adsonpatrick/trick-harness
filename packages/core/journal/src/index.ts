@@ -941,6 +941,8 @@ function copyWorkspaceReconciliation(value: WorkspaceReconciliationRecord): Work
     status: value.status,
     changedPaths,
     writerQuiescent: value.writerQuiescent,
+    ...value.writerQuiescenceReasonCode === undefined
+      ? {} : { writerQuiescenceReasonCode: value.writerQuiescenceReasonCode },
     ...(value.writerProof === undefined ? {} : { writerProof: value.writerProof }),
     conclusive: value.conclusive,
     recordedAtMs: value.recordedAtMs,
@@ -950,10 +952,15 @@ function copyWorkspaceReconciliation(value: WorkspaceReconciliationRecord): Work
     || !['NO_MUTATION', 'IN_SCOPE_MUTATION', 'OUT_OF_SCOPE_MUTATION', 'PREEXISTING_USER_STATE_TOUCHED',
       'REVISION_MOVED', 'SNAPSHOT_UNREADABLE', 'UNOBSERVABLE_MUTATION_SURFACE'].includes(value.status)
     || !isNonnegativeSafeInteger(value.recordedAtMs) || typeof value.writerQuiescent !== 'boolean'
+    || (value.writerQuiescenceReasonCode !== undefined && ![
+      'ATTEMPT_UNKNOWN', 'WRITER_STILL_ACTIVE', 'CONTAINMENT_UNAVAILABLE', 'QUIESCENCE_DEADLINE_EXCEEDED',
+    ].includes(value.writerQuiescenceReasonCode))
     || (value.writerQuiescent && (value.writerProof === undefined
-      || value.writerProof.kind !== 'owned-process-tree-exited'
-      || !isPositiveSafeInteger(value.writerProof.processId)
-      || !isNonnegativeSafeInteger(value.writerProof.observedAtMs)))
+      || (value.writerProof.kind === 'owned-process-tree-exited'
+        ? !isPositiveSafeInteger(value.writerProof.processId)
+          || !isNonnegativeSafeInteger(value.writerProof.observedAtMs)
+        : !isJournalIdentifier(value.writerProof.evidenceId)
+          || !isNonnegativeSafeInteger(value.writerProof.observedAtMs))))
     || typeof value.conclusive !== 'boolean' || (value.conclusive && !value.writerQuiescent)
     || (value.conclusive && value.status !== 'NO_MUTATION' && value.status !== 'IN_SCOPE_MUTATION')
     || changedPaths.length > 10_000 || changedPaths.some(path => typeof path !== 'string' || path.length === 0

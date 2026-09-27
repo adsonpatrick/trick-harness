@@ -12,6 +12,7 @@ import {
   OPENCODE_SESSION_ABORT_CLEANUP,
 } from '../src/index.ts'
 import { OpencodeRouteError } from '../src/config.ts'
+import { OpencodeHttpStatusError } from '../src/runtime-errors.ts'
 import { EXPECTED_EXECUTOR, EXPECTED_PERMISSION_MODES } from '../src/invariant.ts'
 import type {
   OpencodeAdapter,
@@ -27,13 +28,15 @@ interface Recorder {
   readonly aborted: string[]
   closes: number
   readonly connects: { url: string; directory: string }[]
+  readonly signals: AbortSignal[]
 }
 
 /** Behaviour a case wants to vary in the fake product. */
 interface FakeOptions {
   readonly parts?: readonly OpencodeMessagePart[]
-  readonly onPrompt?: (request: OpencodePromptRequest) => Promise<void>
+  readonly onPrompt?: (request: OpencodePromptRequest, signal: AbortSignal) => Promise<void>
   readonly promptFails?: Error
+  readonly sessionCreateFails?: Error
   readonly startServerFails?: Error
   /** Make the scoped server refuse to close, the way a wedged port does. */
   readonly closeFails?: Error
@@ -52,7 +55,7 @@ interface FakeOptions {
  * @returns the fake adapter and the record of what it received.
  */
 function fakeAdapter(options: FakeOptions = {}): { adapter: OpencodeAdapter; seen: Recorder } {
-  const seen: Recorder = { servers: [], prompts: [], aborted: [], closes: 0, connects: [] }
+  const seen: Recorder = { servers: [], prompts: [], aborted: [], closes: 0, connects: [], signals: [] }
   const adapter: OpencodeAdapter = {
     async startServer(serverOptions) {
       seen.servers.push(serverOptions)
@@ -66,13 +69,15 @@ function fakeAdapter(options: FakeOptions = {}): { adapter: OpencodeAdapter; see
         },
       })
     },
-    connect(url, directory) {
+    connect(url, directory, signal) {
       seen.connects.push({ url, directory })
+      seen.signals.push(signal)
       return {
-        createSession: () => Promise.resolve('ses_1'),
+        createSession: () => options.sessionCreateFails === undefined
+          ? Promise.resolve('ses_1') : Promise.reject(options.sessionCreateFails),
         async prompt(request) {
           seen.prompts.push(request)
-          await options.onPrompt?.(request)
+          await options.onPrompt?.(request, signal)
           if (options.promptFails !== undefined) throw options.promptFails
           return { parts: options.parts ?? [{ type: 'text', text: 'done' }] }
         },
@@ -94,6 +99,7 @@ function request(overrides: Partial<ExecutorStartRequest> = {}): ExecutorStartRe
     task: 'implement the parser',
     route: { executor: OPENCODE_EXECUTOR, permissionMode: 'read-only' },
     signal: new AbortController().signal,
+    deadlineAtMs: Date.now() + 60_000,
     ...overrides,
   }
 }
@@ -170,6 +176,75 @@ describe('per-run model routing', () => {
     // same refusal from a different product.
     expect(result.failure?.code).toBe('opencode.route.unsupported')
     expect(seen.servers).toEqual([])
+  })
+})
+
+describe('bounded provider failure classification', () => {
+  it.each([
+    [408, 'transport-unavailable', 'opencode.http.timeout'],
+    [429, 'usage-limit-exceeded', 'opencode.http.usage-limit'],
+    [503, 'server-overloaded', 'opencode.http.server-overloaded'],
+    [500, 'internal-server-error', 'opencode.http.server-failure'],
+    [401, 'unauthorized', 'opencode.http.unauthorized'],
+    [400, 'bad-request', 'opencode.http.bad-request'],
+  ] as const)('maps HTTP %s to a bounded category and PROMPT phase', async (status, category, code) => {
+    const { adapter } = fakeAdapter({ promptFails: new OpencodeHttpStatusError(status) })
+    const result = await createOpencodeProvider(adapter).start(request())
+
+    expect(result.failure).toMatchObject({ category, code, httpStatus: status, failurePhase: 'PROMPT' })
+    expect(result.failure?.safeDiagnostic).not.toContain(String(status))
+  })
+
+  it('keeps an unclassified error in other without persisting its message or attacker fields', async () => {
+    const unsafe = Object.assign(new Error('token=secret response-body=private'), { status: 429, code: 'EAGAIN' })
+    const { adapter } = fakeAdapter({ promptFails: unsafe })
+    const result = await createOpencodeProvider(adapter).start(request())
+
+    expect(result.failure).toMatchObject({
+      category: 'other', code: 'opencode.prompt.failed', failurePhase: 'PROMPT',
+      safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
+    })
+    expect(JSON.stringify(result)).not.toContain('secret')
+    expect(JSON.stringify(result)).not.toContain('private')
+  })
+
+  it('labels unexpected session abort and session creation errors at their boundaries', async () => {
+    const aborted = Object.assign(new Error('private'), { name: 'MessageAbortedError' })
+    const abortResult = await createOpencodeProvider(fakeAdapter({ promptFails: aborted }).adapter).start(request())
+    const createResult = await createOpencodeProvider(fakeAdapter({ sessionCreateFails: new Error('private') }).adapter)
+      .start(request())
+
+    expect(abortResult.failure).toMatchObject({ category: 'other', failurePhase: 'SESSION_ABORT' })
+    expect(createResult.failure).toMatchObject({
+      category: 'other', code: 'opencode.session.create-failed', failurePhase: 'SESSION_CREATE',
+    })
+  })
+})
+
+describe('Harness-owned attempt deadline', () => {
+  it('aborts a prompt that never settles and joins the writer before returning timeout', async () => {
+    const observedAtMs = Date.now() + 60
+    const { adapter, seen } = fakeAdapter({
+      closeProof: { processId: 987, observedAtMs },
+      onPrompt: async (_request, signal) => {
+        await new Promise<void>((resolve) => {
+          signal.addEventListener('abort', () => { resolve() }, { once: true })
+        })
+      },
+    })
+    const pending = createOpencodeProvider(adapter).start(request({ deadlineAtMs: Date.now() + 20 }))
+    const result = await Promise.race([
+      pending,
+      new Promise<'unbounded'>(resolve => setTimeout(() => { resolve('unbounded') }, 250)),
+    ])
+
+    expect(result).not.toBe('unbounded')
+    expect(result).toMatchObject({
+      status: 'error',
+      failure: { category: 'transport-unavailable', code: 'opencode.attempt.deadline-exceeded', failurePhase: 'PROMPT' },
+      writerQuiescence: { kind: 'owned-process-tree-exited', processId: 987 },
+    })
+    expect(seen.closes).toBe(1)
   })
 })
 
@@ -320,9 +395,10 @@ describe('cancellation and teardown', () => {
 
   it('hands the run signal to the server it owns', async () => {
     const controller = new AbortController()
-    const { adapter, seen } = fakeAdapter()
+    const { adapter, seen } = fakeAdapter({ onPrompt: async () => { controller.abort() } })
     await createOpencodeProvider(adapter).start(request({ signal: controller.signal }))
-    expect(seen.servers[0]?.signal).toBe(controller.signal)
+    expect(seen.servers[0]?.signal).not.toBe(controller.signal)
+    expect(seen.servers[0]?.signal.aborted).toBe(true)
   })
 })
 
@@ -361,6 +437,7 @@ describe('teardown failures are observable, not swallowed', () => {
     expect(result.cleanup).toEqual([{
       category: OPENCODE_SERVER_CLOSE_CLEANUP,
       safeDiagnostic: 'opencode-server-close failed (ServerCloseError)',
+      failurePhase: 'CLEANUP',
     }])
     expect(result.writerQuiescence).toBeUndefined()
   })
@@ -390,7 +467,7 @@ describe('teardown failures are observable, not swallowed', () => {
     const result = await createOpencodeProvider(adapter).start(request())
     // Not `availability: false` — absent. A field that is not there cannot be
     // read by fallback routing under any later refactor of that routing.
-    expect(Object.keys(result.cleanup?.[0] ?? {})).toEqual(['category', 'safeDiagnostic'])
+    expect(Object.keys(result.cleanup?.[0] ?? {})).toEqual(['category', 'safeDiagnostic', 'failurePhase'])
     expect(result.failure).toBeUndefined()
   })
 

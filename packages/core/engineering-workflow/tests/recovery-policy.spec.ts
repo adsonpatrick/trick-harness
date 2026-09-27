@@ -96,6 +96,8 @@ describe('deterministic recovery policy', () => {
       .toThrow(/POLICY_CONFIGURATION_INVALID/)
     expect(() => decideRecovery(context({ budgets: { ...BUDGETS, attemptDeadlineMsByRole: {} as Record<Role, number> } })))
       .toThrow(/POLICY_CONFIGURATION_INVALID/)
+    expect(() => decideRecovery(context({ budgets: { ...BUDGETS, quiescenceDeadlineMs: 2_147_483_648 } })))
+      .toThrow(/quiescenceDeadlineMs exceeds the timer limit/)
   })
 
   it('reroutes capability gaps without a blind retry', () => {

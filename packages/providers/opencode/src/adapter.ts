@@ -16,7 +16,14 @@
 import { createOpencodeClient, createOpencodeServer } from '@opencode-ai/sdk'
 import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { OpencodeStartupTimeoutError } from './startup-error.ts'
-import { OpencodeMalformedResponseError, OpencodeServerStartError, OpencodeSessionAbortedError } from './runtime-errors.ts'
+import {
+  OpencodeHttpStatusError,
+  OpencodeMalformedResponseError,
+  OpencodePromptFailureError,
+  OpencodeServerStartError,
+  OpencodeSessionAbortedError,
+  OpencodeTransportFailureError,
+} from './runtime-errors.ts'
 import type {
   OpencodeAdapter,
   OpencodeClientHandle,
@@ -33,14 +40,18 @@ import type {
  * @param directory - the working directory every request is rooted in.
  * @returns the narrow client handle.
  */
-function bindClient(url: string, directory: string): OpencodeClientHandle {
-  const client = createOpencodeClient({ baseUrl: url, directory })
+function bindClient(url: string, directory: string, signal: AbortSignal): OpencodeClientHandle {
+  const client = createOpencodeClient({ baseUrl: url, directory, signal, fetch: fetchWithoutResponseBodies })
   return {
     async createSession(dir: string): Promise<string> {
-      const created: unknown = await client.session.create({
-        query: { directory: dir },
-        throwOnError: true,
-      })
+      let created: unknown
+      try {
+        created = await client.session.create({ query: { directory: dir }, throwOnError: true })
+      } catch (error) {
+        if (error instanceof OpencodeHttpStatusError || error instanceof OpencodeTransportFailureError) throw error
+        if (error instanceof SyntaxError) throw new OpencodeMalformedResponseError('session-id-missing')
+        throw error
+      }
       const id = isRecord(created) && isRecord(created.data) ? created.data.id : undefined
       if (typeof id !== 'string' || id.trim() === '') {
         throw new OpencodeMalformedResponseError('session-id-missing')
@@ -66,10 +77,22 @@ function bindClient(url: string, directory: string): OpencodeClientHandle {
         if (error instanceof Error && error.name === 'MessageAbortedError') {
           throw new OpencodeSessionAbortedError()
         }
+        if (error instanceof OpencodeHttpStatusError || error instanceof OpencodeTransportFailureError) throw error
+        if (error instanceof SyntaxError) throw new OpencodeMalformedResponseError('prompt-response-missing-data')
         throw error
       }
       if (!isRecord(answered) || !isRecord(answered.data) || !Array.isArray(answered.data.parts)) {
         throw new OpencodeMalformedResponseError('prompt-response-missing-data')
+      }
+      const providerError = answered.data.error
+      if (isRecord(providerError)) {
+        if (providerError.name === 'MessageAbortedError') throw new OpencodeSessionAbortedError()
+        if (providerError.name === 'ProviderAuthError') throw new OpencodeHttpStatusError(401)
+        if (providerError.name === 'APIError' && isRecord(providerError.data)
+          && typeof providerError.data.statusCode === 'number') {
+          throw new OpencodeHttpStatusError(providerError.data.statusCode)
+        }
+        throw new OpencodePromptFailureError()
       }
       return { parts: answered.data.parts as OpencodePromptResult['parts'] }
     },
@@ -78,6 +101,43 @@ function bindClient(url: string, directory: string): OpencodeClientHandle {
       await client.session.abort({ path: { id: sessionId }, throwOnError: true })
     },
   }
+}
+
+const REQUEST_TIMEOUT_CODES = new Set([
+  'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+])
+const CONNECTION_FAILURE_CODES = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN',
+])
+
+/** Inspect only one allowlisted Node system code; never traverse or stringify a cause. */
+function systemCode(error: unknown): string | undefined {
+  if (!(error instanceof TypeError) || !('cause' in error)) return undefined
+  const cause: unknown = error.cause
+  if (typeof cause !== 'object' || cause === null || !('code' in cause)) return undefined
+  return typeof cause.code === 'string' ? cause.code : undefined
+}
+
+/** Preserve a status signal without letting the SDK read or throw the body. */
+async function fetchWithoutResponseBodies(request: Request): Promise<Response> {
+  let response: Response
+  try {
+    response = await globalThis.fetch(request)
+  } catch (error) {
+    const code = systemCode(error)
+    if (code !== undefined && REQUEST_TIMEOUT_CODES.has(code)) {
+      throw new OpencodeTransportFailureError('request-timeout')
+    }
+    if (code !== undefined && CONNECTION_FAILURE_CODES.has(code)) {
+      throw new OpencodeTransportFailureError('connection-failed')
+    }
+    throw error
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new OpencodeHttpStatusError(response.status)
+  }
+  return response
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -104,22 +164,28 @@ export function createSdkAdapter(settings: OpencodeSdkOptions): OpencodeAdapter 
       }
       // `config` is an in-memory `Config` scoped to this server instance only.
       let server: Awaited<ReturnType<typeof createOpencodeServer>>
+      const deadline = new AbortController()
+      const timer = setTimeout(() => { deadline.abort() }, settings.startupTimeoutMs)
       try {
         server = await createOpencodeServer({
           hostname: options.hostname,
           port: options.port,
-          timeout: settings.startupTimeoutMs,
-          signal: options.signal,
+          timeout: Math.min(settings.startupTimeoutMs + 1, 2_147_483_647),
+          signal: AbortSignal.any([options.signal, deadline.signal]),
           config: { permission: { ...options.config.permission } },
         })
-      } catch (error) {
-        // Only the SDK's exact timeout text is classified; no raw cause is exposed.
-        if (error instanceof Error && error.message === `Timeout waiting for server to start after ${settings.startupTimeoutMs}ms`) {
+      } catch {
+        if (deadline.signal.aborted && !options.signal.aborted) {
           throw new OpencodeStartupTimeoutError(settings.startupTimeoutMs)
         }
         throw new OpencodeServerStartError()
+      } finally {
+        clearTimeout(timer)
       }
-      return { url: server.url, close: async () => { server.close(); return undefined } }
+      return { url: server.url, close: () => {
+        server.close()
+        return Promise.resolve(undefined)
+      } }
     },
 
     connect: bindClient,
@@ -185,7 +251,7 @@ async function startManagedServer(
 
 async function stopAndJoin(child: SubprocessHandle, timeoutMs: number): Promise<boolean> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const timer = setTimeout(() => { controller.abort() }, timeoutMs)
   try {
     child.terminate()
     if (!await child.waitForExit(controller.signal)) return false

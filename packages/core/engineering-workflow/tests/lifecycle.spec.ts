@@ -326,7 +326,10 @@ beforeEach(() => {
   session = Session.create(SessionId('s'))
   executors = createExecutorRuntime()
   journal = new WorkflowJournal(session, 'wf-1', async () => true)
-  runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+  runner = new WorkflowRunner('wf-1', {
+    profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    workspaceState: { snapshot: async () => ({ revision: 'a'.repeat(40), entries: [], observable: true }) },
+  })
   started = []
   deliveries = 0
   scripted = new Map()
@@ -458,6 +461,7 @@ describe('two confirmed bugs and one improvement', () => {
     runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['builder'],
       capabilities: { delivery: DELIVERY },
+      workspaceState: { snapshot: async () => ({ revision: 'a'.repeat(40), entries: [], observable: true }) },
     })
 
     await runLifecycle()

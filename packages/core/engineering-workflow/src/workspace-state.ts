@@ -127,7 +127,14 @@ export function createWorkspaceReconciliationRecord(
     readonly attemptId: string
     readonly recordedAtMs: number
     readonly writerQuiescent: boolean
-    readonly writerProof?: { readonly kind: 'owned-process-tree-exited'; readonly processId: number; readonly observedAtMs: number }
+    readonly writerQuiescenceReasonCode?:
+      | 'ATTEMPT_UNKNOWN'
+      | 'WRITER_STILL_ACTIVE'
+      | 'CONTAINMENT_UNAVAILABLE'
+      | 'QUIESCENCE_DEADLINE_EXCEEDED'
+    readonly writerProof?:
+      | { readonly kind: 'owned-process-tree-exited'; readonly processId: number; readonly observedAtMs: number }
+      | { readonly kind: 'write-authority-revoked'; readonly evidenceId: string; readonly observedAtMs: number }
   },
 ): WorkspaceReconciliationRecord {
   const changedPaths = [...resultValue.changedPaths].sort()
@@ -138,6 +145,8 @@ export function createWorkspaceReconciliationRecord(
     status: resultValue.status,
     changedPaths,
     writerQuiescent: identity.writerQuiescent,
+    ...identity.writerQuiescenceReasonCode === undefined
+      ? {} : { writerQuiescenceReasonCode: identity.writerQuiescenceReasonCode },
     ...(identity.writerProof === undefined ? {} : { writerProof: identity.writerProof }),
     conclusive: resultValue.conclusive,
     recordedAtMs: identity.recordedAtMs,

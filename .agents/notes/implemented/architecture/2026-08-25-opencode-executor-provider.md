@@ -24,6 +24,10 @@ The provider depends on `@opencode-ai/sdk@1.18.23`, pinned exactly, following th
 
 **Every SDK call uses `throwOnError: true`.** The generated hey-api client otherwise returns a result tuple whose `error` is an easily ignored field, and an ignored transport error would surface as a successful run with empty output.
 
+**Failures are classified from bounded SDK signals.** The adapter intercepts non-success HTTP responses before the generated client reads their bodies, cancels the body stream, and retains only a validated status. Node transport failures are recognized only from a one-level allowlisted `TypeError.cause.code`; arbitrary `message`, `code`, `status`, response body and nested cause data never determine recovery. The pinned assistant-message error discriminators and numeric `APIError.statusCode` are handled without copying their message or response body. Unknown failures remain `other`.
+
+**Every request has a Harness deadline.** The executor request carries an absolute role-derived `deadlineAtMs`; the provider combines it with caller cancellation and configures the SDK client with the resulting signal. A timeout aborts the prompt and closes the owned server before the result is returned. The failure includes one bounded operation phase; teardown faults remain secondary cleanup facts. The pinned compatibility suite asserts that one prompt issues one SDK HTTP request, so retries remain owned by the Harness policy.
+
 **Teardown is owned and unconditional.** A run that did not finish on its own has its session aborted; the server closes on every path, success, failure, and cancellation alike.
 
 ## Alternatives considered
@@ -36,7 +40,7 @@ The provider depends on `@opencode-ai/sdk@1.18.23`, pinned exactly, following th
 
 **Resolve a bare model id against the first configured provider.** Rejected for the same reason: the recorded route would name something other than what ran.
 
-**Import the SDK directly and test with a live server.** Rejected for unit CI: it consumes the user's OpenCode quota on every run and makes cancellation tests dependent on real network timing. The cost is that `src/adapter.ts` is the one module unit tests do not cover, which a deferred keyless smoke is meant to close.
+**Import the SDK directly and test with a live model server.** Rejected for unit CI: it consumes the user's OpenCode quota on every run and makes cancellation tests dependent on real network timing. The SDK compatibility suite instead exercises the pinned generated client with controlled fetch responses; a local server startup smoke remains separate from unit CI.
 
 **Reuse `createOpencode()` rather than server-then-client.** Rejected: it bundles server startup and client construction, leaving no seam at which a test can substitute either half.
 
@@ -44,6 +48,12 @@ The provider depends on `@opencode-ai/sdk@1.18.23`, pinned exactly, following th
 
 The provider is honest about a capability it lacks, which means Plurora's routing policy cannot demand reasoning effort from OpenCode and must treat `effort` as advisory. That change was made deliberately in `PolicyRuleDefinition.use` and in the Plurora routing policy header rather than by weakening the capability check.
 
-The adapter seam is verified; the SDK binding behind it is not. Tests prove the provider aborts the session and closes the server on every path, but proving the OS process tree reaches quiescence needs a live smoke that does not yet exist. Until it does, the strongest claim this package supports is that the provider issues the right calls in the right order, not that the product obeyed them.
+The pinned SDK contract is checked with controlled fetch behavior, and production server teardown joins the managed subprocess tree before issuing a quiescence proof. Unit tests do not start a live OpenCode server or model request, so the platform process implementation still needs a keyless local-server smoke before a production operator depends on it.
 
 Pinning the SDK exactly means an OpenCode release does not silently change what a run does — and equally that adopting one is a deliberate edit here, with the recorded contract above as the thing to re-verify.
+
+## Harness-owned attempt failures and writer quiescence (2026-09-27)
+
+OpenCode failures now carry a provider-neutral category, a stable `opencode.*` code, and a bounded phase. Only allowlisted SDK discriminators, validated HTTP status, known Node transport codes, and the Harness-owned abort/deadline affect classification; provider prose, bodies, stacks, and arbitrary nested codes are discarded. The exact SDK pin is guarded by compatibility tests for one-request retry ownership, cancellation, malformed JSON, and status handling.
+
+The workflow supplies an absolute per-role deadline on each executor request. A failed writable attempt also carries an attempt ID and physical workspace ID to the executor runtime. Recovery asks `ensureWriterQuiescence` for correlated teardown evidence before taking any post-attempt snapshot, under a bounded deadline. Missing or mismatched evidence records its bounded reason in the journal, makes reconciliation inconclusive, and blocks further recovery. The runtime retains this evidence only in process memory; restart-persistent quarantine and orphan-writer admission are owned by Tasks 5 and 7, so this change does not claim crash-surviving containment.

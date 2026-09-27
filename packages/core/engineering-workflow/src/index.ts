@@ -102,7 +102,13 @@ import {
   reconcileWorkspaceMutation,
   WorkspaceStateError,
 } from './workspace-state.ts'
-import type { ApprovedArtifactTexts, WorkspaceSnapshot, WorkspaceStateReader } from './types.ts'
+import type {
+  ApprovedArtifactTexts,
+  WorkspaceSnapshot,
+  WorkspaceStateReader,
+  WriterQuiescencePort,
+  WriterQuiescenceResult,
+} from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type { CertificationStatusSummary } from '@trick-harness/contracts'
@@ -355,6 +361,33 @@ function waitUntil(eligibleAtMs: number, signal: AbortSignal): Promise<void> {
   })
 }
 
+/** Bound a trusted quiescence check even if a host implementation rejects or never settles. */
+async function ensureWriterQuiescenceBy(
+  port: WriterQuiescencePort,
+  attemptId: string,
+  workspaceId: string,
+  deadlineAt: number,
+  nowMs: number,
+): Promise<WriterQuiescenceResult> {
+  if (!Number.isSafeInteger(deadlineAt) || deadlineAt < nowMs) {
+    return { status: 'UNPROVEN', reasonCode: 'QUIESCENCE_DEADLINE_EXCEEDED' }
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const check = Promise.resolve()
+    .then(() => port.ensureWriterQuiescence(attemptId, workspaceId, deadlineAt))
+    .catch((): WriterQuiescenceResult => ({ status: 'UNPROVEN', reasonCode: 'CONTAINMENT_UNAVAILABLE' }))
+  const deadline = new Promise<WriterQuiescenceResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({ status: 'UNPROVEN', reasonCode: 'QUIESCENCE_DEADLINE_EXCEEDED' })
+    }, Math.max(0, deadlineAt - nowMs))
+  })
+  try {
+    return await Promise.race([check, deadline])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 /** Everything the runtime needs, supplied once when the runner is built. */
 export interface WorkflowRuntimeOptions {
   readonly profile: HarnessProfile
@@ -363,6 +396,8 @@ export interface WorkflowRuntimeOptions {
   readonly journal: WorkflowJournal
   /** Deployment-owned fallback reader for runs whose request does not override it. */
   readonly workspaceState?: WorkspaceStateReader
+  /** Trusted host service that proves interrupted writers have lost write authority. */
+  readonly writerQuiescence?: WriterQuiescencePort
   /**
    * The deterministic capabilities this deployment composed, if any.
    *
@@ -952,7 +987,7 @@ export class WorkflowRunner {
       let dispatched: Dispatched
       try {
         dispatched = await this.#dispatch(
-          stage, request, signal, repairCycles, lastMutator, availability,
+          stage, `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`, request, signal, repairCycles, lastMutator, availability,
           humanOverride, measurement, authorization,
           recoveryRoutes.get(stage.stageId),
         )
@@ -1061,34 +1096,60 @@ export class WorkflowRunner {
           })
         const checkpointId = workspaceCheckpoints.get(`${stage.stageId}:${attemptOrdinal}`)
         const checkpointSnapshot = workspaceCheckpointSnapshots.get(`${stage.stageId}:${attemptOrdinal}`)
-        const proof = dispatched.result?.writerQuiescence
-        const writerQuiescent = validWriterQuiescenceProof(proof, this.#now())
+        const attemptId = `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`
+        const quiescencePort = this.#options.writerQuiescence ?? this.#options.executors
+        const quiescenceDeadlineAt = this.#now() + budgets.quiescenceDeadlineMs
+        const quiescence = await ensureWriterQuiescenceBy(
+          quiescencePort,
+          attemptId,
+          objective.cwd,
+          quiescenceDeadlineAt,
+          this.#now(),
+        )
+        const writerProof = quiescence.status === 'QUIESCENT' ? quiescence.proof : undefined
+        const writerQuiescent = writerProof !== undefined && validWriterQuiescenceProof(writerProof, this.#now())
+        const validWriterProof = writerQuiescent ? writerProof : undefined
+        const writerQuiescenceReasonCode = writerQuiescent
+          ? undefined
+          : quiescence.status === 'UNPROVEN' ? quiescence.reasonCode : 'CONTAINMENT_UNAVAILABLE'
         let reconciliation: ReturnType<typeof createWorkspaceReconciliationRecord> | undefined
         if (writable && checkpointId !== undefined && checkpointSnapshot !== undefined
           && request.workspaceState !== undefined) {
-          let observation
-          try {
-            const after = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
-            observation = reconcileWorkspaceMutation(checkpointSnapshot, after, {
-              allowedPaths: plannedPaths ?? [],
-              writerQuiescent,
-              observable: checkpointSnapshot.observable === true && after.observable === true,
-            })
-          } catch {
+          let observation: ReturnType<typeof reconcileWorkspaceMutation>
+          if (!writerQuiescent) {
+            // A stable-looking snapshot is not evidence while a timed-out writer
+            // could still change the tree. Do not dispatch even a certifying read.
             observation = {
-              status: 'SNAPSHOT_UNREADABLE' as const,
+              status: 'SNAPSHOT_UNREADABLE',
               conclusive: false,
               changedPaths: Object.freeze([]),
-              reasonCode: 'WORKSPACE_SNAPSHOT_UNREADABLE',
+              reasonCode: 'WRITER_QUIESCENCE_UNPROVEN',
+            }
+          } else {
+            try {
+              const after = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+              observation = reconcileWorkspaceMutation(checkpointSnapshot, after, {
+                allowedPaths: plannedPaths ?? [],
+                writerQuiescent,
+                observable: checkpointSnapshot.observable === true && after.observable === true,
+              })
+            } catch {
+              observation = {
+                status: 'SNAPSHOT_UNREADABLE',
+                conclusive: false,
+                changedPaths: Object.freeze([]),
+                reasonCode: 'WORKSPACE_SNAPSHOT_UNREADABLE',
+              }
             }
           }
           reconciliation = createWorkspaceReconciliationRecord(observation, {
             checkpointId,
             stageId: stage.stageId,
-            attemptId: `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`,
+            attemptId,
             recordedAtMs: this.#now(),
             writerQuiescent,
-            ...(writerQuiescent && proof !== undefined ? { writerProof: proof } : {}),
+            ...(writerQuiescenceReasonCode === undefined ? {} : { writerQuiescenceReasonCode }),
+            ...(validWriterProof === undefined ? {} : { writerProof: validWriterProof }),
           })
           await journal.workspaceReconciliation(reconciliation)
         }
@@ -1119,7 +1180,7 @@ export class WorkflowRunner {
         const recoveryReconciliationId = reconciliation?.reconciliationId
         const canVerifyRecoveredMutation = recoveredMutation && verificationStageId !== undefined
           && verificationExecutor !== undefined && verificationTier !== undefined
-          && recoveryReconciliationId !== undefined && checkpointId !== undefined
+          && recoveryReconciliationId !== undefined
         const decision = decideRecovery({
           stageId: stage.stageId,
           role: stage.role,
@@ -1614,6 +1675,7 @@ export class WorkflowRunner {
   /** Route, start, and reduce one stage to facts. */
   async #dispatch(
     stage: StageSpec,
+    attemptId: string,
     request: WorkflowRunRequest,
     signal: AbortSignal,
     priorAttempts: number,
@@ -1625,7 +1687,7 @@ export class WorkflowRunner {
     recoveryOverride: StageRouteOverride | undefined,
   ): Promise<Dispatched> {
     return await this.#attempt(
-      stage, request, signal, priorAttempts, lastMutator, availability,
+      stage, attemptId, request, signal, priorAttempts, lastMutator, availability,
       humanOverride, measurement, repairAuthorization, recoveryOverride,
     )
   }
@@ -1633,6 +1695,7 @@ export class WorkflowRunner {
   /** One routed start, reduced to bounded stage facts. */
   async #attempt(
     stage: StageSpec,
+    attemptId: string,
     request: WorkflowRunRequest,
     signal: AbortSignal,
     priorAttempts: number,
@@ -1706,10 +1769,14 @@ export class WorkflowRunner {
       ? `${baseTask}\n\nHarness repair authorization: modify only repository-relative paths in this exact JSON array; do not modify other paths.\n${JSON.stringify(repairAuthorization.scope.allowedPaths)}`
       : baseTask
     const result = await executors.start({
+      attemptId,
+      workspaceId: request.objective.cwd,
       cwd: request.objective.cwd,
       task,
       route: executorRoute,
       signal,
+      deadlineAtMs: startedAt
+        + (this.#options.profile.workflowPolicy.recoveryPolicy.attemptDeadlineMsByRole[stage.role] ?? 0),
     })
     const durationMs = Math.max(0, this.#now() - startedAt)
     this.#observe(availability, decision.executor, result)
@@ -2303,10 +2370,17 @@ async function readWorkspaceSnapshot(
 }
 
 function validWriterQuiescenceProof(
-  proof: ExecutorWriterQuiescenceProof | undefined,
+  proof: ExecutorWriterQuiescenceProof | {
+    readonly kind: 'write-authority-revoked'
+    readonly evidenceId: string
+    readonly observedAtMs: number
+  },
   nowMs: number,
-): proof is ExecutorWriterQuiescenceProof {
-  return proof !== undefined && proof.kind === 'owned-process-tree-exited'
-    && Number.isSafeInteger(proof.processId) && proof.processId > 0
+): boolean {
+  if (proof.kind === 'owned-process-tree-exited') {
+    return Number.isSafeInteger(proof.processId) && proof.processId > 0
+      && Number.isSafeInteger(proof.observedAtMs) && proof.observedAtMs >= 0 && proof.observedAtMs <= nowMs
+  }
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(proof.evidenceId)
     && Number.isSafeInteger(proof.observedAtMs) && proof.observedAtMs >= 0 && proof.observedAtMs <= nowMs
 }

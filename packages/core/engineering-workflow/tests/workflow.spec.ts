@@ -285,6 +285,26 @@ describe('role-specific permission modes', () => {
 })
 
 describe('a normal run', () => {
+  it('passes the role policy as an absolute deadline to each executor attempt', async () => {
+    let deadlineAtMs: number | undefined
+    const localExecutors = createExecutorRuntime()
+    localExecutors.register(provider('builder', async (request) => {
+      deadlineAtMs = request.deadlineAtMs
+      return passing('builder')
+    }))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+    const localRunner = testRunner('wf-attempt-deadline', {
+      profile: PROFILE, policy: POLICY, executors: localExecutors,
+      journal: new WorkflowJournal(Session.create(SessionId('attempt-deadline')), 'wf-attempt-deadline', async () => true),
+      capabilities: { delivery: DELIVERY }, now: () => 1_000,
+    })
+
+    await localRunner.run({ objective: OBJECTIVE, plan: () => [{ stageId: 'deadline-implement', role: 'implement' }],
+      interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(deadlineAtMs).toBe(2_000)
+  })
+
   let session: Session
   let executors: HarnessExecutorRuntime
   let journal: WorkflowJournal
@@ -479,30 +499,72 @@ describe('a run that goes wrong', () => {
   })
 
   it('does not retry a failed writable attempt without quiescence and reconciliation', async () => {
+    const localSession = Session.create(SessionId('unproven-writer'))
+    const localExecutors = createExecutorRuntime()
+    let ensureCalls = 0
+    const localRunner = testRunner('wf-unproven-writer', {
+      profile: {
+        ...PROFILE,
+        workflowPolicy: {
+          ...PROFILE.workflowPolicy,
+          recoveryPolicy: { ...PROFILE.workflowPolicy.recoveryPolicy, quiescenceDeadlineMs: 20 },
+        },
+      },
+      policy: POLICY,
+      executors: localExecutors,
+      journal: new WorkflowJournal(localSession, 'wf-unproven-writer', async () => true),
+      capabilities: { delivery: DELIVERY },
+      writerQuiescence: {
+        ensureWriterQuiescence: (attemptId, workspaceId, deadlineAt) => {
+          ensureCalls += 1
+          expect(attemptId).toBe('wf-unproven-writer:ambiguous-implement:1')
+          expect(workspaceId).toBe(OBJECTIVE.cwd)
+          expect(deadlineAt).toBeGreaterThan(Date.now())
+          return new Promise<never>(() => {})
+        },
+      },
+    })
     let starts = 0
-    executors.register(provider('builder', async () => {
+    let snapshotCalls = 0
+    let lateWriteCompleted = false
+    localExecutors.register(provider('builder', async () => {
       starts += 1
+      setTimeout(() => { lateWriteCompleted = true }, 0)
       return {
         status: 'error', output: '',
         failure: { category: 'transport-unavailable', code: 'fixture.transport', safeDiagnostic: 'connection lost' },
       }
     }))
 
-    const outcome = await runner.run({
+    const outcome = await localRunner.run({
       objective: OBJECTIVE,
       plan: () => [{ stageId: 'ambiguous-implement', role: 'implement' }],
       interpret: interpretAllPass,
       task: taskFor,
+      workspaceState: { snapshot: async () => {
+        snapshotCalls += 1
+        expect(lateWriteCompleted).toBe(false)
+        return { revision: 'a'.repeat(40), entries: [], observable: true }
+      } },
       ...CONFORMS,
     })
 
     expect(outcome.verdict).toBe('BLOCKED')
     expect(starts).toBe(1)
-    expect(projectWorkflow(session.events, 'wf-1').recoveryDecisions.at(-1)?.decision)
-      .toMatchObject({ disposition: 'PAUSE_FOR_HUMAN', reasonCode: 'WORKSPACE_RECONCILIATION_UNPROVEN' })
-    expect(projectWorkflow(session.events, 'wf-1').workspaceCheckpoints).toHaveLength(1)
-    expect(projectWorkflow(session.events, 'wf-1').workspaceReconciliations[0])
-      .toMatchObject({ status: 'NO_MUTATION', writerQuiescent: false, conclusive: false })
+    expect(ensureCalls).toBe(1)
+    // The pre-write checkpoint is allowed; a post-timeout/cancel read is not
+    // certifying evidence until writer authority has been revoked.
+    expect(snapshotCalls).toBe(1)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(lateWriteCompleted).toBe(true)
+    expect(projectWorkflow(localSession.events, 'wf-unproven-writer').recoveryDecisions.at(-1)?.decision)
+      .toMatchObject({ disposition: 'PAUSE_FOR_HUMAN', reasonCode: 'WRITER_QUIESCENCE_UNPROVEN' })
+    expect(projectWorkflow(localSession.events, 'wf-unproven-writer').workspaceCheckpoints).toHaveLength(1)
+    expect(projectWorkflow(localSession.events, 'wf-unproven-writer').workspaceReconciliations[0])
+      .toMatchObject({
+        status: 'SNAPSHOT_UNREADABLE', writerQuiescent: false, conclusive: false,
+        writerQuiescenceReasonCode: 'QUIESCENCE_DEADLINE_EXCEEDED',
+      })
   })
 
   it('preserves reconciled implementation work for a fresh read-only verifier', async () => {
@@ -1678,7 +1740,7 @@ describe('an executor that stops serving mid-run', () => {
     expect(outcome.verdict).toBe('BLOCKED')
     expect(outcome.repairCycles).toBe(0)
     expect(projectWorkflow(session.events, 'wf-1').recoveryDecisions[0]?.decision).toMatchObject({
-      disposition: 'PAUSE_FOR_HUMAN', reasonCode: 'WORKSPACE_RECONCILIATION_UNPROVEN',
+      disposition: 'PAUSE_FOR_HUMAN', reasonCode: 'WRITER_QUIESCENCE_UNPROVEN',
     })
   })
 })
