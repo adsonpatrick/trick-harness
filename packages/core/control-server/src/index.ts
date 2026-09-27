@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import {
-  ContractError, RISKS, WORKLOADS, parseApprovedArtifactSet, parseStageRouteOverride,
+  ContractError, ROLES, RISKS, STAGE_CONSTRAINT_CLASSES, WORKLOADS, parseApprovedArtifactSet, parseStageRouteOverride,
 } from '@trick-harness/contracts'
 import type {
   CertificationStatusSummary,
@@ -36,6 +36,7 @@ import { ControlError, LOOPBACK_HOSTS } from './types.ts'
 import type {
   ControlServerOptions,
   ControlStageStatus,
+  ControlWorkflowProgress,
   ControlWorkflowStatus,
 } from './types.ts'
 
@@ -233,6 +234,59 @@ function certificationOf(summary: CertificationStatusSummary): CertificationStat
   })
 }
 
+/** Copy only the bounded progress fields this server permits an operator to read. */
+function progressOf(status: ControlWorkflowStatus, progress: ControlWorkflowProgress | undefined): ControlWorkflowStatus {
+  if (progress === undefined) return status
+  const text = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.length > 0 ? bounded(value) : undefined
+  const count = (value: unknown): number | undefined =>
+    Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : undefined
+  const time = typeof progress.lastEventAt === 'number' && Number.isFinite(progress.lastEventAt)
+    ? progress.lastEventAt
+    : undefined
+  const hostRunId = text(progress.hostRunId)
+  const currentStageId = text(progress.currentStageId)
+  const attemptId = text(progress.attemptId)
+  const currentRole = ROLES.includes(progress.currentRole as typeof ROLES[number])
+    ? progress.currentRole
+    : undefined
+  const attempt = count(progress.attempt)
+  const executor = text(progress.executor)
+  const executorRunId = text(progress.executorRunId)
+  const failureCode = text(progress.failureCode)
+  const constraintClass = STAGE_CONSTRAINT_CLASSES.includes(progress.constraintClass as typeof STAGE_CONSTRAINT_CLASSES[number])
+    ? progress.constraintClass
+    : undefined
+  const recoveryDisposition = text(progress.recoveryDisposition)
+  const reasonCode = text(progress.reasonCode)
+  const nextAction = text(progress.nextAction)
+  const stages = progress.stages?.slice(-MAX_STAGES).flatMap((stage): ControlStageStatus[] => {
+    const stageId = text(stage.stageId)
+    const role = text(stage.role)
+    const executor = text(stage.executor)
+    if (stageId === undefined || role === undefined || executor === undefined) return []
+    if (!['PASS', 'FAIL', 'PARTIAL', 'BLOCKED', 'INCONCLUSIVE'].includes(stage.verdict)) return []
+    return [Object.freeze({ stageId, role, executor, verdict: stage.verdict, summary: bounded(stage.summary) })]
+  })
+  return Object.freeze({
+    ...status,
+    ...(stages === undefined ? {} : { stages: Object.freeze(stages) }),
+    ...(hostRunId === undefined ? {} : { hostRunId }),
+    ...(currentStageId === undefined ? {} : { currentStageId }),
+    ...(attemptId === undefined ? {} : { attemptId }),
+    ...(currentRole === undefined ? {} : { currentRole }),
+    ...(attempt === undefined ? {} : { attempt }),
+    ...(executor === undefined ? {} : { executor }),
+    ...(executorRunId === undefined ? {} : { executorRunId }),
+    ...(time === undefined ? {} : { lastEventAt: time }),
+    ...(failureCode === undefined ? {} : { failureCode }),
+    ...(constraintClass === undefined ? {} : { constraintClass }),
+    ...(recoveryDisposition === undefined ? {} : { recoveryDisposition }),
+    ...(reasonCode === undefined ? {} : { reasonCode }),
+    ...(nextAction === undefined ? {} : { nextAction }),
+  })
+}
+
 /**
  * Reduce a conformance reading to the fields this surface may say out loud.
  * @param summary - The reading the run established.
@@ -253,9 +307,9 @@ function conformanceOf(summary: ConformanceStatusSummary): ConformanceStatusSumm
 /** Project a durable restart assessment onto the same schema. */
 function statusOfRestart(
   workflowId: string,
-  assessment: RestartAssessment,
+  assessment: RestartAssessment & { readonly progress?: ControlWorkflowProgress },
 ): ControlWorkflowStatus {
-  return Object.freeze({
+  return progressOf(Object.freeze({
     workflowId,
     objectiveId: assessment.objectiveId,
     state: assessment.state === 'interrupted' ? 'interrupted' : 'completed',
@@ -265,7 +319,7 @@ function statusOfRestart(
     repairCycles: 0,
     executorStarts: 0,
     requiresWorldVerification: assessment.requiresWorldVerification,
-  })
+  }), assessment.progress)
 }
 
 /** One workflow this process owns. */
@@ -274,6 +328,7 @@ interface LiveRun {
   /** Ends the run; the server holds this rather than the runner that obeys it. */
   readonly cancel: (reason: string) => void
   readonly settled: Promise<ControlWorkflowStatus>
+  readonly readProgress?: () => ControlWorkflowProgress
   /** Set when this server asked for the stop, so a cancel is not read as a failure. */
   canceled: boolean
   status: ControlWorkflowStatus
@@ -424,6 +479,7 @@ export class HarnessControlServer {
       objectiveId: objective.id,
       cancel: started.cancel,
       settled,
+      ...started.readProgress === undefined ? {} : { readProgress: started.readProgress },
       canceled: false,
       status: runningStatus(workflowId, objective.id),
     }
@@ -459,7 +515,15 @@ export class HarnessControlServer {
    */
   async statusOf(workflowId: string): Promise<ControlWorkflowStatus> {
     const run = this.#runs.get(workflowId)
-    if (run !== undefined) return run.status
+    if (run !== undefined) {
+      let progress: ControlWorkflowProgress | undefined
+      try {
+        progress = run.readProgress?.()
+      } catch {
+        // Projection failures do not make provider or journal errors operator-visible.
+      }
+      return progressOf(run.status, progress)
+    }
     const finished = this.#finished.get(workflowId)
     if (finished !== undefined) return finished
     const assessment = await this.#options.restart?.(workflowId)

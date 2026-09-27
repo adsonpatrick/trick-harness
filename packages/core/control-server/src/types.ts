@@ -8,6 +8,8 @@ import type {
   CertificationStatusSummary,
   ChangeImpactStatusSummary,
   ConformanceStatusSummary,
+  Role,
+  StageConstraintClass,
   StageRouteOverride,
   WorkflowObjective,
   WorkflowVerdict,
@@ -57,6 +59,20 @@ export interface ControlWorkflowStatus {
   readonly stages: readonly ControlStageStatus[]
   readonly repairCycles: number
   readonly executorStarts: number
+  /** Correlation and current-stage facts projected from the durable journal. */
+  readonly hostRunId?: string
+  readonly currentStageId?: string
+  readonly attemptId?: string
+  readonly currentRole?: Role
+  readonly attempt?: number
+  readonly executor?: string
+  readonly executorRunId?: string
+  readonly lastEventAt?: number
+  readonly failureCode?: string
+  readonly constraintClass?: StageConstraintClass
+  readonly recoveryDisposition?: string
+  readonly reasonCode?: string
+  readonly nextAction?: string
   /**
    * True when the record cannot settle what the world now looks like — a stage
    * was in flight, or a mutation was recorded, when the process stopped.
@@ -90,12 +106,32 @@ export interface ControlWorkflowStatus {
   readonly certification?: CertificationStatusSummary
 }
 
+/** Bounded current-workflow facts a live status read may add. */
+export type ControlWorkflowProgress = Partial<Pick<ControlWorkflowStatus,
+  | 'stages'
+  | 'hostRunId'
+  | 'currentStageId'
+  | 'attemptId'
+  | 'currentRole'
+  | 'attempt'
+  | 'executor'
+  | 'executorRunId'
+  | 'lastEventAt'
+  | 'failureCode'
+  | 'constraintClass'
+  | 'recoveryDisposition'
+  | 'reasonCode'
+  | 'nextAction'
+>>
+
 /** One workflow the Harness has started and this server now owns. */
 export interface ControlStartedWorkflow {
   /** The execution id the Harness minted, known before the run has done anything. */
   readonly workflowId: string
   /** Settles with what the run finished as. */
   readonly outcome: Promise<WorkflowOutcome>
+  /** Rebuilds bounded in-flight progress from durable facts for each poll. */
+  readonly readProgress?: () => ControlWorkflowProgress
   /**
    * End the run.
    * @param reason - Why, recorded as the reason the executor sees.
@@ -127,7 +163,9 @@ export type ControlWorkflowStarter = (
  * 404. Returning an assessment for a workflow with no recorded end is how a
  * restart surfaces interrupted work instead of resuming it.
  */
-export type ControlRestartReader = (workflowId: string) => Promise<RestartAssessment | undefined>
+export type ControlRestartReader = (workflowId: string) => Promise<
+  (RestartAssessment & { readonly progress?: ControlWorkflowProgress }) | undefined
+>
 
 /** How the server is built. */
 export interface ControlServerOptions {

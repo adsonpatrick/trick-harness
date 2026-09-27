@@ -252,6 +252,35 @@ describe('writing and replaying one workflow', () => {
     expect(state.end).toBeUndefined()
   })
 
+  it('reconstructs bounded live progress and constraint class from durable events', () => {
+    journal.start(objective)
+    journal.routeDecision({ stageId: 'verify-1', role: 'verify', decision })
+    journal.executorStart({ stageId: 'verify-1', role: 'verify', decision })
+    journal.stageConstraint('verify-1', {
+      id: 'constraint-1',
+      class: 'EXTERNAL_RUNTIME_UNREADABLE',
+      raisedBy: 'verify',
+      summary: 'raw-provider-output-marker',
+      evidence,
+    })
+
+    const first = replay().progress
+    const afterRestart = projectWorkflow([...session.events], 'wf-1').progress
+    expect(first).toMatchObject({
+      currentStageId: 'verify-1',
+      currentRole: 'verify',
+      executor: 'opencode',
+      attempt: 1,
+      attemptId: 'wf-1:verify-1:1',
+      executorRunId: `s-1:${String(session.events.find(event => event.type === 'harness/executor-start')?.seq)}`,
+      constraintClass: 'EXTERNAL_RUNTIME_UNREADABLE',
+    })
+    expect(replay().hostRunId).toBe('s-1')
+    expect(first?.lastEventAt).toBe(session.events.at(-1)?.time)
+    expect(afterRestart).toEqual(first)
+    expect(JSON.stringify(first)).not.toContain('raw-provider-output-marker')
+  })
+
   it('projects the last circuit state each executor was left in', () => {
     journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
     journal.circuitBreaker('codex', 'DEGRADED', 'AVAILABLE', 'manual-refresh')

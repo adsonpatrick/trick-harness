@@ -177,6 +177,20 @@ export interface RepairAuthorizationRecord {
 /** The whole state of one workflow, rebuilt from its events. */
 export interface WorkflowProjection {
   readonly workflowId: string
+  /** Host session identity written when the workflow starts. */
+  readonly hostRunId?: string
+  /** Latest in-flight stage facts, derived from the event log on every read. */
+  readonly progress?: {
+    readonly currentStageId: string
+    readonly currentRole: Role
+    readonly executor: string
+    readonly attempt: number
+    readonly attemptId: string
+    readonly executorRunId: string
+    readonly lastEventAt: number
+    readonly failureCode?: string
+    readonly constraintClass?: StageConstraint['class']
+  }
   /** Absent when the log holds no start event for this workflow. */
   readonly objective?:
     & Pick<WorkflowObjective, 'id' | 'cwd' | 'requirement' | 'risk' | 'workload' | 'profileId'>
@@ -290,6 +304,7 @@ export class WorkflowJournal {
   start(objective: WorkflowObjective): void {
     this.#session.append('harness/workflow-start', {
       workflowId: this.#workflowId,
+      hostRunId: String(this.#session.id),
       objectiveId: objective.id,
       profileId: objective.profileId,
       cwd: objective.cwd,
@@ -815,6 +830,7 @@ function harnessPayload(event: SessionEvent): HarnessPayload | undefined {
 
 /** Mutable accumulator behind {@link projectWorkflow}. */
 interface Projected {
+  hostRunId?: string
   objective?: WorkflowProjection['objective']
   conformance?: ConformanceStatusSummary
   changeImpact?: { planned?: ChangeImpactStatusSummary; actual?: ChangeImpactStatusSummary }
@@ -832,6 +848,9 @@ interface Projected {
   ended: string[]
   capabilityStarted: string[]
   capabilityEnded: string[]
+  stageAttempts: Map<string, number>
+  activeStage?: Omit<NonNullable<WorkflowProjection['progress']>, 'lastEventAt'>
+  lastEventAt?: number
   end?: WorkflowProjection['end']
 }
 
@@ -839,7 +858,8 @@ interface Projected {
 function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): void {
   switch (type) {
     case 'harness/workflow-start': {
-      const payload = data as unknown as { objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload']; specPath: string; specSha256: string; planPath: string; planSha256: string }
+      const payload = data as unknown as { hostRunId?: string; objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload']; specPath: string; specSha256: string; planPath: string; planSha256: string }
+      if (payload.hostRunId !== undefined) state.hostRunId = payload.hostRunId
       state.objective = {
         id: payload.objectiveId,
         cwd: payload.cwd,
@@ -1043,7 +1063,10 @@ function unmatched(starts: readonly string[], ends: readonly string[]): string[]
  * @returns The reconstructed state, with in-flight stages named.
  * @throws {JournalError} when the log holds a `harness/*` type this build does not know.
  */
-export function projectWorkflow(events: readonly SessionEvent[], workflowId: string): WorkflowProjection {
+export function projectWorkflow(
+  events: readonly SessionEvent[],
+  workflowId: string,
+): WorkflowProjection {
   const state: Projected = {
     routes: [],
     findings: [],
@@ -1059,17 +1082,48 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     ended: [],
     capabilityStarted: [],
     capabilityEnded: [],
+    stageAttempts: new Map(),
   }
   for (const event of events) {
     const data = harnessPayload(event)
     if (data === undefined || data.workflowId !== workflowId) continue
+    state.lastEventAt = event.time
+    if (event.type === 'harness/executor-start') {
+      const payload = data as unknown as { stageId: string; role: Role; executor: string }
+      const attempt = (state.stageAttempts.get(payload.stageId) ?? 0) + 1
+      state.stageAttempts.set(payload.stageId, attempt)
+      state.activeStage = {
+        currentStageId: payload.stageId,
+        currentRole: payload.role,
+        executor: payload.executor,
+        attempt,
+        attemptId: `${workflowId}:${payload.stageId}:${String(attempt)}`,
+        executorRunId: `${state.hostRunId ?? workflowId}:${String(event.seq)}`,
+      }
+    } else if (event.type === 'harness/executor-end') {
+      const payload = data as unknown as { stageId: string; outcome: ExecutorOutcome; failureCode?: string }
+      if (state.activeStage?.currentStageId === payload.stageId) {
+        if (payload.outcome === 'completed') delete state.activeStage
+        else state.activeStage = { ...state.activeStage, failureCode: payload.failureCode ?? payload.outcome }
+      }
+    } else if (event.type === 'harness/stage-constraint') {
+      const payload = data as unknown as { stageId: string; constraint: { class: StageConstraint['class'] } }
+      if (state.activeStage?.currentStageId === payload.stageId) {
+        state.activeStage = { ...state.activeStage, constraintClass: payload.constraint.class }
+      }
+    }
     fold(state, event.type as HarnessEventType, data)
   }
   const openStages = unmatched(state.started, state.ended)
   const openCapabilities = unmatched(state.capabilityStarted, state.capabilityEnded)
   const latestCertification = state.certifications.at(-1)
+  const progress = state.activeStage === undefined || state.lastEventAt === undefined
+    ? undefined
+    : Object.freeze({ ...state.activeStage, lastEventAt: state.lastEventAt })
   return Object.freeze({
     workflowId,
+    ...state.hostRunId === undefined ? {} : { hostRunId: state.hostRunId },
+    ...(progress === undefined ? {} : { progress }),
     routes: Object.freeze(state.routes),
     findings: Object.freeze(state.findings),
     constraints: Object.freeze(state.constraints),

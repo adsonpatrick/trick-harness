@@ -46,6 +46,8 @@ declare module '@deepseek-ai/dsh-session/types' {
     /** One workflow accepted, with the objective it was accepted for. */
     'harness/workflow-start': {
       workflowId: string
+      /** Durable identity of the host session that admitted this workflow. */
+      hostRunId?: string
       objectiveId: string
       profileId: string
       cwd: string
