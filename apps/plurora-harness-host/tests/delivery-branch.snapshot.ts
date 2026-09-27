@@ -97,7 +97,7 @@ describe('Plurora checkout delivery runnable snapshot', () => {
         const opencode: OpencodeAdapter = {
           startServer: async () => {
             if (scenario === 'startup-timeout') throw new OpencodeStartupTimeoutError(60000)
-            return { url: 'http://127.0.0.1:1', close() {} }
+            return { url: 'http://127.0.0.1:1', async close() { return undefined } }
           },
           connect: () => ({
             createSession: async () => 'recorded-implement', abortSession: async () => {},

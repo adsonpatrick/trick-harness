@@ -34,28 +34,48 @@ export function createGitWorkspaceStateReader(
         throw new WorkspaceStateReadError('git did not report one immutable workspace revision')
       }
 
-      const tracked = await pathList(
-        options, ['diff', '--name-only', '-z', '--no-renames', 'HEAD'], signal,
-        'read changed tracked paths',
+      const staged = await pathList(
+        options, ['diff', '--cached', '--name-only', '-z', '--no-renames', 'HEAD'], signal,
+        'read staged paths',
+      )
+      const worktree = await pathList(
+        options, ['diff', '--name-only', '-z', '--no-renames'], signal,
+        'read worktree paths',
       )
       const untracked = await pathList(
         options, ['ls-files', '--others', '--exclude-standard', '-z'], signal,
         'read untracked paths',
       )
+      const ignored = await pathList(
+        options, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], signal,
+        'read ignored paths',
+      )
       // The host's append-only journal lives in the checkout for deployment
       // isolation, but it is operational state, not part of the change being
       // implemented. Its writes must never widen the measured delivery set.
-      const candidates = [...new Set([...tracked, ...untracked])]
+      const candidates = [...new Set([...staged, ...worktree, ...untracked, ...ignored])]
         .filter(path => path !== SESSION_REPOSITORY_PATH && !path.startsWith(`${SESSION_REPOSITORY_PATH}/`))
         .sort()
-      const metadata = candidates.length === 0
-        ? new Map<string, string>()
-        : await rawMetadata(options, signal, new Set(tracked))
-      const entries = await Promise.all(candidates.map(async path => ({
-        path,
-        fingerprint: await fingerprint(options.projectRoot, path, metadata.get(path) ?? ''),
-      })))
-      return Object.freeze({ revision, entries: Object.freeze(entries) })
+      const stagedMetadata = staged.length === 0 ? new Map<string, string>() : await rawMetadata(
+        options, signal, ['diff', '--cached', '--raw', '-z', '--no-renames', 'HEAD'], new Set(staged),
+      )
+      const worktreeMetadata = worktree.length === 0 ? new Map<string, string>() : await rawMetadata(
+        options, signal, ['diff', '--raw', '-z', '--no-renames'], new Set(worktree),
+      )
+      const entries = (await Promise.all(candidates.flatMap(async (path) => {
+        const states: Promise<{ path: string; surface: 'index' | 'worktree' | 'untracked'; fingerprint: string }>[] = []
+        if (stagedMetadata.has(path)) states.push(Promise.resolve({
+          path, surface: 'index', fingerprint: stagedMetadata.get(path) ?? '',
+        }))
+        if (worktreeMetadata.has(path) || stagedMetadata.has(path)) states.push(fingerprint(
+          options.projectRoot, path, worktreeMetadata.get(path) ?? '',
+        )
+          .then(fingerprintValue => ({ path, surface: 'worktree' as const, fingerprint: fingerprintValue })))
+        if (untracked.includes(path) || ignored.includes(path)) states.push(fingerprint(options.projectRoot, path, '')
+          .then(fingerprintValue => ({ path, surface: 'untracked' as const, fingerprint: fingerprintValue })))
+        return Promise.all(states)
+      }))).flat().sort((left, right) => left.path.localeCompare(right.path) || left.surface.localeCompare(right.surface))
+      return Object.freeze({ revision, entries: Object.freeze(entries), observable: true })
     },
   }
 }
@@ -96,9 +116,10 @@ async function fingerprint(
 async function rawMetadata(
   options: GitWorkspaceStateReaderOptions,
   signal: AbortSignal,
+  args: readonly string[],
   trackedPaths: ReadonlySet<string>,
 ): Promise<Map<string, string>> {
-  const output = await git(options, ['diff', '--raw', '-z', '--no-renames', 'HEAD'], signal, 'read raw change metadata')
+  const output = await git(options, args, signal, 'read raw change metadata')
   if (output === '') return new Map()
   if (!output.endsWith('\0')) throw new WorkspaceStateReadError('git returned malformed raw change metadata')
   const fields = output.slice(0, -1).split('\0')

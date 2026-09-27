@@ -14,6 +14,7 @@
  */
 
 import { createOpencodeClient, createOpencodeServer } from '@opencode-ai/sdk'
+import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { OpencodeStartupTimeoutError } from './startup-error.ts'
 import { OpencodeMalformedResponseError, OpencodeServerStartError, OpencodeSessionAbortedError } from './runtime-errors.ts'
 import type {
@@ -91,6 +92,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function createSdkAdapter(settings: OpencodeSdkOptions): OpencodeAdapter {
   return {
     async startServer(options: OpencodeServerOptions): Promise<OpencodeServerHandle> {
+      if (settings.spawn !== undefined && settings.cwd !== undefined) {
+        return await startManagedServer(
+          settings.spawn,
+          settings.cwd,
+          settings.disposeGraceMs ?? 5_000,
+          settings.startupTimeoutMs,
+          settings.quiescenceDeadlineMs ?? 120_000,
+          options,
+        )
+      }
       // `config` is an in-memory `Config` scoped to this server instance only.
       let server: Awaited<ReturnType<typeof createOpencodeServer>>
       try {
@@ -108,9 +119,83 @@ export function createSdkAdapter(settings: OpencodeSdkOptions): OpencodeAdapter 
         }
         throw new OpencodeServerStartError()
       }
-      return { url: server.url, close: () => { server.close() } }
+      return { url: server.url, close: async () => { server.close(); return undefined } }
     },
 
     connect: bindClient,
   }
+}
+
+async function startManagedServer(
+  spawn: (spec: SubprocessSpawnSpec) => SubprocessHandle,
+  cwd: string,
+  graceMs: number,
+  startupTimeoutMs: number,
+  quiescenceDeadlineMs: number,
+  options: OpencodeServerOptions,
+): Promise<OpencodeServerHandle> {
+  let child: SubprocessHandle
+  try {
+    child = spawn({
+      argv: ['opencode', 'serve', `--hostname=${options.hostname}`, `--port=${String(options.port)}`],
+      cwd,
+      env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config) },
+      stdio: {
+        stdin: 'ignore',
+        stdout: { maxBytes: 256 * 1024 },
+        stderr: { maxBytes: 64 * 1024 },
+      },
+      graceMs,
+      signal: options.signal,
+    })
+  } catch {
+    throw new OpencodeServerStartError()
+  }
+  let offset = 0
+  const completion = child.done.then(() => true, () => true)
+  const deadline = Date.now() + startupTimeoutMs
+  try {
+    while (Date.now() < deadline) {
+      if (options.signal.aborted) throw new OpencodeServerStartError()
+      const read = child.collected.stdout?.readFrom(offset)
+      if (read === undefined || read.lossy) throw new OpencodeServerStartError()
+      offset = read.nextOffset
+      const match = read.text.match(/opencode server listening[^\r\n]*\bon\s+(https?:\/\/[^\s]+)/)
+      if (match?.[1] !== undefined) {
+        let proof: { readonly processId: number; readonly observedAtMs: number } | undefined
+        return {
+          url: match[1],
+          async close() {
+            if (proof !== undefined) return proof
+            if (!await stopAndJoin(child, quiescenceDeadlineMs)) throw new OpencodeServerStartError()
+            proof = Object.freeze({ processId: child.pid, observedAtMs: Date.now() })
+            return proof
+          },
+        }
+      }
+      if (await Promise.race([completion, delay(10).then(() => false)])) throw new OpencodeServerStartError()
+    }
+    throw new OpencodeStartupTimeoutError(startupTimeoutMs)
+  } catch (error) {
+    await stopAndJoin(child, quiescenceDeadlineMs).catch(() => false)
+    if (error instanceof OpencodeStartupTimeoutError) throw error
+    throw new OpencodeServerStartError()
+  }
+}
+
+async function stopAndJoin(child: SubprocessHandle, timeoutMs: number): Promise<boolean> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    child.terminate()
+    if (!await child.waitForExit(controller.signal)) return false
+    await child.done
+    return true
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }

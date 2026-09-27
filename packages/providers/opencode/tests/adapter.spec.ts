@@ -1,6 +1,7 @@
 /** SDK startup deadline, kept independent of provider/model response time. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createOpencodeClient, createOpencodeServer } from '@opencode-ai/sdk'
+import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { createSdkAdapter } from '../src/adapter.ts'
 import { permissionConfig } from '../src/config.ts'
 import { createOpencodeProvider } from '../src/index.ts'
@@ -107,5 +108,41 @@ describe('SDK startup deadline', () => {
       cwd: '/work', task: 'unused', route: { executor: 'opencode', permissionMode: 'read-only' }, signal: controller.signal,
     })
     expect(result).toEqual({ status: 'aborted', output: '' })
+  })
+})
+
+describe('managed server process-tree ownership', () => {
+  it('waits for the whole process tree before issuing a quiescence proof', async () => {
+    const specs: SubprocessSpawnSpec[] = []
+    let resolveDone = (): void => undefined
+    const done = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      resolveDone = () => resolve({ exitCode: 0, signal: null })
+    })
+    const spawn = (spec: SubprocessSpawnSpec): SubprocessHandle => {
+      specs.push(spec)
+      return {
+        pid: 4321,
+        stdin: undefined,
+        stdout: undefined,
+        stderr: undefined,
+        collected: {
+          stdout: { readFrom: () => ({ text: 'opencode server listening on http://127.0.0.1:43210\n', nextOffset: 52, lossy: false }) },
+        },
+        done,
+        terminate: vi.fn(),
+        waitForExit: vi.fn(async () => { resolveDone(); return true }),
+      }
+    }
+    const adapter = createSdkAdapter({ startupTimeoutMs: 1000, spawn, cwd: '/work', disposeGraceMs: 50 })
+    const server = await adapter.startServer({
+      hostname: '127.0.0.1', port: 0, signal: new AbortController().signal,
+      config: { permission: permissionConfig('workspace-write') },
+    })
+
+    expect(specs[0]).toMatchObject({
+      argv: ['opencode', 'serve', '--hostname=127.0.0.1', '--port=0'],
+      cwd: '/work', graceMs: 50,
+    })
+    await expect(server.close()).resolves.toMatchObject({ processId: 4321, observedAtMs: expect.any(Number) })
   })
 })

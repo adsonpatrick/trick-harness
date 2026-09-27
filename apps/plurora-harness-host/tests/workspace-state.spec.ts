@@ -66,8 +66,10 @@ describe('Git workspace snapshots', () => {
     await writeFile(join(root, 'untracked.txt'), 'untracked content')
     const git = fakeGit([
       `${REVISION}\n`,
+      '',
       'src/old.ts\0src/new.ts\0src/deleted.ts\0src/file\tname.ts\0',
-      'src/new.ts\0untracked.txt\0.plurora-harness/sessions/session.jsonl\0',
+      'untracked.txt\0.plurora-harness/sessions/session.jsonl\0',
+      'ignored.cache\0',
       RAW('D', 'src/old.ts') + RAW('A', 'src/new.ts') + RAW('D', 'src/deleted.ts')
         + RAW('D', 'src/file\tname.ts'),
     ])
@@ -75,15 +77,17 @@ describe('Git workspace snapshots', () => {
     const snapshot = await reader.snapshot({ ...OBJECTIVE, cwd: root }, new AbortController().signal)
 
     expect(snapshot.entries.map(entry => entry.path)).toEqual([
-      'src/deleted.ts', 'src/file\tname.ts', 'src/new.ts', 'src/old.ts', 'untracked.txt',
+      'ignored.cache', 'src/deleted.ts', 'src/file\tname.ts', 'src/new.ts', 'src/old.ts', 'untracked.txt',
     ])
-    expect(git.specs.slice(0, 3).map(spec => spec.argv)).toEqual([
+    expect(git.specs.slice(0, 5).map(spec => spec.argv)).toEqual([
       ['git', '-c', 'core.excludesFile=', 'rev-parse', 'HEAD'],
-      ['git', '-c', 'core.excludesFile=', 'diff', '--name-only', '-z', '--no-renames', 'HEAD'],
+      ['git', '-c', 'core.excludesFile=', 'diff', '--cached', '--name-only', '-z', '--no-renames', 'HEAD'],
+      ['git', '-c', 'core.excludesFile=', 'diff', '--name-only', '-z', '--no-renames'],
       ['git', '-c', 'core.excludesFile=', 'ls-files', '--others', '--exclude-standard', '-z'],
+      ['git', '-c', 'core.excludesFile=', 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'],
     ])
-    expect(git.specs[3]?.argv).toEqual([
-      'git', '-c', 'core.excludesFile=', 'diff', '--raw', '-z', '--no-renames', 'HEAD',
+    expect(git.specs[5]?.argv).toEqual([
+      'git', '-c', 'core.excludesFile=', 'diff', '--raw', '-z', '--no-renames',
     ])
     expect(git.specs.every(spec => spec.cwd === root)).toBe(true)
     expect(snapshot.entries.every(entry => !entry.fingerprint.includes('new content'))).toBe(true)
@@ -95,8 +99,8 @@ describe('Git workspace snapshots', () => {
     const file = join(root, 'src', 'already-dirty.ts')
     await writeFile(file, 'initial bytes')
     const git = fakeGit([
-      `${REVISION}\n`, 'src/already-dirty.ts\0', '', RAW('M', 'src/already-dirty.ts'),
-      `${REVISION}\n`, 'src/already-dirty.ts\0', '', RAW('M', 'src/already-dirty.ts'),
+      `${REVISION}\n`, '', 'src/already-dirty.ts\0', '', '', RAW('M', 'src/already-dirty.ts'),
+      `${REVISION}\n`, '', 'src/already-dirty.ts\0', '', '', RAW('M', 'src/already-dirty.ts'),
     ])
     const reader = createGitWorkspaceStateReader({ projectRoot: root, disposeGraceMs: 5000, spawn: git.spawn })
     const objective = { ...OBJECTIVE, cwd: root }
@@ -105,6 +109,20 @@ describe('Git workspace snapshots', () => {
     const after = await reader.snapshot(objective, new AbortController().signal)
 
     expect(changedPathsBetween(before, after)).toContain('src/already-dirty.ts')
-    expect(before.entries[0]?.fingerprint).not.toBe(after.entries[0]?.fingerprint)
+    expect(before.entries.find(entry => entry.surface === 'worktree')?.fingerprint)
+      .not.toBe(after.entries.find(entry => entry.surface === 'worktree')?.fingerprint)
+  })
+
+  it('records staged index state separately from worktree bytes', async () => {
+    const root = await fixtureRoot()
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'staged.ts'), 'worktree bytes')
+    const git = fakeGit([
+      `${REVISION}\n`, 'src/staged.ts\0', '', '', '', RAW('M', 'src/staged.ts'),
+    ])
+    const reader = createGitWorkspaceStateReader({ projectRoot: root, disposeGraceMs: 5000, spawn: git.spawn })
+    const snapshot = await reader.snapshot({ ...OBJECTIVE, cwd: root }, new AbortController().signal)
+    expect(snapshot.entries.map(entry => entry.surface)).toEqual(['index', 'worktree'])
+    expect(snapshot.entries[0]?.fingerprint).not.toBe(snapshot.entries[1]?.fingerprint)
   })
 })

@@ -17,6 +17,7 @@ import type {
   ExecutorProvider,
   ExecutorResult,
   ExecutorStartRequest,
+  ExecutorWriterQuiescenceProof,
 } from '@trick-harness/executor'
 import { permissionConfig, parseModel, OpencodeRouteError } from './config.ts'
 import { OpencodeStartupTimeoutError } from './startup-error.ts'
@@ -188,6 +189,7 @@ async function runOnce(
   adapter: OpencodeAdapter,
   request: ExecutorStartRequest,
   cleanup: ExecutorCleanupFailure[],
+  quiescence: { proof?: ExecutorWriterQuiescenceProof },
 ): Promise<ExecutorResult> {
   let server: OpencodeServerHandle | undefined
   let client: OpencodeClientHandle | undefined
@@ -249,8 +251,19 @@ async function runOnce(
     }
     if (server !== undefined) {
       const boundServer = server
-      const fault = await teardown(OPENCODE_SERVER_CLOSE_CLEANUP, () => boundServer.close())
-      if (fault !== undefined) cleanup.push(fault)
+      try {
+        const proof = await boundServer.close()
+        if (proof !== undefined && Number.isSafeInteger(proof.processId) && proof.processId > 0
+          && Number.isSafeInteger(proof.observedAtMs) && proof.observedAtMs >= 0) {
+          quiescence.proof = Object.freeze({
+            kind: 'owned-process-tree-exited',
+            processId: proof.processId,
+            observedAtMs: proof.observedAtMs,
+          })
+        }
+      } catch (error) {
+        cleanup.push(cleanupFailure(OPENCODE_SERVER_CLOSE_CLEANUP, error))
+      }
     }
   }
 }
@@ -267,10 +280,15 @@ export function createOpencodeProvider(adapter: OpencodeAdapter): ExecutorProvid
 
     async start(request: ExecutorStartRequest): Promise<ExecutorResult> {
       const cleanup: ExecutorCleanupFailure[] = []
-      const result = await runOnce(adapter, request, cleanup)
+      const quiescence: { proof?: ExecutorWriterQuiescenceProof } = {}
+      const result = await runOnce(adapter, request, cleanup, quiescence)
       // Attached, never merged into the outcome: a completed run whose server
       // would not close stays completed, and carries the fact that it did not.
-      return cleanup.length === 0 ? result : { ...result, cleanup: Object.freeze([...cleanup]) }
+      return {
+        ...result,
+        ...(quiescence.proof === undefined ? {} : { writerQuiescence: quiescence.proof }),
+        ...(cleanup.length === 0 ? {} : { cleanup: Object.freeze([...cleanup]) }),
+      }
     },
   }
 }

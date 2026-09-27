@@ -10,6 +10,7 @@
  * @module @trick-harness/journal
  */
 
+import { createHash } from 'node:crypto'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { EXTERNAL_CERTIFICATION_STATES, RECOVERY_DISPOSITIONS, ROLES, summarizeChangeImpact } from '@trick-harness/contracts'
 import type {
@@ -37,6 +38,8 @@ import type {
   WorkflowEndState,
   RecoveryDecisionRecord,
   RecoveryPolicyRecord,
+  WorkspaceCheckpointRecord,
+  WorkspaceReconciliationRecord,
 } from './types.ts'
 
 export * from './types.ts'
@@ -51,6 +54,8 @@ export * from './types.ts'
  */
 export const HARNESS_EVENT_TYPES = [
   'harness/workflow-start',
+  'harness/workspace-checkpoint',
+  'harness/workspace-reconciliation',
   'harness/route-decision',
   'harness/route-fallback',
   'harness/executor-start',
@@ -187,6 +192,10 @@ export interface WorkflowProjection {
   readonly recoveryPolicy?: RecoveryPolicyRecord
   /** Durable policy decisions in event order. */
   readonly recoveryDecisions: readonly RecoveryDecisionRecord[]
+  /** Durable pre-write workspace snapshots in attempt order. */
+  readonly workspaceCheckpoints: readonly WorkspaceCheckpointRecord[]
+  /** Read-only workspace reconciliation observations in event order. */
+  readonly workspaceReconciliations: readonly WorkspaceReconciliationRecord[]
   /** Latest in-flight stage facts, derived from the event log on every read. */
   readonly progress?: {
     readonly currentStageId: string
@@ -358,6 +367,26 @@ export class WorkflowJournal {
         reconciliations: record.counters.reconciliations,
         transitions: record.counters.transitions,
       },
+    })
+    await this.#durable()
+  }
+
+  /** Persist a bounded workspace checkpoint before a writable executor starts. */
+  async workspaceCheckpoint(record: WorkspaceCheckpointRecord): Promise<void> {
+    const checkpoint = copyWorkspaceCheckpoint(record)
+    this.#session.append('harness/workspace-checkpoint', {
+      workflowId: this.#workflowId,
+      ...checkpoint,
+    })
+    await this.#durable()
+  }
+
+  /** Persist a read-only reconciliation result tied to its pre-write checkpoint. */
+  async workspaceReconciliation(record: WorkspaceReconciliationRecord): Promise<void> {
+    const reconciliation = copyWorkspaceReconciliation(record)
+    this.#session.append('harness/workspace-reconciliation', {
+      workflowId: this.#workflowId,
+      ...reconciliation,
     })
     await this.#durable()
   }
@@ -865,6 +894,77 @@ function copyRecoveryPolicy(value: unknown): RecoveryPolicyRecord {
   })
 }
 
+function copyWorkspaceCheckpoint(value: WorkspaceCheckpointRecord): WorkspaceCheckpointRecord {
+  const entries = [...value.entries].map(entry => ({
+    path: entry.path, surface: entry.surface, fingerprint: entry.fingerprint,
+  })).sort((left, right) => left.path.localeCompare(right.path) || left.surface.localeCompare(right.surface))
+  if (!isJournalIdentifier(value.checkpointId) || !isJournalIdentifier(value.stageId)
+    || !isJournalIdentifier(value.attemptId) || !/^[a-f0-9]{40}$/.test(value.revision)
+    || !/^[a-f0-9]{64}$/.test(value.sha256) || !isNonnegativeSafeInteger(value.capturedAtMs)
+    || typeof value.observable !== 'boolean' || entries.length > 10_000) {
+    throw new JournalError('invalid-record', 'workspace checkpoint has invalid bounded identity or metadata')
+  }
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    if (typeof entry.path !== 'string' || entry.path.length === 0 || entry.path.length > 512
+      || entry.path.startsWith('/') || entry.path.includes('\\')
+      || entry.path.split('/').some(part => part === '' || part === '.' || part === '..')
+      || !['index', 'worktree', 'untracked'].includes(entry.surface)
+      || seen.has(`${entry.surface}:${entry.path}`) || !/^[a-f0-9]{64}$/.test(entry.fingerprint)) {
+      throw new JournalError('invalid-record', 'workspace checkpoint contains an invalid path fingerprint')
+    }
+    seen.add(`${entry.surface}:${entry.path}`)
+  }
+  const canonical = JSON.stringify({ revision: value.revision, entries })
+  const digest = createHash('sha256').update(canonical, 'utf8').digest('hex')
+  if (digest !== value.sha256 || value.checkpointId !== `checkpoint:${digest.slice(0, 24)}`) {
+    throw new JournalError('invalid-record', 'workspace checkpoint content identity did not match its fingerprints')
+  }
+  return Object.freeze({
+    checkpointId: value.checkpointId,
+    stageId: value.stageId,
+    attemptId: value.attemptId,
+    revision: value.revision,
+    entries: Object.freeze(entries.map(entry => Object.freeze(entry))),
+    sha256: digest,
+    capturedAtMs: value.capturedAtMs,
+    observable: value.observable,
+  })
+}
+
+function copyWorkspaceReconciliation(value: WorkspaceReconciliationRecord): WorkspaceReconciliationRecord {
+  const changedPaths = [...value.changedPaths].sort()
+  const digest = createHash('sha256').update(JSON.stringify({
+    checkpointId: value.checkpointId,
+    stageId: value.stageId,
+    attemptId: value.attemptId,
+    status: value.status,
+    changedPaths,
+    writerQuiescent: value.writerQuiescent,
+    ...(value.writerProof === undefined ? {} : { writerProof: value.writerProof }),
+    conclusive: value.conclusive,
+    recordedAtMs: value.recordedAtMs,
+  }), 'utf8').digest('hex')
+  if (!isJournalIdentifier(value.checkpointId) || !isJournalIdentifier(value.stageId)
+    || !isJournalIdentifier(value.attemptId) || value.reconciliationId !== `reconciliation:${digest.slice(0, 24)}`
+    || !['NO_MUTATION', 'IN_SCOPE_MUTATION', 'OUT_OF_SCOPE_MUTATION', 'PREEXISTING_USER_STATE_TOUCHED',
+      'REVISION_MOVED', 'SNAPSHOT_UNREADABLE', 'UNOBSERVABLE_MUTATION_SURFACE'].includes(value.status)
+    || !isNonnegativeSafeInteger(value.recordedAtMs) || typeof value.writerQuiescent !== 'boolean'
+    || (value.writerQuiescent && (value.writerProof === undefined
+      || value.writerProof.kind !== 'owned-process-tree-exited'
+      || !isPositiveSafeInteger(value.writerProof.processId)
+      || !isNonnegativeSafeInteger(value.writerProof.observedAtMs)))
+    || typeof value.conclusive !== 'boolean' || (value.conclusive && !value.writerQuiescent)
+    || (value.conclusive && value.status !== 'NO_MUTATION' && value.status !== 'IN_SCOPE_MUTATION')
+    || changedPaths.length > 10_000 || changedPaths.some(path => typeof path !== 'string' || path.length === 0
+      || path.length > 512 || path.startsWith('/') || path.includes('\\')
+      || path.split('/').some(part => part === '' || part === '.' || part === '..'))) {
+    throw new JournalError('invalid-record', 'workspace reconciliation has invalid bounded evidence')
+  }
+  return Object.freeze({ ...value, changedPaths: Object.freeze(changedPaths),
+    ...value.writerProof === undefined ? {} : { writerProof: Object.freeze({ ...value.writerProof }) } })
+}
+
 /** Rebuild only the bounded variant fields permitted for one decision. */
 function copyRecoveryDecision(value: unknown): RecoveryDecision {
   const record = value as Record<string, unknown> | null
@@ -969,6 +1069,8 @@ interface Projected {
   hostRunId?: string
   recoveryPolicy?: RecoveryPolicyRecord
   recoveryDecisions: RecoveryDecisionRecord[]
+  workspaceCheckpoints: WorkspaceCheckpointRecord[]
+  workspaceReconciliations: WorkspaceReconciliationRecord[]
   objective?: WorkflowProjection['objective']
   conformance?: ConformanceStatusSummary
   changeImpact?: { planned?: ChangeImpactStatusSummary; actual?: ChangeImpactStatusSummary }
@@ -1011,6 +1113,14 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
           plan: { path: payload.planPath, sha256: payload.planSha256 },
         },
       }
+      return
+    }
+    case 'harness/workspace-checkpoint': {
+      state.workspaceCheckpoints.push(copyWorkspaceCheckpoint(data as unknown as WorkspaceCheckpointRecord))
+      return
+    }
+    case 'harness/workspace-reconciliation': {
+      state.workspaceReconciliations.push(copyWorkspaceReconciliation(data as unknown as WorkspaceReconciliationRecord))
       return
     }
     case 'harness/recovery-decision': {
@@ -1234,6 +1344,8 @@ export function projectWorkflow(
 ): WorkflowProjection {
   const state: Projected = {
     recoveryDecisions: [],
+    workspaceCheckpoints: [],
+    workspaceReconciliations: [],
     routes: [],
     findings: [],
     constraints: [],
@@ -1315,6 +1427,8 @@ export function projectWorkflow(
     ...state.hostRunId === undefined ? {} : { hostRunId: state.hostRunId },
     ...state.recoveryPolicy === undefined ? {} : { recoveryPolicy: state.recoveryPolicy },
     recoveryDecisions: Object.freeze(state.recoveryDecisions),
+    workspaceCheckpoints: Object.freeze(state.workspaceCheckpoints),
+    workspaceReconciliations: Object.freeze(state.workspaceReconciliations),
     ...(progress === undefined ? {} : { progress }),
     routes: Object.freeze(state.routes),
     findings: Object.freeze(state.findings),

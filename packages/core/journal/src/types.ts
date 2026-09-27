@@ -78,6 +78,38 @@ export interface RecoveryDecisionRecord {
   readonly counters: RecoveryAttemptCounters
 }
 
+/** Bounded, content-free workspace state captured before a writable attempt. */
+export interface WorkspaceCheckpointRecord {
+  readonly checkpointId: string
+  readonly stageId: string
+  readonly attemptId: string
+  readonly revision: string
+  readonly entries: readonly {
+    readonly path: string
+    readonly surface: 'index' | 'worktree' | 'untracked'
+    readonly fingerprint: string
+  }[]
+  readonly sha256: string
+  readonly capturedAtMs: number
+  readonly observable: boolean
+}
+
+/** Read-only result for attributing an interrupted writable attempt. */
+export interface WorkspaceReconciliationRecord {
+  readonly reconciliationId: string
+  readonly checkpointId: string
+  readonly stageId: string
+  readonly attemptId: string
+  readonly status: 'NO_MUTATION' | 'IN_SCOPE_MUTATION' | 'OUT_OF_SCOPE_MUTATION'
+    | 'PREEXISTING_USER_STATE_TOUCHED' | 'REVISION_MOVED' | 'SNAPSHOT_UNREADABLE'
+    | 'UNOBSERVABLE_MUTATION_SURFACE'
+  readonly changedPaths: readonly string[]
+  readonly writerQuiescent: boolean
+  readonly writerProof?: { readonly kind: 'owned-process-tree-exited'; readonly processId: number; readonly observedAtMs: number }
+  readonly conclusive: boolean
+  readonly recordedAtMs: number
+}
+
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /** One workflow accepted, with the objective it was accepted for. */
@@ -104,6 +136,10 @@ declare module '@deepseek-ai/dsh-session/types' {
     }
     /** One deterministic recovery choice, flushed before its action may run. */
     'harness/recovery-decision': { workflowId: string } & RecoveryDecisionRecord
+    /** A durable pre-write snapshot identity and path fingerprints. */
+    'harness/workspace-checkpoint': { workflowId: string } & WorkspaceCheckpointRecord
+    /** A read-only reconciliation observation tied to one durable checkpoint. */
+    'harness/workspace-reconciliation': { workflowId: string } & WorkspaceReconciliationRecord
     /**
      * One conformance reading, reduced to hashes, counts and a verdict.
      *

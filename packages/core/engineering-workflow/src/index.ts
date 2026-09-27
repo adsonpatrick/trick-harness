@@ -33,7 +33,12 @@ import type {
   ExecutorFailureCategory,
 } from '@trick-harness/contracts'
 import { dispatchableRoute } from '@trick-harness/executor'
-import type { ExecutorResult, HarnessExecutorRuntime, ReasoningEffort } from '@trick-harness/executor'
+import type {
+  ExecutorResult,
+  ExecutorWriterQuiescenceProof,
+  HarnessExecutorRuntime,
+  ReasoningEffort,
+} from '@trick-harness/executor'
 import type { WorkflowJournal, WorkflowProjection } from '@trick-harness/journal'
 import type { BlockerKind, WorkflowEndState } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
@@ -90,8 +95,14 @@ import {
   summarizeConformance,
   validateConformanceCoverage,
 } from './conformance.ts'
-import { changedPathsBetween, WorkspaceStateError } from './workspace-state.ts'
-import type { ApprovedArtifactTexts, WorkspaceSnapshot } from './types.ts'
+import {
+  changedPathsBetween,
+  createWorkspaceCheckpoint,
+  createWorkspaceReconciliationRecord,
+  reconcileWorkspaceMutation,
+  WorkspaceStateError,
+} from './workspace-state.ts'
+import type { ApprovedArtifactTexts, WorkspaceSnapshot, WorkspaceStateReader } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type { CertificationStatusSummary } from '@trick-harness/contracts'
@@ -350,6 +361,8 @@ export interface WorkflowRuntimeOptions {
   readonly policy: RoutingPolicy
   readonly executors: HarnessExecutorRuntime
   readonly journal: WorkflowJournal
+  /** Deployment-owned fallback reader for runs whose request does not override it. */
+  readonly workspaceState?: WorkspaceStateReader
   /**
    * The deterministic capabilities this deployment composed, if any.
    *
@@ -523,6 +536,9 @@ export class WorkflowRunner {
 
   /** Walk the stage queue until something terminal happens. */
   async #drive(request: WorkflowRunRequest, signal: AbortSignal): Promise<WorkflowOutcome> {
+    if (request.workspaceState === undefined && this.#options.workspaceState !== undefined) {
+      request = { ...request, workspaceState: this.#options.workspaceState }
+    }
     const { objective } = request
     const { journal, profile } = this.#options
     const { maxRepairCycles, maxExecutorStarts } = profile.workflowPolicy
@@ -543,6 +559,8 @@ export class WorkflowRunner {
     const attemptOrdinals = new Map<string, number>()
     const recoveryCounters = new Map<string, RecoveryAttemptCounters>()
     const recoveryRoutes = new Map<string, StageRouteOverride>()
+    const workspaceCheckpoints = new Map<string, string>()
+    const workspaceCheckpointSnapshots = new Map<string, WorkspaceSnapshot>()
     let recoveryTransitions = 0
     let recoveryStartedAtMs: number | undefined
     // The repair session: one defect, what a debugger established about it, and
@@ -887,6 +905,49 @@ export class WorkflowRunner {
         repairCycles = pendingRepairCycle
         pendingRepairCycle = undefined
       }
+      if (permissionModeFor(stage.role) === 'workspace-write') {
+        if (request.workspaceState === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'a writable stage cannot start without a readable workspace checkpoint source',
+            [{ kind: 'gate', locator: 'harness:workspace-checkpoint', summary: 'pre-write workspace state is unavailable' }],
+            stage.stageId,
+          )
+        }
+        try {
+          const attemptId = `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`
+          // The run baseline is captured immediately before its first writer;
+          // reuse that exact snapshot for the first attempt checkpoint.
+          const snapshot = attemptOrdinal === 1 && deliveryBaseline !== undefined
+            ? deliveryBaseline
+            : await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+          const checkpoint = createWorkspaceCheckpoint(snapshot, {
+            stageId: stage.stageId,
+            attemptId,
+            capturedAtMs: this.#now(),
+          })
+          if (snapshot.observable === false) {
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external',
+              'a writable stage cannot start because a workspace mutation surface is unobservable',
+              [{ kind: 'gate', locator: 'harness:workspace-checkpoint', summary: 'workspace mutation surface is unobservable' }],
+              stage.stageId,
+            )
+          }
+          await journal.workspaceCheckpoint(checkpoint)
+          const attemptKey = `${stage.stageId}:${attemptOrdinal}`
+          workspaceCheckpoints.set(attemptKey, checkpoint.checkpointId)
+          workspaceCheckpointSnapshots.set(attemptKey, snapshot)
+        } catch (error) {
+          if (!(error instanceof WorkspaceStateError)) throw error
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'the pre-write workspace checkpoint could not be established',
+            [{ kind: 'gate', locator: 'harness:workspace-checkpoint', summary: 'workspace checkpoint read failed' }],
+            stage.stageId,
+          )
+        }
+      }
       executorStarts += 1
       let dispatched: Dispatched
       try {
@@ -998,6 +1059,67 @@ export class WorkflowRunner {
               ? [provider.name]
               : []
           })
+        const checkpointId = workspaceCheckpoints.get(`${stage.stageId}:${attemptOrdinal}`)
+        const checkpointSnapshot = workspaceCheckpointSnapshots.get(`${stage.stageId}:${attemptOrdinal}`)
+        const proof = dispatched.result?.writerQuiescence
+        const writerQuiescent = validWriterQuiescenceProof(proof, this.#now())
+        let reconciliation: ReturnType<typeof createWorkspaceReconciliationRecord> | undefined
+        if (writable && checkpointId !== undefined && checkpointSnapshot !== undefined
+          && request.workspaceState !== undefined) {
+          let observation
+          try {
+            const after = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+            observation = reconcileWorkspaceMutation(checkpointSnapshot, after, {
+              allowedPaths: plannedPaths ?? [],
+              writerQuiescent,
+              observable: checkpointSnapshot.observable === true && after.observable === true,
+            })
+          } catch {
+            observation = {
+              status: 'SNAPSHOT_UNREADABLE' as const,
+              conclusive: false,
+              changedPaths: Object.freeze([]),
+              reasonCode: 'WORKSPACE_SNAPSHOT_UNREADABLE',
+            }
+          }
+          reconciliation = createWorkspaceReconciliationRecord(observation, {
+            checkpointId,
+            stageId: stage.stageId,
+            attemptId: `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`,
+            recordedAtMs: this.#now(),
+            writerQuiescent,
+            ...(writerQuiescent && proof !== undefined ? { writerProof: proof } : {}),
+          })
+          await journal.workspaceReconciliation(reconciliation)
+        }
+        const recoveredMutation = stage.role === 'implement' && reconciliation !== undefined
+          && writerQuiescent && reconciliation.conclusive && reconciliation.status === 'IN_SCOPE_MUTATION'
+          && reconciliation.changedPaths.length > 0 && checkpointId !== undefined
+        const verificationStageId = recoveredMutation
+          ? `verify-recovered-${stage.stageId}-${String(attemptOrdinal)}`
+          : undefined
+        const independentVerifierNames = this.#options.executors.list()
+          .filter(candidate => candidate.capabilities.permissionModes.includes('read-only')
+            && (routed.context.independenceRequirement !== 'cross-executor-required'
+              || candidate.name !== dispatched.facts.executor))
+          .map(candidate => candidate.name)
+        const verificationRules = [
+          ...this.#options.policy.rules.filter(rule => rule.when.role === 'verify'),
+          ...this.#options.policy.fallbackRules.filter(rule => rule.when.role === 'verify'
+            && rule.when.unavailable === dispatched.facts.executor),
+        ]
+        const verificationRule = recoveredMutation
+          ? verificationRules.find(rule => typeof rule.use.executor === 'string'
+            && independentVerifierNames.includes(rule.use.executor))
+          : undefined
+        const verificationExecutor = typeof verificationRule?.use.executor === 'string'
+          ? verificationRule.use.executor : undefined
+        const verificationTier = typeof verificationRule?.use.tier === 'string'
+          ? verificationRule.use.tier : undefined
+        const recoveryReconciliationId = reconciliation?.reconciliationId
+        const canVerifyRecoveredMutation = recoveredMutation && verificationStageId !== undefined
+          && verificationExecutor !== undefined && verificationTier !== undefined
+          && recoveryReconciliationId !== undefined && checkpointId !== undefined
         const decision = decideRecovery({
           stageId: stage.stageId,
           role: stage.role,
@@ -1008,38 +1130,56 @@ export class WorkflowRunner {
           priorRouteFailures: priorCounters.reroutes,
           executor: dispatched.facts.executor,
           constraints: dispatched.facts.constraints.map(constraint => constraint.class),
-          failure: dispatched.failureCategory !== undefined
-            ? { kind: 'executor', category: dispatched.failureCategory }
-            : dispatched.facts.constraints[0] !== undefined
-              ? {
-                kind: 'constraint',
-                constraintClass: dispatched.facts.constraints[0].class,
-                toolDeclared: false,
-                ...(dispatched.facts.constraints[0].class === 'EXTERNAL_RUNTIME_UNREADABLE'
-                  ? { affectedBoundary: 'workspace' as const }
-                  : {}),
-              }
-              : { kind: 'unknown' },
+          failure: canVerifyRecoveredMutation
+            ? {
+              kind: 'recovered-mutation',
+              sourceAttemptId: `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`,
+              checkpointId,
+              reconciliationId: recoveryReconciliationId,
+              evidenceAnchorId: recoveryReconciliationId,
+              verificationStageId,
+              verificationExecutor,
+              verificationRole: 'verify',
+              verificationPermissionMode: 'read-only',
+              writerQuiescent: true,
+              attributionProven: true,
+              scopeProven: true,
+            }
+            : dispatched.failureCategory !== undefined
+              ? { kind: 'executor', category: dispatched.failureCategory }
+              : dispatched.facts.constraints[0] !== undefined
+                ? {
+                  kind: 'constraint',
+                  constraintClass: dispatched.facts.constraints[0].class,
+                  toolDeclared: false,
+                  ...(dispatched.facts.constraints[0].class === 'EXTERNAL_RUNTIME_UNREADABLE'
+                    ? { affectedBoundary: 'workspace' as const }
+                    : {}),
+                }
+                : { kind: 'unknown' },
           workspace: {
-            state: writable ? 'ambiguous' : 'known-clean',
-            writerQuiescent: !writable,
+            state: canVerifyRecoveredMutation ? 'reconciled' : writable ? 'ambiguous' : 'known-clean',
+            writerQuiescent: canVerifyRecoveredMutation ? true : !writable,
             reconstructible: false,
-            attributionProven: !writable,
-            scopeProven: !writable,
+            attributionProven: canVerifyRecoveredMutation || !writable,
+            scopeProven: canVerifyRecoveredMutation || !writable,
+            ...(checkpointId === undefined ? {} : { checkpointId }),
           },
           externalSideEffect: { state: 'none' },
           independenceRequirement: routed.context.independenceRequirement,
-          compatibleExecutors: compatibleFallbacks,
+          compatibleExecutors: canVerifyRecoveredMutation ? independentVerifierNames : compatibleFallbacks,
           budgets,
           nowMs: this.#now(),
           recoveryStartedAtMs,
+          ...(verificationStageId === undefined ? {} : { verificationStageId }),
         })
         const nextCounters: RecoveryAttemptCounters = {
           sameExecutorRetries: priorCounters.sameExecutorRetries + (decision.disposition === 'RETRY_SAME_EXECUTOR' ? 1 : 0),
           reroutes: priorCounters.reroutes + (decision.disposition === 'REROUTE_EXECUTOR' ? 1 : 0),
           reprovisions: priorCounters.reprovisions + (decision.disposition === 'REPROVISION_WORKSPACE' ? 1 : 0),
           reconciliations: priorCounters.reconciliations + (decision.disposition === 'RECONCILE_WORKSPACE'
-            || decision.disposition === 'RECONCILE_WORLD_STATE' ? 1 : 0),
+            || decision.disposition === 'RECONCILE_WORLD_STATE'
+            || decision.disposition === 'VERIFY_RECOVERED_MUTATION' ? 1 : 0),
           transitions: Math.min(budgets.maxRecoveryTransitionsPerWorkflow, recoveryTransitions + 1),
         }
         recoveryTransitions = nextCounters.transitions
@@ -1087,6 +1227,22 @@ export class WorkflowRunner {
         }
         if (decision.disposition === 'PAUSE_FOR_HUMAN') {
           return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', decision.reasonCode)
+        }
+        if (decision.disposition === 'VERIFY_RECOVERED_MUTATION'
+          && verificationStageId !== undefined && verificationExecutor !== undefined && verificationTier !== undefined) {
+          const verifierRoute: StageRouteOverride = {
+            role: 'verify',
+            executor: verificationExecutor,
+            semanticModelTier: verificationTier,
+          }
+          recoveryRoutes.set(verificationStageId, verifierRoute)
+          const existingVerifyIndex = queue.findIndex(queued => queued.role === 'verify')
+          if (existingVerifyIndex >= 0) {
+            queue[existingVerifyIndex] = { stageId: verificationStageId, role: 'verify' }
+          } else {
+            queue.unshift({ stageId: verificationStageId, role: 'verify' })
+          }
+          continue
         }
         if (
           decision.disposition === 'REPROVISION_WORKSPACE'
@@ -1658,7 +1814,7 @@ export class WorkflowRunner {
         canceled: false,
         failed: true,
         ...(failure === undefined ? {} : { failureCategory: failure.category }),
-        result: undefined,
+        result,
         refusal: undefined,
         routed,
       }
@@ -2144,4 +2300,13 @@ async function readWorkspaceSnapshot(
   // duplicate entries at this trust boundary without retaining file contents.
   changedPathsBetween(snapshot, snapshot)
   return snapshot
+}
+
+function validWriterQuiescenceProof(
+  proof: ExecutorWriterQuiescenceProof | undefined,
+  nowMs: number,
+): proof is ExecutorWriterQuiescenceProof {
+  return proof !== undefined && proof.kind === 'owned-process-tree-exited'
+    && Number.isSafeInteger(proof.processId) && proof.processId > 0
+    && Number.isSafeInteger(proof.observedAtMs) && proof.observedAtMs >= 0 && proof.observedAtMs <= nowMs
 }

@@ -264,12 +264,15 @@ export interface WorkflowDeliveryInput {
 export interface WorkspacePathState {
   readonly path: string
   readonly fingerprint: string
+  readonly surface?: 'index' | 'worktree' | 'untracked'
 }
 
 /** A bounded view of path state at one immutable repository revision. */
 export interface WorkspaceSnapshot {
   readonly revision: string
   readonly entries: readonly WorkspacePathState[]
+  /** False when ignored or otherwise writable surfaces were not covered. */
+  readonly observable?: boolean
 }
 
 /** The deployment-owned read-only source of repository snapshots. */

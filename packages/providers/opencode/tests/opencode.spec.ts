@@ -37,6 +37,8 @@ interface FakeOptions {
   readonly startServerFails?: Error
   /** Make the scoped server refuse to close, the way a wedged port does. */
   readonly closeFails?: Error
+  /** Report process-tree exit only after the fake server has joined. */
+  readonly closeProof?: { readonly processId: number; readonly observedAtMs: number }
   /** Make the session abort fail, the way an already-torn-down transport does. */
   readonly abortFails?: Error
 }
@@ -57,10 +59,10 @@ function fakeAdapter(options: FakeOptions = {}): { adapter: OpencodeAdapter; see
       if (options.startServerFails !== undefined) throw options.startServerFails
       return Promise.resolve({
         url: 'http://127.0.0.1:49512',
-        close: () => {
+        close: async () => {
           seen.closes += 1
           if (options.closeFails !== undefined) return Promise.reject(options.closeFails)
-          return undefined
+          return options.closeProof
         },
       })
     },
@@ -336,6 +338,19 @@ function wedged(name: string): Error {
 }
 
 describe('teardown failures are observable, not swallowed', () => {
+  it('exposes writer quiescence only after the owned process tree exits', async () => {
+    const observedAtMs = Date.now()
+    const { adapter } = fakeAdapter({
+      promptFails: new Error('transport disappeared'),
+      closeProof: { processId: 4321, observedAtMs },
+    })
+    const result = await createOpencodeProvider(adapter).start(request())
+    expect(result.status).toBe('error')
+    expect(result.writerQuiescence).toEqual({
+      kind: 'owned-process-tree-exited', processId: 4321, observedAtMs,
+    })
+  })
+
   it('leaves a completed run completed and says the server would not close', async () => {
     const { adapter } = fakeAdapter({ closeFails: wedged('ServerCloseError') })
     const result = await createOpencodeProvider(adapter).start(request())
@@ -347,6 +362,7 @@ describe('teardown failures are observable, not swallowed', () => {
       category: OPENCODE_SERVER_CLOSE_CLEANUP,
       safeDiagnostic: 'opencode-server-close failed (ServerCloseError)',
     }])
+    expect(result.writerQuiescence).toBeUndefined()
   })
 
   it('carries no byte of the raw exception into the durable fact', async () => {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
 
@@ -75,6 +76,8 @@ describe('the harness event vocabulary', () => {
   it('declares the durable lifecycle events in order', () => {
     expect([...HARNESS_EVENT_TYPES]).toStrictEqual([
       'harness/workflow-start',
+      'harness/workspace-checkpoint',
+      'harness/workspace-reconciliation',
       'harness/route-decision',
       'harness/route-fallback',
       'harness/executor-start',
@@ -243,6 +246,31 @@ describe('writing and replaying one workflow', () => {
     })
   })
 
+  it('durably records a bounded pre-write workspace checkpoint', async () => {
+    const entries = [{ path: 'src/a.ts', surface: 'worktree' as const, fingerprint: 'a'.repeat(64) }]
+    const sha256 = createHash('sha256').update(JSON.stringify({ revision: 'b'.repeat(40), entries })).digest('hex')
+    await journal.workspaceCheckpoint({
+      checkpointId: `checkpoint:${sha256.slice(0, 24)}`,
+      stageId: 'implement-1',
+      attemptId: 'wf-1:implement-1:1',
+      revision: 'b'.repeat(40),
+      entries,
+      sha256,
+      capturedAtMs: 1_000,
+      observable: true,
+    })
+
+    const projection = replay()
+    expect(session.events.at(-1)?.type).toBe('harness/workspace-checkpoint')
+    expect(projection.workspaceCheckpoints[0]).toMatchObject({
+      checkpointId: `checkpoint:${sha256.slice(0, 24)}`,
+      stageId: 'implement-1',
+      attemptId: 'wf-1:implement-1:1',
+      sha256,
+      observable: true,
+    })
+  })
+
   /** Project the session as a fresh process would: from the log alone. */
   function replay(workflowId = 'wf-1'): ReturnType<typeof projectWorkflow> {
     return projectWorkflow(session.events, workflowId)
@@ -250,6 +278,34 @@ describe('writing and replaying one workflow', () => {
 
   it('serializes every event type without the append path rejecting a payload', async () => {
     journal.start(objective)
+    const checkpointEntries = [{ path: 'src/a.ts', surface: 'worktree' as const, fingerprint: 'a'.repeat(64) }]
+    const checkpointSha = createHash('sha256').update(JSON.stringify({ revision: 'b'.repeat(40), entries: checkpointEntries })).digest('hex')
+    await journal.workspaceCheckpoint({
+      checkpointId: `checkpoint:${checkpointSha.slice(0, 24)}`,
+      stageId: 'impl-1',
+      attemptId: 'wf-1:impl-1:1',
+      revision: 'b'.repeat(40),
+      entries: checkpointEntries,
+      sha256: checkpointSha,
+      capturedAtMs: 1_000,
+      observable: true,
+    })
+    const reconciliationPayload = {
+      checkpointId: `checkpoint:${checkpointSha.slice(0, 24)}`,
+      stageId: 'impl-1',
+      attemptId: 'wf-1:impl-1:1',
+      status: 'NO_MUTATION' as const,
+      changedPaths: [] as string[],
+      writerQuiescent: true,
+      writerProof: { kind: 'owned-process-tree-exited' as const, processId: 123, observedAtMs: 1_000 },
+      conclusive: true,
+      recordedAtMs: 1_000,
+    }
+    const reconciliationSha = createHash('sha256').update(JSON.stringify(reconciliationPayload)).digest('hex')
+    await journal.workspaceReconciliation({
+      reconciliationId: `reconciliation:${reconciliationSha.slice(0, 24)}`,
+      ...reconciliationPayload,
+    })
     journal.routeDecision({ stageId: 'impl-1', role: 'implement', decision })
     await journal.routeFallback(
       { stageId: 'impl-1', role: 'implement', decision: { ...decision, fallbackFrom: 'codex' } },
@@ -446,6 +502,8 @@ describe('writing and replaying one workflow', () => {
       deliveries: [],
       certifications: [],
       recoveryDecisions: [],
+      workspaceCheckpoints: [],
+      workspaceReconciliations: [],
       blockers: [],
       circuits: {},
       openStages: [],

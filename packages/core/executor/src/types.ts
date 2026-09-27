@@ -116,6 +116,13 @@ export interface ExecutorCleanupFailure {
   readonly safeDiagnostic: string
 }
 
+/** Positive proof that a provider-owned writable process tree has exited. */
+export interface ExecutorWriterQuiescenceProof {
+  readonly kind: 'owned-process-tree-exited'
+  readonly processId: number
+  readonly observedAtMs: number
+}
+
 /** The bounded outcome of one run. */
 export interface ExecutorResult {
   readonly status: 'completed' | 'aborted' | 'error'
@@ -133,6 +140,8 @@ export interface ExecutorResult {
    * nothing. A run can fail more than one teardown, so it is a list.
    */
   readonly cleanup?: readonly ExecutorCleanupFailure[]
+  /** Present only when the provider joined every process tree it owned for this attempt. */
+  readonly writerQuiescence?: ExecutorWriterQuiescenceProof
 }
 
 /** One product runtime, adapted to the executor contract. */
