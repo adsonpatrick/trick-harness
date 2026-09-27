@@ -338,6 +338,8 @@ export interface RoutingContext {
   readonly requiredCapabilities: readonly string[]
   /** An explicit human override for this one run. */
   readonly userOverride?: RouteOverride
+  /** A recorded recovery decision's bounded route, applied for one retry only. */
+  readonly recoveryOverride?: RouteOverride
 }
 
 /**

@@ -22,7 +22,8 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import {
-  ContractError, ROLES, RISKS, STAGE_CONSTRAINT_CLASSES, WORKLOADS, parseApprovedArtifactSet, parseStageRouteOverride,
+  ContractError, RECOVERY_DISPOSITIONS, ROLES, RISKS, STAGE_CONSTRAINT_CLASSES, WORKLOADS,
+  parseApprovedArtifactSet, parseStageRouteOverride,
 } from '@trick-harness/contracts'
 import type {
   CertificationStatusSummary,
@@ -257,8 +258,12 @@ function progressOf(status: ControlWorkflowStatus, progress: ControlWorkflowProg
   const constraintClass = STAGE_CONSTRAINT_CLASSES.includes(progress.constraintClass as typeof STAGE_CONSTRAINT_CLASSES[number])
     ? progress.constraintClass
     : undefined
-  const recoveryDisposition = text(progress.recoveryDisposition)
-  const reasonCode = text(progress.reasonCode)
+  const recoveryDisposition = RECOVERY_DISPOSITIONS.includes(
+    progress.recoveryDisposition as typeof RECOVERY_DISPOSITIONS[number],
+  ) ? progress.recoveryDisposition : undefined
+  const reasonCode = typeof progress.reasonCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(progress.reasonCode)
+    ? progress.reasonCode
+    : undefined
   const nextAction = text(progress.nextAction)
   const stages = progress.stages?.slice(-MAX_STAGES).flatMap((stage): ControlStageStatus[] => {
     const stageId = text(stage.stageId)
@@ -452,7 +457,14 @@ export class HarnessControlServer {
       throw new ControlError('duplicate-workflow', 409, 'a workflow of that id is already running')
     }
     const settled = started.outcome
-      .then(outcome => statusOfOutcome(outcome))
+      .then((outcome) => {
+        const status = statusOfOutcome(outcome)
+        try {
+          return progressOf(status, started.readProgress?.())
+        } catch {
+          return status
+        }
+      })
       .catch(async (error: unknown) => {
         const canceled = this.#runs.get(workflowId)?.canceled === true
         // A run that threw or was cancelled wrote no terminal end, so what it

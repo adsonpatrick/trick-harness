@@ -193,6 +193,18 @@ describe('an explicit human override', () => {
   })
 })
 
+describe('a recovery route override', () => {
+  it('records controller recovery separately from a human routing choice', () => {
+    const decision = route(
+      context({ recoveryOverride: { executor: 'codex', semanticModelTier: 'codex.frontier' } }),
+      policy,
+    )
+    expect(decision.executor).toBe('codex')
+    expect(decision.reasonCodes).toContain('override:recovery')
+    expect(decision.reasonCodes).not.toContain('override:user')
+  })
+})
+
 describe('keeping a certifying stage independent of the work it certifies', () => {
   it('re-routes away from the implementer when the table offers someone else', () => {
     const decision = route(

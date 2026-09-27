@@ -381,6 +381,9 @@ describe('what a restart may say', () => {
           attemptId: 'wf-earlier:repair-1:2',
           executorRunId: 'host-1:9',
           lastEventAt: 123,
+          recoveryDisposition: 'RETRY_SAME_EXECUTOR',
+          reasonCode: 'TRANSIENT_EXECUTOR_UNAVAILABLE',
+          nextAction: 'Retry after the recorded backoff',
           stages: [{ stageId: 'repair-1', role: 'repair', executor: 'codex', verdict: 'INCONCLUSIVE', summary: 'bounded' }],
           transcript: 'provider-private-marker',
         },
@@ -391,6 +394,8 @@ describe('what a restart may say', () => {
     const rendered = JSON.stringify(status)
     expect(rendered).toContain('"currentStageId":"repair-1"')
     expect(rendered).toContain('"executorRunId":"host-1:9"')
+    expect(rendered).toContain('"recoveryDisposition":"RETRY_SAME_EXECUTOR"')
+    expect(rendered).toContain('"reasonCode":"TRANSIENT_EXECUTOR_UNAVAILABLE"')
     expect(rendered).toContain('"stages":[{"stageId":"repair-1"')
     expect(rendered).not.toContain('provider-private-marker')
   })

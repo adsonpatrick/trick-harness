@@ -398,9 +398,57 @@ describe('a run that goes wrong', () => {
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.verdict).toBe('BLOCKED')
     expect(JSON.stringify(session.events)).toContain('transport-unavailable')
     expect(JSON.stringify(session.events)).toContain('provider did not start')
+  })
+
+  it('journals each bounded read-only retry before starting the same executor again', async () => {
+    const startTimes: number[] = []
+    let clock = 1_000
+    let starts = 0
+    executors.register(provider('reviewer', async () => {
+      starts += 1
+      startTimes.push(clock)
+      return starts < 3
+        ? { status: 'error', output: '', failure: {
+          category: 'transport-unavailable', code: 'fixture.transport', safeDiagnostic: 'temporary outage',
+        } }
+        : passing('reviewer')
+    }))
+    executors.register(provider('spare', async () => passing('spare')))
+    runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: { delivery: DELIVERY },
+      now: () => clock,
+      waitUntil: async (eligibleAt) => { clock = eligibleAt },
+    })
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      plan: () => [{ stageId: 'review-retry', role: 'review' }],
+      interpret: interpretAllPass,
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    const decisions = projectWorkflow(session.events, 'wf-1').recoveryDecisions
+    expect(outcome.state, JSON.stringify({ summary: outcome.summary, starts, decisions })).toBe('completed')
+    expect(starts).toBe(3)
+    expect(startTimes).toEqual([1_000, 1_100, 1_300])
+    expect(decisions.map(entry => entry.decision)).toMatchObject([
+      { disposition: 'RETRY_SAME_EXECUTOR', executor: 'reviewer', attempt: 2, retryAtMs: 1_100 },
+      { disposition: 'RETRY_SAME_EXECUTOR', executor: 'reviewer', attempt: 3, retryAtMs: 1_300 },
+    ])
+    expect(decisions.map(entry => entry.counters.sameExecutorRetries)).toEqual([1, 2])
+    const recoveryEvents = session.events.filter(event => event.type === 'harness/recovery-decision')
+    const stageStarts = session.events.filter(event =>
+      event.type === 'harness/executor-start' && event.data.stageId === 'review-retry')
+    expect(recoveryEvents[0]?.seq).toBeLessThan(stageStarts[1]?.seq ?? -1)
+    expect(recoveryEvents[1]?.seq).toBeLessThan(stageStarts[2]?.seq ?? -1)
   })
 
   it('keeps a non-reroutable provider error inconclusive without opening repair', async () => {
@@ -412,10 +460,10 @@ describe('a run that goes wrong', () => {
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.verdict).toBe('BLOCKED')
     expect(outcome.repairCycles).toBe(0)
     expect(outcome.stages[0]?.verdict).toBe('INCONCLUSIVE')
-    expect(projectWorkflow(session.events, 'wf-1').end?.verdict).toBe('INCONCLUSIVE')
+    expect(projectWorkflow(session.events, 'wf-1').end?.verdict).toBe('BLOCKED')
   })
 
   it('does not repair a certifying PARTIAL result without a confirmed repair target', async () => {
@@ -453,9 +501,61 @@ describe('a run that goes wrong', () => {
       ...CONFORMS,
     })
 
-    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.verdict).toBe('BLOCKED')
     expect(outcome.repairCycles).toBe(0)
     expect(projectWorkflow(session.events, 'wf-1').constraints).toHaveLength(1)
+    expect(projectWorkflow(session.events, 'wf-1').recoveryDecisions[0]?.decision).toMatchObject({
+      disposition: 'PAUSE_FOR_HUMAN',
+      reasonCode: 'WORKSPACE_NOT_RECONSTRUCTIBLE',
+    })
+  })
+
+  it('recovers a read-only availability constraint through the policy engine', async () => {
+    let clock = 1_000
+    let reads = 0
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      now: () => clock,
+      waitUntil: async (eligibleAt) => { clock = eligibleAt },
+    })
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      plan: () => [{ stageId: 'review-constraint-retry', role: 'review' }],
+      interpret: (stage, executor) => {
+        reads += 1
+        return reads === 1
+          ? {
+            role: stage.role,
+            executor,
+            verdict: 'PASS',
+            summary: 'provider was temporarily unavailable',
+            findings: [],
+            constraints: [{
+              id: 'availability',
+              class: 'EXTERNAL_SERVICE_UNAVAILABLE',
+              raisedBy: 'review',
+              summary: 'provider was temporarily unavailable',
+              evidence: [],
+            }],
+            evidence: [],
+          }
+          : interpretAllPass(stage, executor)
+      },
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(reads).toBe(2)
+    expect(projectWorkflow(session.events, 'wf-1').recoveryDecisions[0]?.decision).toMatchObject({
+      disposition: 'RETRY_SAME_EXECUTOR',
+      retryAtMs: 1_100,
+    })
   })
 
   it('blocks rather than guessing when a stage returns a product decision', async () => {
@@ -1365,23 +1465,41 @@ describe('an executor that stops serving mid-run', () => {
     })
   }
 
-  it('moves the stage to another product when the first one cannot serve', async () => {
+  it('routes a transient read-only failure only after the retry budget is exhausted', async () => {
     const seen: string[] = []
-    executors.register(failing('builder', 'usage-limit-exceeded', seen))
-    executors.register(provider('reviewer', async () => passing('reviewer')))
+    let clock = 1_000
+    executors.register(failing('reviewer', 'server-overloaded', seen))
     executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
+    runner = new WorkflowRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: { delivery: DELIVERY },
+      now: () => clock,
+      waitUntil: async (eligibleAt) => { clock = eligibleAt },
+    })
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      plan: () => [{ stageId: 'review-availability', role: 'review' }],
+      interpret: interpretAllPass,
+      task: taskFor,
+      ...CONFORMS,
+    })
 
-    expect(outcome.state).toBe('completed')
-    expect(seen).toContain('spare')
-    // The reroute is a real start against a real product, so the budget sees it:
-    // two executor stages, three starts.
+    expect(outcome.state, JSON.stringify({
+      summary: outcome.summary,
+      seen,
+      decisions: projectWorkflow(session.events, 'wf-1').recoveryDecisions,
+    })).toBe('completed')
+    expect(seen).toEqual(['reviewer', 'reviewer', 'reviewer', 'spare'])
+    const decisions = projectWorkflow(session.events, 'wf-1').recoveryDecisions
+    expect(decisions.map(entry => entry.decision.disposition)).toEqual([
+      'RETRY_SAME_EXECUTOR', 'RETRY_SAME_EXECUTOR', 'REROUTE_EXECUTOR',
+    ])
+    expect(decisions[2]?.decision).toMatchObject({ executor: 'spare' })
     expect(outcome.executorStarts).toBeGreaterThan(2)
-    const events = JSON.stringify(session.events)
-    expect(events).toContain('harness/route-fallback')
-    expect(events).toContain('usage-limit-exceeded')
-    expect(projectWorkflow(session.events, 'wf-1').circuits['builder']).toBe('DEGRADED')
   })
 
   it('does not ask a second product the same question after a wrong answer', async () => {
@@ -1399,17 +1517,20 @@ describe('an executor that stops serving mid-run', () => {
     expect(JSON.stringify(session.events)).not.toContain('harness/route-fallback')
   })
 
-  it('counts every reroute against the start budget the run was given', async () => {
+  it('does not reroute a failed write without workspace reconciliation proof', async () => {
     const seen: string[] = []
     executors.register(failing('builder', 'server-overloaded', seen))
     executors.register(failing('spare', 'server-overloaded', seen))
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    expect(seen).toEqual(['builder', 'spare'])
-    expect(outcome.executorStarts).toBe(2)
-    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(seen).toEqual(['builder'])
+    expect(outcome.executorStarts).toBe(1)
+    expect(outcome.verdict).toBe('BLOCKED')
     expect(outcome.repairCycles).toBe(0)
+    expect(projectWorkflow(session.events, 'wf-1').recoveryDecisions[0]?.decision).toMatchObject({
+      disposition: 'PAUSE_FOR_HUMAN', reasonCode: 'WORKSPACE_RECONCILIATION_UNPROVEN',
+    })
   })
 })
 

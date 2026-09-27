@@ -155,30 +155,39 @@ describe('writing and replaying one workflow', () => {
   })
 
   it('reconstructs a bounded recovery decision, deadline and consumed counters', () => {
-    const event = {
-      type: 'harness/recovery-decision',
-      seq: 1,
-      time: 1,
-      data: {
-        workflowId: 'wf-1',
-        stageId: 'verify-1',
-        attemptId: 'wf-1:verify-1:1',
-        decision: {
-          disposition: 'RETRY_SAME_EXECUTOR',
-          reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
-          executor: 'codex',
-          attempt: 2,
-          retryAtMs: 1_100,
+    const recoveryEvents = [
+      {
+        type: 'harness/executor-start', seq: 1, time: 900,
+        data: { workflowId: 'wf-1', stageId: 'verify-1', role: 'verify', executor: 'codex', resolvedModel: 'm', permissionMode: 'read-only' },
+      },
+      {
+        type: 'harness/executor-end', seq: 2, time: 950,
+        data: { workflowId: 'wf-1', stageId: 'verify-1', executor: 'codex', outcome: 'failed', failureCode: 'transport', durationMs: 50 },
+      },
+      {
+        type: 'harness/recovery-decision', seq: 3, time: 1_000,
+        data: {
+          workflowId: 'wf-1',
+          stageId: 'verify-1',
+          attemptId: 'wf-1:verify-1:1',
+          decision: {
+            disposition: 'RETRY_SAME_EXECUTOR',
+            reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+            executor: 'codex',
+            attempt: 2,
+            retryAtMs: 1_100,
+            privateOutput: 'must-not-survive',
+          },
+          recordedAtMs: 1_000,
+          recoveryDeadlineAtMs: 10_000,
+          counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
           privateOutput: 'must-not-survive',
         },
-        recordedAtMs: 1_000,
-        recoveryDeadlineAtMs: 10_000,
-        counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
-        privateOutput: 'must-not-survive',
       },
-    } as unknown as SessionEvent
+    ] as unknown as SessionEvent[]
 
-    expect(projectWorkflow([event], 'wf-1').recoveryDecisions).toEqual([{
+    const projection = projectWorkflow(recoveryEvents, 'wf-1')
+    expect(projection.recoveryDecisions).toEqual([{
       stageId: 'verify-1',
       attemptId: 'wf-1:verify-1:1',
       decision: {
@@ -192,6 +201,46 @@ describe('writing and replaying one workflow', () => {
       recoveryDeadlineAtMs: 10_000,
       counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
     }])
+    expect(projection.progress).toMatchObject({
+      currentStageId: 'verify-1',
+      recoveryDisposition: 'RETRY_SAME_EXECUTOR',
+      reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+    })
+  })
+
+  it('replays recovered-mutation verification as a typed recovery decision', () => {
+    const event = {
+      type: 'harness/recovery-decision',
+      seq: 1,
+      time: 2_000,
+      data: {
+        workflowId: 'wf-1',
+        stageId: 'implement-1',
+        attemptId: 'wf-1:implement-1:1',
+        decision: {
+          disposition: 'VERIFY_RECOVERED_MUTATION',
+          reasonCode: 'RECONCILED_MUTATION_REQUIRES_FRESH_VERIFICATION',
+          sourceAttemptId: 'wf-1:implement-1:1',
+          checkpointId: 'checkpoint-1',
+          reconciliationId: 'reconciliation-1',
+          evidenceAnchorId: 'workspace-snapshot-1',
+          verificationStageId: 'verify-final-1',
+        },
+        recordedAtMs: 2_000,
+        recoveryDeadlineAtMs: 10_000,
+        counters: { sameExecutorRetries: 0, reroutes: 0, reprovisions: 0, reconciliations: 1, transitions: 1 },
+      },
+    } as unknown as SessionEvent
+
+    expect(projectWorkflow([event], 'wf-1').recoveryDecisions[0]?.decision).toEqual({
+      disposition: 'VERIFY_RECOVERED_MUTATION',
+      reasonCode: 'RECONCILED_MUTATION_REQUIRES_FRESH_VERIFICATION',
+      sourceAttemptId: 'wf-1:implement-1:1',
+      checkpointId: 'checkpoint-1',
+      reconciliationId: 'reconciliation-1',
+      evidenceAnchorId: 'workspace-snapshot-1',
+      verificationStageId: 'verify-final-1',
+    })
   })
 
   /** Project the session as a fresh process would: from the log alone. */

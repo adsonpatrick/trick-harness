@@ -175,9 +175,10 @@ export function decideRecovery(context: RecoveryContext): RecoveryDecision {
     return pause('RECOVERY_CONTEXT_INVALID')
   }
   if (!Number.isSafeInteger(context.attempt) || context.attempt < 1
-    || !Number.isFinite(context.nowMs) || !Number.isFinite(context.recoveryStartedAtMs)
+    || !Number.isSafeInteger(context.nowMs) || context.nowMs < 0
+    || !Number.isSafeInteger(context.recoveryStartedAtMs) || context.recoveryStartedAtMs < 0
     || context.nowMs < context.recoveryStartedAtMs
-    || !Number.isFinite(context.recoveryStartedAtMs + budgets.recoveryDeadlineMs)
+    || !Number.isSafeInteger(context.recoveryStartedAtMs + budgets.recoveryDeadlineMs)
     || !Number.isSafeInteger(context.priorRouteFailures) || context.priorRouteFailures < 0
     || Object.values(context.priorRecoveryAttempts).some(value => !Number.isSafeInteger(value) || value < 0)) {
     return pause('RECOVERY_CLOCK_OR_ATTEMPT_INVALID')
@@ -324,7 +325,8 @@ function retryOrReroute(
   if (context.priorRecoveryAttempts.sameExecutorRetries < budgets.maxSameExecutorRetriesPerStage) {
     const retryIndex = context.priorRecoveryAttempts.sameExecutorRetries + 1
     const delayMs = Math.min(budgets.backoffMaxMs, budgets.backoffInitialMs * budgets.backoffMultiplier ** (retryIndex - 1))
-    const retryAtMs = context.nowMs + delayMs
+    const retryAtMs = Math.ceil(context.nowMs + delayMs)
+    if (!Number.isSafeInteger(retryAtMs)) return pause('RECOVERY_CLOCK_OR_ATTEMPT_INVALID')
     if (retryAtMs >= context.recoveryStartedAtMs + budgets.recoveryDeadlineMs) {
       return terminal('TERMINAL_INCONCLUSIVE', 'RECOVERY_DEADLINE_EXCEEDED')
     }

@@ -194,10 +194,12 @@ export interface WorkflowProjection {
     readonly executor: string
     readonly attempt: number
     readonly attemptId: string
-    readonly executorRunId: string
+    readonly executorRunId?: string
     readonly lastEventAt: number
     readonly failureCode?: string
     readonly constraintClass?: StageConstraint['class']
+    readonly recoveryDisposition?: RecoveryDecision['disposition']
+    readonly reasonCode?: string
   }
   /** Absent when the log holds no start event for this workflow. */
   readonly objective?:
@@ -338,7 +340,7 @@ export class WorkflowJournal {
     const bounded = copyRecoveryDecision(record.decision)
     if (!isJournalIdentifier(record.stageId) || !isJournalIdentifier(record.attemptId)
       || !Number.isSafeInteger(record.recordedAtMs) || record.recordedAtMs < 0
-      || !Number.isSafeInteger(record.recoveryDeadlineAtMs) || record.recoveryDeadlineAtMs < record.recordedAtMs
+      || !isNonnegativeSafeInteger(record.recoveryDeadlineAtMs)
       || Object.values(record.counters).some(value => !isNonnegativeSafeInteger(value))) {
       throw new JournalError('invalid-record', 'recovery decision record has invalid bounded identity, time, or counters')
     }
@@ -1016,7 +1018,7 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
       const decision = copyRecoveryDecision(payload.decision)
       if (!isJournalIdentifier(payload.stageId) || !isJournalIdentifier(payload.attemptId)
         || !Number.isSafeInteger(payload.recordedAtMs) || payload.recordedAtMs < 0
-        || !Number.isSafeInteger(payload.recoveryDeadlineAtMs) || payload.recoveryDeadlineAtMs < payload.recordedAtMs
+        || !isNonnegativeSafeInteger(payload.recoveryDeadlineAtMs)
         || Object.values(payload.counters).some(value => !isNonnegativeSafeInteger(value))) {
         throw new JournalError('invalid-record', 'recovery decision record has invalid bounded identity, time, or counters')
       }
@@ -1028,6 +1030,13 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
         recoveryDeadlineAtMs: payload.recoveryDeadlineAtMs,
         counters: Object.freeze({ ...payload.counters }),
       })
+      if (state.activeStage?.currentStageId === payload.stageId) {
+        state.activeStage = {
+          ...state.activeStage,
+          recoveryDisposition: decision.disposition,
+          reasonCode: decision.reasonCode,
+        }
+      }
       return
     }
     case 'harness/conformance': {
@@ -1248,6 +1257,7 @@ export function projectWorkflow(
     if (event.type === 'harness/executor-start') {
       const payload = data as unknown as { stageId: string; role: Role; executor: string }
       const attempt = (state.stageAttempts.get(payload.stageId) ?? 0) + 1
+      const lastRecovery = state.recoveryDecisions.filter(record => record.stageId === payload.stageId).at(-1)
       state.stageAttempts.set(payload.stageId, attempt)
       state.activeStage = {
         currentStageId: payload.stageId,
@@ -1256,6 +1266,10 @@ export function projectWorkflow(
         attempt,
         attemptId: `${workflowId}:${payload.stageId}:${String(attempt)}`,
         executorRunId: `${state.hostRunId ?? workflowId}:${String(event.seq)}`,
+        ...(lastRecovery === undefined ? {} : {
+          recoveryDisposition: lastRecovery.decision.disposition,
+          reasonCode: lastRecovery.decision.reasonCode,
+        }),
       }
     } else if (event.type === 'harness/executor-end') {
       const payload = data as unknown as { stageId: string; outcome: ExecutorOutcome; failureCode?: string }
@@ -1267,6 +1281,25 @@ export function projectWorkflow(
       const payload = data as unknown as { stageId: string; constraint: { class: StageConstraint['class'] } }
       if (state.activeStage?.currentStageId === payload.stageId) {
         state.activeStage = { ...state.activeStage, constraintClass: payload.constraint.class }
+      }
+    } else if (event.type === 'harness/recovery-decision') {
+      const payload = data as unknown as RecoveryDecisionRecord
+      const route = state.routes.filter(record => record.stageId === payload.stageId).at(-1)
+      const current = state.activeStage?.currentStageId === payload.stageId ? state.activeStage : undefined
+      if (current !== undefined || route !== undefined) {
+        const decision = copyRecoveryDecision(payload.decision)
+        state.activeStage = {
+          currentStageId: payload.stageId,
+          currentRole: current?.currentRole ?? route?.role as Role,
+          executor: current?.executor ?? route?.executor as string,
+          attempt: current?.attempt ?? state.stageAttempts.get(payload.stageId) ?? 1,
+          attemptId: payload.attemptId,
+          ...(current?.executorRunId === undefined ? {} : { executorRunId: current.executorRunId }),
+          ...(current?.failureCode === undefined ? {} : { failureCode: current.failureCode }),
+          ...(current?.constraintClass === undefined ? {} : { constraintClass: current.constraintClass }),
+          recoveryDisposition: decision.disposition,
+          reasonCode: decision.reasonCode,
+        }
       }
     }
     fold(state, event.type as HarnessEventType, data)
