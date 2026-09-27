@@ -79,7 +79,16 @@ function profileEnabling(capabilities: readonly string[]): HarnessProfile {
     id: 'plurora-test',
     policyVersion: 'plurora-test-v1.0.0',
     routingPolicy: Object.freeze({ rules: RULES, fallbackRules: FALLBACKS }),
-    workflowPolicy: Object.freeze({ maxRepairCycles: 3, maxExecutorStarts: 24 }),
+    workflowPolicy: Object.freeze({ maxRepairCycles: 3, maxExecutorStarts: 24, recoveryPolicy: Object.freeze({
+      version: 'runtime-test-recovery-v1',
+      attemptDeadlineMsByRole: Object.freeze({
+        refine: 1_000, plan: 1_000, implement: 1_000, debug: 1_000, repair: 1_000, verify: 1_000,
+        review: 1_000, security: 1_000, qa: 1_000, conformance: 1_000, delivery: 1_000,
+      }),
+      maxSameExecutorRetriesPerStage: 1, maxReroutesPerStage: 1, maxReprovisionsPerStage: 1,
+      maxReconciliationsPerStage: 1, maxRecoveryTransitionsPerWorkflow: 3, recoveryDeadlineMs: 3_000,
+      backoffInitialMs: 100, backoffMultiplier: 2, backoffMaxMs: 200, quiescenceDeadlineMs: 500,
+    }) }),
     independencePolicy: Object.freeze({
       low: 'fresh-context',
       medium: 'cross-executor-preferred',

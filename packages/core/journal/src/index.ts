@@ -11,7 +11,7 @@
  */
 
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { EXTERNAL_CERTIFICATION_STATES, summarizeChangeImpact } from '@trick-harness/contracts'
+import { EXTERNAL_CERTIFICATION_STATES, RECOVERY_DISPOSITIONS, ROLES, summarizeChangeImpact } from '@trick-harness/contracts'
 import type {
   ChangeImpactFacts,
   ChangeImpactStatusSummary,
@@ -20,6 +20,7 @@ import type {
   EvidenceRef,
   ExternalCertificationState,
   Finding,
+  RecoveryDecision,
   StageConstraint,
   RouteDecision,
   Risk,
@@ -34,6 +35,8 @@ import type {
   DeliveryAction,
   ExecutorOutcome,
   WorkflowEndState,
+  RecoveryDecisionRecord,
+  RecoveryPolicyRecord,
 } from './types.ts'
 
 export * from './types.ts'
@@ -52,6 +55,7 @@ export const HARNESS_EVENT_TYPES = [
   'harness/route-fallback',
   'harness/executor-start',
   'harness/executor-end',
+  'harness/recovery-decision',
   'harness/capability-start',
   'harness/capability-end',
   'harness/finding',
@@ -179,6 +183,10 @@ export interface WorkflowProjection {
   readonly workflowId: string
   /** Host session identity written when the workflow starts. */
   readonly hostRunId?: string
+  /** Finite policy and hash this workflow was admitted under. */
+  readonly recoveryPolicy?: RecoveryPolicyRecord
+  /** Durable policy decisions in event order. */
+  readonly recoveryDecisions: readonly RecoveryDecisionRecord[]
   /** Latest in-flight stage facts, derived from the event log on every read. */
   readonly progress?: {
     readonly currentStageId: string
@@ -301,7 +309,7 @@ export class WorkflowJournal {
    * Record that a workflow was accepted.
    * @param objective - The objective it was accepted for.
    */
-  start(objective: WorkflowObjective): void {
+  start(objective: WorkflowObjective, recoveryPolicy?: RecoveryPolicyRecord): void {
     this.#session.append('harness/workflow-start', {
       workflowId: this.#workflowId,
       hostRunId: String(this.#session.id),
@@ -315,7 +323,41 @@ export class WorkflowJournal {
       specSha256: objective.approvedArtifacts.spec.sha256,
       planPath: objective.approvedArtifacts.plan.path,
       planSha256: objective.approvedArtifacts.plan.sha256,
+      ...recoveryPolicy === undefined ? {} : { recoveryPolicy: copyRecoveryPolicy(recoveryPolicy) },
     })
+  }
+
+  /** Persist the accepted objective and its exact frozen policy before dispatch. */
+  async startDurably(objective: WorkflowObjective, recoveryPolicy: RecoveryPolicyRecord): Promise<void> {
+    this.start(objective, recoveryPolicy)
+    await this.#durable()
+  }
+
+  /** Persist a deterministic recovery choice before the next action may run. */
+  async recoveryDecision(record: RecoveryDecisionRecord): Promise<void> {
+    const bounded = copyRecoveryDecision(record.decision)
+    if (!isJournalIdentifier(record.stageId) || !isJournalIdentifier(record.attemptId)
+      || !Number.isSafeInteger(record.recordedAtMs) || record.recordedAtMs < 0
+      || !Number.isSafeInteger(record.recoveryDeadlineAtMs) || record.recoveryDeadlineAtMs < record.recordedAtMs
+      || Object.values(record.counters).some(value => !isNonnegativeSafeInteger(value))) {
+      throw new JournalError('invalid-record', 'recovery decision record has invalid bounded identity, time, or counters')
+    }
+    this.#session.append('harness/recovery-decision', {
+      workflowId: this.#workflowId,
+      stageId: record.stageId,
+      attemptId: record.attemptId,
+      decision: bounded,
+      recordedAtMs: record.recordedAtMs,
+      recoveryDeadlineAtMs: record.recoveryDeadlineAtMs,
+      counters: {
+        sameExecutorRetries: record.counters.sameExecutorRetries,
+        reroutes: record.counters.reroutes,
+        reprovisions: record.counters.reprovisions,
+        reconciliations: record.counters.reconciliations,
+        transitions: record.counters.transitions,
+      },
+    })
+    await this.#durable()
   }
 
   /**
@@ -778,6 +820,98 @@ function credentialShaped(value: string): boolean {
   return CREDENTIAL_PATTERNS.some(pattern => pattern.test(value))
 }
 
+/** Rebuild only declared policy fields from a journal value. */
+function copyRecoveryPolicy(value: unknown): RecoveryPolicyRecord {
+  const record = value as Record<string, unknown> | null
+  const deadlines = record?.attemptDeadlineMsByRole as Record<string, unknown> | null
+  if (record === null || typeof record !== 'object' || Array.isArray(record)
+    || typeof record.version !== 'string' || record.version.length < 1 || record.version.length > 64
+    || typeof record.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(record.sha256)
+    || deadlines === null || typeof deadlines !== 'object' || Array.isArray(deadlines)
+    || Object.keys(deadlines).length !== ROLES.length
+    || ROLES.some(role => !isPositiveSafeInteger(deadlines[role]))) {
+    throw new JournalError('invalid-record', 'recovery policy is missing bounded roles, values, or identity')
+  }
+  const counts = [
+    'maxSameExecutorRetriesPerStage', 'maxReroutesPerStage', 'maxReprovisionsPerStage',
+    'maxReconciliationsPerStage', 'maxRecoveryTransitionsPerWorkflow',
+  ] as const
+  if (counts.some(key => !isNonnegativeSafeInteger(record[key]))) {
+    throw new JournalError('invalid-record', 'recovery policy has an invalid count')
+  }
+  const durations = ['recoveryDeadlineMs', 'backoffInitialMs', 'backoffMaxMs', 'quiescenceDeadlineMs'] as const
+  if (durations.some(key => !isPositiveSafeInteger(record[key]))) {
+    throw new JournalError('invalid-record', 'recovery policy has an invalid duration')
+  }
+  if (typeof record.backoffMultiplier !== 'number' || !Number.isFinite(record.backoffMultiplier) || record.backoffMultiplier < 1) {
+    throw new JournalError('invalid-record', 'recovery policy has an invalid backoff multiplier')
+  }
+  return Object.freeze({
+    version: record.version,
+    attemptDeadlineMsByRole: Object.freeze(Object.fromEntries(ROLES.map(role => [role, deadlines[role]])) as Record<string, number>),
+    maxSameExecutorRetriesPerStage: record.maxSameExecutorRetriesPerStage as number,
+    maxReroutesPerStage: record.maxReroutesPerStage as number,
+    maxReprovisionsPerStage: record.maxReprovisionsPerStage as number,
+    maxReconciliationsPerStage: record.maxReconciliationsPerStage as number,
+    maxRecoveryTransitionsPerWorkflow: record.maxRecoveryTransitionsPerWorkflow as number,
+    recoveryDeadlineMs: record.recoveryDeadlineMs as number,
+    backoffInitialMs: record.backoffInitialMs as number,
+    backoffMultiplier: record.backoffMultiplier,
+    backoffMaxMs: record.backoffMaxMs as number,
+    quiescenceDeadlineMs: record.quiescenceDeadlineMs as number,
+    sha256: record.sha256,
+  })
+}
+
+/** Rebuild only the bounded variant fields permitted for one decision. */
+function copyRecoveryDecision(value: unknown): RecoveryDecision {
+  const record = value as Record<string, unknown> | null
+  if (record === null || typeof record !== 'object' || Array.isArray(record)
+    || typeof record.disposition !== 'string'
+    || !(RECOVERY_DISPOSITIONS as readonly string[]).includes(record.disposition)
+    || typeof record.reasonCode !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(record.reasonCode)) {
+    throw new JournalError('invalid-record', 'recovery decision has an unknown disposition or reason code')
+  }
+  const identifier = (key: string): string => {
+    const candidate = record[key]
+    if (!isJournalIdentifier(candidate)) throw new JournalError('invalid-record', 'recovery decision has an invalid identifier')
+    return candidate
+  }
+  const numeric = (key: string, positive = false): number => {
+    const candidate = record[key]
+    if (positive ? !isPositiveSafeInteger(candidate) : !isNonnegativeSafeInteger(candidate)) {
+      throw new JournalError('invalid-record', 'recovery decision has an invalid numeric field')
+    }
+    return candidate as number
+  }
+  const reasonCode = record.reasonCode
+  switch (record.disposition) {
+    case 'RETRY_SAME_EXECUTOR': return Object.freeze({ disposition: record.disposition, reasonCode, executor: identifier('executor'), attempt: numeric('attempt', true), retryAtMs: numeric('retryAtMs') })
+    case 'REROUTE_EXECUTOR': return Object.freeze({ disposition: record.disposition, reasonCode, executor: identifier('executor') })
+    case 'REPROVISION_WORKSPACE': return Object.freeze({ disposition: record.disposition, reasonCode })
+    case 'RECONCILE_WORKSPACE': return Object.freeze({ disposition: record.disposition, reasonCode, attemptId: identifier('attemptId'), checkpointId: identifier('checkpointId') })
+    case 'RECONCILE_WORLD_STATE': return Object.freeze({ disposition: record.disposition, reasonCode, operationId: identifier('operationId') })
+    case 'VERIFY_RECOVERED_MUTATION': return Object.freeze({ disposition: record.disposition, reasonCode, sourceAttemptId: identifier('sourceAttemptId'), checkpointId: identifier('checkpointId'), reconciliationId: identifier('reconciliationId'), evidenceAnchorId: identifier('evidenceAnchorId'), verificationStageId: identifier('verificationStageId') })
+    case 'PAUSE_FOR_HUMAN': return Object.freeze({ disposition: record.disposition, reasonCode })
+    case 'TERMINAL_BLOCKED': return Object.freeze({ disposition: record.disposition, reasonCode })
+    case 'TERMINAL_INCONCLUSIVE': return Object.freeze({ disposition: record.disposition, reasonCode })
+    case 'TERMINAL_FAIL': return Object.freeze({ disposition: record.disposition, reasonCode })
+    default: throw new JournalError('invalid-record', 'recovery decision disposition is unsupported')
+  }
+}
+
+function isJournalIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value)
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function isNonnegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
 /**
  * Refuse anything that is not a certification a certifier could have published.
  * @param record - The record as the caller offered it.
@@ -831,6 +965,8 @@ function harnessPayload(event: SessionEvent): HarnessPayload | undefined {
 /** Mutable accumulator behind {@link projectWorkflow}. */
 interface Projected {
   hostRunId?: string
+  recoveryPolicy?: RecoveryPolicyRecord
+  recoveryDecisions: RecoveryDecisionRecord[]
   objective?: WorkflowProjection['objective']
   conformance?: ConformanceStatusSummary
   changeImpact?: { planned?: ChangeImpactStatusSummary; actual?: ChangeImpactStatusSummary }
@@ -858,8 +994,9 @@ interface Projected {
 function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): void {
   switch (type) {
     case 'harness/workflow-start': {
-      const payload = data as unknown as { hostRunId?: string; objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload']; specPath: string; specSha256: string; planPath: string; planSha256: string }
+      const payload = data as unknown as { hostRunId?: string; objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload']; specPath: string; specSha256: string; planPath: string; planSha256: string; recoveryPolicy?: RecoveryPolicyRecord }
       if (payload.hostRunId !== undefined) state.hostRunId = payload.hostRunId
+      if (payload.recoveryPolicy !== undefined) state.recoveryPolicy = copyRecoveryPolicy(payload.recoveryPolicy)
       state.objective = {
         id: payload.objectiveId,
         cwd: payload.cwd,
@@ -872,6 +1009,25 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
           plan: { path: payload.planPath, sha256: payload.planSha256 },
         },
       }
+      return
+    }
+    case 'harness/recovery-decision': {
+      const payload = data as unknown as RecoveryDecisionRecord
+      const decision = copyRecoveryDecision(payload.decision)
+      if (!isJournalIdentifier(payload.stageId) || !isJournalIdentifier(payload.attemptId)
+        || !Number.isSafeInteger(payload.recordedAtMs) || payload.recordedAtMs < 0
+        || !Number.isSafeInteger(payload.recoveryDeadlineAtMs) || payload.recoveryDeadlineAtMs < payload.recordedAtMs
+        || Object.values(payload.counters).some(value => !isNonnegativeSafeInteger(value))) {
+        throw new JournalError('invalid-record', 'recovery decision record has invalid bounded identity, time, or counters')
+      }
+      state.recoveryDecisions.push({
+        stageId: payload.stageId,
+        attemptId: payload.attemptId,
+        decision,
+        recordedAtMs: payload.recordedAtMs,
+        recoveryDeadlineAtMs: payload.recoveryDeadlineAtMs,
+        counters: Object.freeze({ ...payload.counters }),
+      })
       return
     }
     case 'harness/conformance': {
@@ -1068,6 +1224,7 @@ export function projectWorkflow(
   workflowId: string,
 ): WorkflowProjection {
   const state: Projected = {
+    recoveryDecisions: [],
     routes: [],
     findings: [],
     constraints: [],
@@ -1123,6 +1280,8 @@ export function projectWorkflow(
   return Object.freeze({
     workflowId,
     ...state.hostRunId === undefined ? {} : { hostRunId: state.hostRunId },
+    ...state.recoveryPolicy === undefined ? {} : { recoveryPolicy: state.recoveryPolicy },
+    recoveryDecisions: Object.freeze(state.recoveryDecisions),
     ...(progress === undefined ? {} : { progress }),
     routes: Object.freeze(state.routes),
     findings: Object.freeze(state.findings),

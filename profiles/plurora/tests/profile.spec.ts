@@ -25,7 +25,7 @@ describe('plurora profile', () => {
   })
 
   it('bounds remediation and executor starts', () => {
-    expect(pluroraProfile.workflowPolicy).toEqual({ maxRepairCycles: 3, maxExecutorStarts: 24 })
+    expect(pluroraProfile.workflowPolicy).toMatchObject({ maxRepairCycles: 3, maxExecutorStarts: 24 })
   })
 
   it('requires cross-executor review for high and critical risk', () => {
@@ -445,5 +445,36 @@ describe('the Plurora Definition of Done', () => {
       expect(item.id.startsWith('DOD-'), item.id).toBe(true)
     }
     expect(new Set(pluroraDodObligations.map(item => item.id)).size).toBe(pluroraDodObligations.length)
+  })
+})
+
+describe('the approved Plurora recovery policy', () => {
+  it('freezes the owner-approved finite per-role deadlines and recovery budgets', () => {
+    expect((pluroraProfile.workflowPolicy as unknown as { recoveryPolicy: unknown }).recoveryPolicy).toEqual({
+      version: 'plurora-recovery-v1',
+      attemptDeadlineMsByRole: {
+        refine: 1_200_000,
+        plan: 1_200_000,
+        implement: 3_600_000,
+        debug: 1_800_000,
+        repair: 2_700_000,
+        verify: 1_800_000,
+        review: 1_800_000,
+        security: 2_100_000,
+        qa: 2_700_000,
+        conformance: 1_800_000,
+        delivery: 900_000,
+      },
+      maxSameExecutorRetriesPerStage: 2,
+      maxReroutesPerStage: 1,
+      maxReprovisionsPerStage: 1,
+      maxReconciliationsPerStage: 2,
+      maxRecoveryTransitionsPerWorkflow: 12,
+      recoveryDeadlineMs: 2_700_000,
+      backoffInitialMs: 5_000,
+      backoffMultiplier: 2,
+      backoffMaxMs: 20_000,
+      quiescenceDeadlineMs: 120_000,
+    })
   })
 })

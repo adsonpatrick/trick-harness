@@ -52,6 +52,18 @@ const REQUIRED_BLOCKS = [
   'changeImpactPolicy',
 ] as const
 
+/** Roles each frozen policy deadline must name exactly once. */
+const RECOVERY_ROLES = [
+  'refine', 'plan', 'implement', 'debug', 'repair', 'verify', 'review', 'security', 'qa', 'conformance', 'delivery',
+]
+
+/** Exact numeric recovery contract; absence is never an implicit infinity. */
+const RECOVERY_POLICY_FIELDS = [
+  'version', 'attemptDeadlineMsByRole', 'maxSameExecutorRetriesPerStage', 'maxReroutesPerStage',
+  'maxReprovisionsPerStage', 'maxReconciliationsPerStage', 'maxRecoveryTransitionsPerWorkflow',
+  'recoveryDeadlineMs', 'backoffInitialMs', 'backoffMultiplier', 'backoffMaxMs', 'quiescenceDeadlineMs',
+]
+
 /** Thrown when a candidate profile does not satisfy the contract. */
 export class ProfileValidationError extends Error {
   /** Stable machine-readable failure code. */
@@ -92,6 +104,60 @@ function field(candidate: unknown, key: string): unknown {
 function requirePositiveInteger(value: unknown, path: string): void {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new ProfileValidationError(path, 'must be a positive integer')
+  }
+}
+
+/** Validate one closed, finite recovery budget selected by a project profile. */
+function validateRecoveryPolicy(value: unknown): void {
+  const path = 'workflowPolicy.recoveryPolicy'
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ProfileValidationError(path, 'must be an object with every recovery limit')
+  }
+  const record = value as Record<string, unknown>
+  const keys = Object.keys(record).sort()
+  const expectedKeys = [...RECOVERY_POLICY_FIELDS].sort()
+  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+    throw new ProfileValidationError(path, 'must declare every recovery field exactly once and no unknown fields')
+  }
+  const version = field(record, 'version')
+  if (typeof version !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(version)) {
+    throw new ProfileValidationError(`${path}.version`, 'must be a bounded lowercase identifier')
+  }
+  const deadlines = field(record, 'attemptDeadlineMsByRole')
+  if (typeof deadlines !== 'object' || deadlines === null || Array.isArray(deadlines)) {
+    throw new ProfileValidationError(`${path}.attemptDeadlineMsByRole`, 'must provide a deadline for every role')
+  }
+  const deadlineRecord = deadlines as Record<string, unknown>
+  const deadlineRoles = Object.keys(deadlineRecord).sort()
+  const expectedRoles = [...RECOVERY_ROLES].sort()
+  if (deadlineRoles.length !== expectedRoles.length
+    || deadlineRoles.some((role, index) => role !== expectedRoles[index])) {
+    throw new ProfileValidationError(`${path}.attemptDeadlineMsByRole`, 'must name every role exactly once')
+  }
+  for (const role of RECOVERY_ROLES) {
+    const deadline = field(deadlineRecord, role)
+    if (typeof deadline !== 'number' || !Number.isSafeInteger(deadline) || deadline <= 0) {
+      throw new ProfileValidationError(`${path}.attemptDeadlineMsByRole.${role}`, 'must be a positive finite integer')
+    }
+  }
+  for (const key of [
+    'maxSameExecutorRetriesPerStage', 'maxReroutesPerStage', 'maxReprovisionsPerStage',
+    'maxReconciliationsPerStage', 'maxRecoveryTransitionsPerWorkflow',
+  ]) {
+    const count = field(record, key)
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      throw new ProfileValidationError(`${path}.${key}`, 'must be a nonnegative finite integer')
+    }
+  }
+  for (const key of ['recoveryDeadlineMs', 'backoffInitialMs', 'backoffMaxMs', 'quiescenceDeadlineMs']) {
+    const duration = field(record, key)
+    if (typeof duration !== 'number' || !Number.isSafeInteger(duration) || duration <= 0) {
+      throw new ProfileValidationError(`${path}.${key}`, 'must be a positive finite integer duration')
+    }
+  }
+  const multiplier = field(record, 'backoffMultiplier')
+  if (typeof multiplier !== 'number' || !Number.isFinite(multiplier) || multiplier < 1) {
+    throw new ProfileValidationError(`${path}.backoffMultiplier`, 'must be finite and at least one')
   }
 }
 
@@ -356,6 +422,7 @@ export function validateProfile(candidate: unknown): asserts candidate is Harnes
   const workflowPolicy = field(candidate, 'workflowPolicy')
   requirePositiveInteger(field(workflowPolicy, 'maxRepairCycles'), 'workflowPolicy.maxRepairCycles')
   requirePositiveInteger(field(workflowPolicy, 'maxExecutorStarts'), 'workflowPolicy.maxExecutorStarts')
+  validateRecoveryPolicy(field(workflowPolicy, 'recoveryPolicy'))
 
   const independencePolicy = field(candidate, 'independencePolicy')
   for (const [level, required] of Object.entries(REQUIRED_INDEPENDENCE)) {

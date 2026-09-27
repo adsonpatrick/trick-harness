@@ -44,6 +44,7 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'harness/executor-end',
   'harness/executor-start',
   'harness/finding',
+  'harness/recovery-decision',
   'harness/repair-authorization',
   'harness/route-decision',
   'harness/route-fallback',

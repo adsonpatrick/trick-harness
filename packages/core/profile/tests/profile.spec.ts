@@ -9,6 +9,24 @@ import {
 import type { HarnessProfile } from '../src/types.ts'
 
 /** A minimal profile that satisfies every rule, used as the mutation base. */
+const TEST_RECOVERY_POLICY = {
+  version: 'fixture-recovery-v1',
+  attemptDeadlineMsByRole: {
+    refine: 1_000, plan: 1_000, implement: 1_000, debug: 1_000, repair: 1_000, verify: 1_000,
+    review: 1_000, security: 1_000, qa: 1_000, conformance: 1_000, delivery: 1_000,
+  },
+  maxSameExecutorRetriesPerStage: 1,
+  maxReroutesPerStage: 1,
+  maxReprovisionsPerStage: 1,
+  maxReconciliationsPerStage: 1,
+  maxRecoveryTransitionsPerWorkflow: 3,
+  recoveryDeadlineMs: 3_000,
+  backoffInitialMs: 100,
+  backoffMultiplier: 2,
+  backoffMaxMs: 200,
+  quiescenceDeadlineMs: 500,
+} as const
+
 const valid: HarnessProfile = {
   id: 'fixture-minimal',
   policyVersion: 'fixture-v1.0.0',
@@ -16,7 +34,7 @@ const valid: HarnessProfile = {
     rules: [{ id: 'default', when: {}, use: { executor: 'fixture' } }],
     fallbackRules: [],
   },
-  workflowPolicy: { maxRepairCycles: 1, maxExecutorStarts: 2 },
+  workflowPolicy: { maxRepairCycles: 1, maxExecutorStarts: 2, recoveryPolicy: TEST_RECOVERY_POLICY },
   independencePolicy: {
     low: 'fresh-context',
     medium: 'cross-executor-preferred',
@@ -127,6 +145,16 @@ describe('validateProfile', () => {
     expect(check({
       ...valid,
       workflowPolicy: { ...valid.workflowPolicy, maxExecutorStarts },
+    })).toThrow(ProfileValidationError)
+  })
+
+  it('rejects a workflow policy without explicit finite recovery budgets', () => {
+    expect(check({
+      ...valid,
+      workflowPolicy: {
+        ...valid.workflowPolicy,
+        recoveryPolicy: { version: 'fixture-recovery-v1', maxSameExecutorRetriesPerStage: 2 },
+      },
     })).toThrow(ProfileValidationError)
   })
 

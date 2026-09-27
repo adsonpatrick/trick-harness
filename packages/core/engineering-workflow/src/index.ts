@@ -90,6 +90,7 @@ import {
 import { changedPathsBetween, WorkspaceStateError } from './workspace-state.ts'
 import type { ApprovedArtifactTexts, WorkspaceSnapshot } from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
+import { freezeRecoveryBudgetPolicy } from './recovery-policy.ts'
 
 import type { CertificationStatusSummary } from '@trick-harness/contracts'
 import type {
@@ -513,7 +514,8 @@ export class WorkflowRunner {
     const { journal, profile } = this.#options
     const { maxRepairCycles, maxExecutorStarts } = profile.workflowPolicy
 
-    journal.start(objective)
+    const recoveryPolicy = freezeRecoveryBudgetPolicy(profile.workflowPolicy.recoveryPolicy)
+    await journal.startDurably(objective, recoveryPolicy)
     // A run that can read its own change set plans in two halves: what it does,
     // then what that turned out to be worth certifying. Everything else keeps
     // the fixed risk-driven plan, and an explicit caller plan still wins.

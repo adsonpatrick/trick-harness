@@ -52,7 +52,16 @@ const PROFILE: HarnessProfile = Object.freeze({
   id: 'test',
   policyVersion: 'test-v1.0.0',
   routingPolicy: Object.freeze({ rules: POLICY.rules, fallbackRules: POLICY.fallbackRules }),
-  workflowPolicy: Object.freeze({ maxRepairCycles: 3, maxExecutorStarts: 24 }),
+  workflowPolicy: Object.freeze({ maxRepairCycles: 3, maxExecutorStarts: 24, recoveryPolicy: Object.freeze({
+    version: 'test-recovery-v1',
+    attemptDeadlineMsByRole: Object.freeze({
+      refine: 1_000, plan: 1_000, implement: 1_000, debug: 1_000, repair: 1_000, verify: 1_000,
+      review: 1_000, security: 1_000, qa: 1_000, conformance: 1_000, delivery: 1_000,
+    }),
+    maxSameExecutorRetriesPerStage: 2, maxReroutesPerStage: 1, maxReprovisionsPerStage: 1,
+    maxReconciliationsPerStage: 1, maxRecoveryTransitionsPerWorkflow: 4, recoveryDeadlineMs: 10_000,
+    backoffInitialMs: 100, backoffMultiplier: 2, backoffMaxMs: 500, quiescenceDeadlineMs: 1_000,
+  }) }),
   independencePolicy: Object.freeze({
     low: 'fresh-context',
     medium: 'cross-executor-preferred',
@@ -689,7 +698,7 @@ describe('a run that goes wrong', () => {
 
   it('stops at the executor-start budget', async () => {
     const tight = new WorkflowRunner('wf-1', {
-      profile: { ...PROFILE, workflowPolicy: { maxRepairCycles: 3, maxExecutorStarts: 2 } },
+      profile: { ...PROFILE, workflowPolicy: { ...PROFILE.workflowPolicy, maxRepairCycles: 3, maxExecutorStarts: 2 } },
       policy: POLICY,
       executors,
       journal,
@@ -1556,8 +1565,8 @@ describe('the durable barrier in front of a dispatch', () => {
     let flushes = 0
     const journal = new WorkflowJournal(session, 'wf-barrier-read', async () => {
       flushes += 1
-      // Passes the implementing stage, refuses the verifying one.
-      return flushes < 2
+      // Passes workflow admission and the implementing stage, refuses the verifying one.
+      return flushes < 3
     })
     const runner = new WorkflowRunner('wf-barrier-read', {
       profile: PROFILE, policy: POLICY, executors, journal,

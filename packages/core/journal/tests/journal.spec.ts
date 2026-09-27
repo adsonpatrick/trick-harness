@@ -79,6 +79,7 @@ describe('the harness event vocabulary', () => {
       'harness/route-fallback',
       'harness/executor-start',
       'harness/executor-end',
+      'harness/recovery-decision',
       'harness/capability-start',
       'harness/capability-end',
       'harness/finding',
@@ -123,6 +124,76 @@ describe('writing and replaying one workflow', () => {
     journal = new WorkflowJournal(session, 'wf-1', flush)
   })
 
+  it('reconstructs the frozen recovery policy and hash from workflow admission', () => {
+    journal.start(objective)
+    const start = session.events[0]
+    const policy = {
+      version: 'fixture-recovery-v1',
+      attemptDeadlineMsByRole: {
+        refine: 1_000, plan: 1_000, implement: 1_000, debug: 1_000, repair: 1_000,
+        verify: 1_000, review: 1_000, security: 1_000, qa: 1_000, conformance: 1_000, delivery: 1_000,
+      },
+      maxSameExecutorRetriesPerStage: 2,
+      maxReroutesPerStage: 1,
+      maxReprovisionsPerStage: 1,
+      maxReconciliationsPerStage: 2,
+      maxRecoveryTransitionsPerWorkflow: 12,
+      recoveryDeadlineMs: 10_000,
+      backoffInitialMs: 100,
+      backoffMultiplier: 2,
+      backoffMaxMs: 500,
+      quiescenceDeadlineMs: 1_000,
+      sha256: 'a'.repeat(64),
+      secret: 'must-not-survive',
+    }
+    const event = { ...start, data: { ...start?.data, recoveryPolicy: policy } } as unknown as SessionEvent
+
+    expect(projectWorkflow([event], 'wf-1').recoveryPolicy).toEqual({
+      ...policy,
+      secret: undefined,
+    })
+  })
+
+  it('reconstructs a bounded recovery decision, deadline and consumed counters', () => {
+    const event = {
+      type: 'harness/recovery-decision',
+      seq: 1,
+      time: 1,
+      data: {
+        workflowId: 'wf-1',
+        stageId: 'verify-1',
+        attemptId: 'wf-1:verify-1:1',
+        decision: {
+          disposition: 'RETRY_SAME_EXECUTOR',
+          reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+          executor: 'codex',
+          attempt: 2,
+          retryAtMs: 1_100,
+          privateOutput: 'must-not-survive',
+        },
+        recordedAtMs: 1_000,
+        recoveryDeadlineAtMs: 10_000,
+        counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
+        privateOutput: 'must-not-survive',
+      },
+    } as unknown as SessionEvent
+
+    expect(projectWorkflow([event], 'wf-1').recoveryDecisions).toEqual([{
+      stageId: 'verify-1',
+      attemptId: 'wf-1:verify-1:1',
+      decision: {
+        disposition: 'RETRY_SAME_EXECUTOR',
+        reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+        executor: 'codex',
+        attempt: 2,
+        retryAtMs: 1_100,
+      },
+      recordedAtMs: 1_000,
+      recoveryDeadlineAtMs: 10_000,
+      counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
+    }])
+  })
+
   /** Project the session as a fresh process would: from the log alone. */
   function replay(workflowId = 'wf-1'): ReturnType<typeof projectWorkflow> {
     return projectWorkflow(session.events, workflowId)
@@ -138,6 +209,20 @@ describe('writing and replaying one workflow', () => {
     )
     journal.executorStart({ stageId: 'impl-1', role: 'implement', decision })
     journal.executorEnd('impl-1', 'opencode', 'completed', 1_200)
+    await journal.recoveryDecision({
+      stageId: 'verify-1',
+      attemptId: 'wf-1:verify-1:1',
+      decision: {
+        disposition: 'RETRY_SAME_EXECUTOR',
+        reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+        executor: 'codex',
+        attempt: 2,
+        retryAtMs: 1_100,
+      },
+      recordedAtMs: 1_000,
+      recoveryDeadlineAtMs: 10_000,
+      counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
+    })
     await journal.beginCapability('deliver-1', 'github-delivery', true)
     await journal.endCapability('deliver-1', 'github-delivery', 'completed', 900)
     journal.finding('review-1', finding)
@@ -311,6 +396,7 @@ describe('writing and replaying one workflow', () => {
       verdicts: [],
       deliveries: [],
       certifications: [],
+      recoveryDecisions: [],
       blockers: [],
       circuits: {},
       openStages: [],

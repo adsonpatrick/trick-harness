@@ -18,6 +18,7 @@ import type {
   EvidenceRef,
   ExternalCertificationState,
   Finding,
+  RecoveryDecision,
   Risk,
   Role,
   RoutedPermissionMode,
@@ -41,6 +42,42 @@ export type CapabilityOutcome = 'completed' | 'aborted' | 'error'
 /** Why a workflow stopped short of a verdict. */
 export type BlockerKind = 'product-decision' | 'design-decision' | 'budget-exhausted' | 'unroutable' | 'external'
 
+/** Profile recovery limits plus the stable identity frozen at admission. */
+export interface RecoveryPolicyRecord {
+  readonly version: string
+  readonly attemptDeadlineMsByRole: Readonly<Record<string, number>>
+  readonly maxSameExecutorRetriesPerStage: number
+  readonly maxReroutesPerStage: number
+  readonly maxReprovisionsPerStage: number
+  readonly maxReconciliationsPerStage: number
+  readonly maxRecoveryTransitionsPerWorkflow: number
+  readonly recoveryDeadlineMs: number
+  readonly backoffInitialMs: number
+  readonly backoffMultiplier: number
+  readonly backoffMaxMs: number
+  readonly quiescenceDeadlineMs: number
+  readonly sha256: string
+}
+
+/** Recovery counters captured before the next transition is dispatched. */
+export interface RecoveryAttemptCounters {
+  readonly sameExecutorRetries: number
+  readonly reroutes: number
+  readonly reprovisions: number
+  readonly reconciliations: number
+  readonly transitions: number
+}
+
+/** One durable policy choice and the frozen workflow budget at that point. */
+export interface RecoveryDecisionRecord {
+  readonly stageId: string
+  readonly attemptId: string
+  readonly decision: RecoveryDecision
+  readonly recordedAtMs: number
+  readonly recoveryDeadlineAtMs: number
+  readonly counters: RecoveryAttemptCounters
+}
+
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /** One workflow accepted, with the objective it was accepted for. */
@@ -62,7 +99,11 @@ declare module '@deepseek-ai/dsh-session/types' {
       planPath: string
       /** SHA-256 of that plan. */
       planSha256: string
+      /** Full finite policy and hash selected before workflow dispatch. */
+      recoveryPolicy?: RecoveryPolicyRecord
     }
+    /** One deterministic recovery choice, flushed before its action may run. */
+    'harness/recovery-decision': { workflowId: string } & RecoveryDecisionRecord
     /**
      * One conformance reading, reduced to hashes, counts and a verdict.
      *

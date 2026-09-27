@@ -48,6 +48,24 @@ export interface RoutingPolicyDefinition {
 export interface WorkflowPolicyDefinition {
   readonly maxRepairCycles: number
   readonly maxExecutorStarts: number
+  /** Every profile explicitly supplies finite operational recovery limits. */
+  readonly recoveryPolicy: RecoveryPolicyDefinition
+}
+
+/** Finite recovery policy frozen into each admitted workflow. */
+export interface RecoveryPolicyDefinition {
+  readonly version: string
+  readonly attemptDeadlineMsByRole: Readonly<Record<string, number>>
+  readonly maxSameExecutorRetriesPerStage: number
+  readonly maxReroutesPerStage: number
+  readonly maxReprovisionsPerStage: number
+  readonly maxReconciliationsPerStage: number
+  readonly maxRecoveryTransitionsPerWorkflow: number
+  readonly recoveryDeadlineMs: number
+  readonly backoffInitialMs: number
+  readonly backoffMultiplier: number
+  readonly backoffMaxMs: number
+  readonly quiescenceDeadlineMs: number
 }
 
 /**
