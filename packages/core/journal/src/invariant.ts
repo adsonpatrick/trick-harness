@@ -22,10 +22,12 @@ export const inject = ['invariants']
  */
 const EXPECTED_EVENTS = [
   'harness/workflow-start',
+  'harness/workspace-checkpoint',
   'harness/route-decision',
   'harness/route-fallback',
   'harness/executor-start',
   'harness/executor-end',
+  'harness/recovery-decision',
   'harness/capability-start',
   'harness/capability-end',
   'harness/finding',

@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { EvidenceRef, StageRouteOverride, WorkflowObjective } from '@trick-harness/contracts'
 import { HarnessControlServer } from '@trick-harness/control-server'
-import type { ControlServerOptions, ControlWorkflowStatus } from '@trick-harness/control-server'
+import type { ControlServerOptions, ControlStartedWorkflow, ControlWorkflowStatus } from '@trick-harness/control-server'
 import {
   WorkflowRunner,
   assessRestart,
@@ -492,6 +492,25 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
     }
   }
 
+  const workflowProgress = (workflowId: string) => {
+    const projection = projectWorkflow(session.events, workflowId)
+    const stages = projection.verdicts.map((verdict) => {
+      const route = projection.routes.filter(item => item.stageId === verdict.stageId).at(-1)
+      return {
+        stageId: verdict.stageId,
+        role: verdict.role,
+        executor: route?.executor ?? 'unknown',
+        verdict: verdict.verdict,
+        summary: verdict.summary,
+      }
+    })
+    return {
+      ...projection.hostRunId === undefined ? {} : { hostRunId: projection.hostRunId },
+      ...projection.progress,
+      stages,
+    }
+  }
+
   // Each in-flight run is held with the promise that settles it, because
   // disposal has to wait for that promise rather than for the runner object:
   // unregistering a provider under a run still dispatching would fail it with
@@ -538,7 +557,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
   const begin = (
     objective: WorkflowObjective,
     routeOverride?: StageRouteOverride,
-  ): { workflowId: string; outcome: Promise<WorkflowOutcome>; cancel: (reason: string) => void } => {
+  ): ControlStartedWorkflow => {
     assertObjectiveProfile(objective, profile)
     const workflowId = nextWorkflowId()
     const journal = new WorkflowJournal(session, workflowId, flush)
@@ -585,6 +604,7 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
     return {
       workflowId,
       outcome,
+      readProgress: () => workflowProgress(workflowId),
       cancel: (reason: string): void => {
         runner.cancel(reason)
       },
@@ -609,10 +629,10 @@ export function composeHarness(options: HarnessCompositionOptions): ComposedHarn
     }
   }
 
-  const restartOf = (workflowId: string): RestartAssessment | undefined => {
+  const restartOf = (workflowId: string) => {
     const projection = projectWorkflow(session.events, workflowId)
     if (projection.objective === undefined) return undefined
-    return assessRestart(projection)
+    return { ...assessRestart(projection), progress: workflowProgress(workflowId) }
   }
 
   const serverOptions: ControlServerOptions = {

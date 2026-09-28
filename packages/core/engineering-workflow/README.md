@@ -12,6 +12,10 @@ This is a fork-local package: private to `adsonpatrick/trick-harness`, never pub
 
 A `WorkflowRunner` owns at most one live run and the `AbortController` that ends it. A second concurrent run is refused rather than allowed to interleave two stage plans over the same working tree, and disposal terminates the run instead of detaching from it: a runner that let go of a live executor would leave a process nobody owns writing to the tree the next run is about to read.
 
+## Interrupted writers must prove quiescence before a read
+
+Every dispatch carries its workflow attempt identity and physical workspace identity to the executor runtime. After a failed writable attempt, the workflow calls `ensureWriterQuiescence(attemptId, workspaceId, deadlineAt)` and journals a reconciliation only after the executor boundary returns a valid proof. An unknown attempt, mismatched workspace, missing proof, expired proof, rejected check or check that exceeds its deadline is `UNPROVEN`; the bounded reason code is journaled, the workflow records an inconclusive reconciliation without taking a post-attempt workspace snapshot, and recovery remains blocked. Restart-persistent quarantine and cross-process revalidation belong to the durable-state and host-separation tasks.
+
 ## Read-only is a property of the role
 
 `permissionModeFor` derives write authority from the role, never from the run, the policy row, or the profile. The router refuses a policy row that disagrees; this package states the same rule where it builds the provider request, and its invariant pins the mutating set to `implement`, `repair` and `delivery`. A reviewer that could edit would be reviewing its own work, and a debugger that could edit would have turned diagnosis into repair.

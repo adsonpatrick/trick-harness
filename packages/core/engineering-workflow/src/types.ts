@@ -264,17 +264,42 @@ export interface WorkflowDeliveryInput {
 export interface WorkspacePathState {
   readonly path: string
   readonly fingerprint: string
+  readonly surface?: 'index' | 'worktree' | 'untracked'
 }
 
 /** A bounded view of path state at one immutable repository revision. */
 export interface WorkspaceSnapshot {
   readonly revision: string
   readonly entries: readonly WorkspacePathState[]
+  /** False when ignored or otherwise writable surfaces were not covered. */
+  readonly observable?: boolean
 }
 
 /** The deployment-owned read-only source of repository snapshots. */
 export interface WorkspaceStateReader {
   snapshot(objective: WorkflowObjective, signal: AbortSignal): Promise<WorkspaceSnapshot>
+}
+
+/** Bounded evidence that a cancelled or expired writer can no longer mutate a workspace. */
+export type WriterQuiescenceResult =
+  | {
+    readonly status: 'QUIESCENT'
+    readonly proof:
+      | { readonly kind: 'owned-process-tree-exited'; readonly processId: number; readonly observedAtMs: number }
+      | { readonly kind: 'write-authority-revoked'; readonly evidenceId: string; readonly observedAtMs: number }
+  }
+  | {
+    readonly status: 'UNPROVEN'
+    readonly reasonCode: 'ATTEMPT_UNKNOWN' | 'WRITER_STILL_ACTIVE' | 'CONTAINMENT_UNAVAILABLE' | 'QUIESCENCE_DEADLINE_EXCEEDED'
+  }
+
+/** Trusted host boundary for establishing that one interrupted attempt cannot write again. */
+export interface WriterQuiescencePort {
+  ensureWriterQuiescence(
+    attemptId: string,
+    workspaceId: string,
+    deadlineAt: number,
+  ): Promise<WriterQuiescenceResult>
 }
 
 /** What a delivery capability reports back, in the vocabulary a stage records. */

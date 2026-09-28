@@ -10,7 +10,7 @@
  */
 
 import { AUTO_REPAIRABLE_FINDINGS } from '@trick-harness/contracts'
-import type { Finding, FindingClass, Risk, Role, StageConstraint, WorkflowVerdict } from '@trick-harness/contracts'
+import type { Finding, FindingClass, Risk, Role, WorkflowVerdict } from '@trick-harness/contracts'
 
 /** What the run does about one finding. */
 export type TriageDisposition = 'repair' | 'block' | 'report' | 'inconclusive'
@@ -146,10 +146,8 @@ export interface ReconciledVerdict {
 export function reconcileVerdict(
   claimed: WorkflowVerdict,
   result: Triage,
-  constraints: readonly StageConstraint[],
   summary: string,
 ): ReconciledVerdict {
-  if (constraints.length > 0) return Object.freeze({ verdict: 'INCONCLUSIVE' as const, corrected: claimed !== 'INCONCLUSIVE', summary: 'a required stage constraint prevented a complete judgement' })
   if (result.blocking.length > 0 && claimed !== 'BLOCKED') {
     return Object.freeze({
       verdict: 'BLOCKED' as const,

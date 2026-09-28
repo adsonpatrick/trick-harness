@@ -29,11 +29,47 @@ export class OpencodeServerStartError extends Error {
   }
 }
 
-/** A prompt failed without yielding an SDK result. */
+/** A prompt failure retained without provider-controlled diagnostic text. */
 export class OpencodePromptFailureError extends Error {
   override readonly name = 'OpencodePromptFailureError'
 
-  constructor() {
+  constructor(readonly kind: 'unknown-error' | 'output-length' | 'unclassified' | 'rejected-unclassified' = 'unclassified') {
     super('OpenCode prompt failed before returning a valid result')
+  }
+}
+
+/** A bounded HTTP status captured before the SDK reads an error response body. */
+export class OpencodeHttpStatusError extends Error {
+  override readonly name = 'OpencodeHttpStatusError'
+
+  constructor(readonly status: number) {
+    super('OpenCode returned an unsuccessful HTTP status')
+  }
+}
+
+/** A Node transport failure identified by a reviewed system error code. */
+export class OpencodeTransportFailureError extends Error {
+  override readonly name = 'OpencodeTransportFailureError'
+
+  constructor(readonly code: 'request-timeout' | 'connection-failed') {
+    super('OpenCode request transport failed')
+  }
+}
+
+/** The Harness-owned attempt deadline elapsed. */
+export class OpencodeAttemptDeadlineError extends Error {
+  override readonly name = 'OpencodeAttemptDeadlineError'
+
+  constructor() {
+    super('The Harness attempt deadline elapsed')
+  }
+}
+
+/** Session creation failed with an unclassified SDK error. */
+export class OpencodeSessionCreateFailureError extends Error {
+  override readonly name = 'OpencodeSessionCreateFailureError'
+
+  constructor() {
+    super('OpenCode session creation failed')
   }
 }

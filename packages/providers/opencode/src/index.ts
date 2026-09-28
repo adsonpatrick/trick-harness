@@ -14,17 +14,23 @@ import type {
   ExecutorCapabilities,
   ExecutorCleanupFailure,
   ExecutorFailure,
+  ExecutorFailurePhase,
   ExecutorProvider,
   ExecutorResult,
   ExecutorStartRequest,
+  ExecutorWriterQuiescenceProof,
 } from '@trick-harness/executor'
 import { permissionConfig, parseModel, OpencodeRouteError } from './config.ts'
 import { OpencodeStartupTimeoutError } from './startup-error.ts'
 import {
+  OpencodeAttemptDeadlineError,
+  OpencodeHttpStatusError,
   OpencodeMalformedResponseError,
   OpencodePromptFailureError,
   OpencodeServerStartError,
+  OpencodeSessionCreateFailureError,
   OpencodeSessionAbortedError,
+  OpencodeTransportFailureError,
 } from './runtime-errors.ts'
 import type { OpencodeAdapter, OpencodeClientHandle, OpencodeServerHandle } from './types.ts'
 
@@ -36,10 +42,14 @@ export { OpencodeRouteError, permissionConfig, parseModel } from './config.ts'
 export { createSdkAdapter } from './adapter.ts'
 export { OpencodeStartupTimeoutError } from './startup-error.ts'
 export {
+  OpencodeAttemptDeadlineError,
+  OpencodeHttpStatusError,
   OpencodeMalformedResponseError,
   OpencodePromptFailureError,
   OpencodeServerStartError,
+  OpencodeSessionCreateFailureError,
   OpencodeSessionAbortedError,
+  OpencodeTransportFailureError,
 } from './runtime-errors.ts'
 
 /** The provider name routes select this executor by. */
@@ -61,9 +71,26 @@ export const OPENCODE_CAPABILITIES: ExecutorCapabilities = {
   permissionModes: ['read-only', 'workspace-write'],
 }
 
+const PROMPT_FAILURE_DIAGNOSTICS = {
+  'unknown-error': {
+    code: 'opencode.prompt.provider-unknown', safeDiagnostic: 'OpenCode provider returned an unknown error',
+  },
+  'output-length': {
+    code: 'opencode.prompt.output-length', safeDiagnostic: 'OpenCode provider stopped at its output length limit',
+  },
+  'rejected-unclassified': {
+    code: 'opencode.prompt.rejected-unclassified',
+    safeDiagnostic: 'OpenCode prompt call failed without a recognized error signal',
+  },
+  unclassified: {
+    code: 'opencode.prompt.failed', safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
+  },
+} satisfies Record<OpencodePromptFailureError['kind'], Pick<ExecutorFailure, 'code' | 'safeDiagnostic'>>
+
 /** Loopback host; the port is chosen by the OS so concurrent runs never collide. */
 const LOOPBACK = '127.0.0.1'
 const EPHEMERAL_PORT = 0
+const MAX_ATTEMPT_TIMER_MS = 2_147_483_647
 
 /**
  * Reduce a final assistant message to its text.
@@ -90,12 +117,50 @@ function finalText(parts: readonly { type: string; text?: string }[]): string {
  * @param error - whatever the adapter threw.
  * @returns a failure carrying no credential-bearing text.
  */
-function classify(error: unknown): ExecutorFailure {
+export function classifySdkFailure(
+  error: unknown,
+  context: { readonly failurePhase: ExecutorFailurePhase },
+): ExecutorFailure {
+  const failurePhase = context.failurePhase
+  const phase = error instanceof OpencodeSessionAbortedError ? 'SESSION_ABORT' : failurePhase
+  if (error instanceof OpencodeAttemptDeadlineError) {
+    return {
+      category: 'transport-unavailable', code: 'opencode.attempt.deadline-exceeded',
+      safeDiagnostic: 'OpenCode exceeded the Harness attempt deadline', failurePhase: phase,
+    }
+  }
+  if (error instanceof OpencodeTransportFailureError) {
+    return {
+      category: 'transport-unavailable', code: `opencode.transport.${error.code}`,
+      safeDiagnostic: 'OpenCode request transport failed', failurePhase: phase,
+    }
+  }
+  if (error instanceof OpencodeHttpStatusError) {
+    const status = Number.isSafeInteger(error.status) && error.status >= 100 && error.status <= 599
+      ? error.status : undefined
+    const category = status === 429 ? 'usage-limit-exceeded'
+      : status === 503 ? 'server-overloaded'
+        : status !== undefined && status >= 500 ? 'internal-server-error'
+          : status === 401 || status === 403 ? 'unauthorized'
+            : status === 400 || status === 422 ? 'bad-request'
+              : status === 408 || status === 504 ? 'transport-unavailable' : 'other'
+    const code = status === 429 ? 'opencode.http.usage-limit'
+      : status === 503 ? 'opencode.http.server-overloaded'
+        : status !== undefined && status >= 500 ? 'opencode.http.server-failure'
+          : status === 401 || status === 403 ? 'opencode.http.unauthorized'
+            : status === 400 || status === 422 ? 'opencode.http.bad-request'
+              : status === 408 || status === 504 ? 'opencode.http.timeout' : 'opencode.http.unclassified'
+    return {
+      category, code, safeDiagnostic: 'OpenCode returned an unsuccessful HTTP status',
+      failurePhase: phase, ...(status === undefined ? {} : { httpStatus: status }),
+    }
+  }
   if (error instanceof OpencodeStartupTimeoutError) {
     return {
       category: 'transport-unavailable',
       code: 'opencode.server.startup-timeout',
       safeDiagnostic: 'OpenCode server did not become ready before the startup deadline',
+      failurePhase: phase,
     }
   }
   if (error instanceof OpencodeRouteError) {
@@ -104,13 +169,17 @@ function classify(error: unknown): ExecutorFailure {
     // deterministic: a fallback route would spend a second run to be told the
     // same thing by a different product, and would file the outage of a healthy
     // executor as the cause.
-    return { category: 'bad-request', code: 'opencode.route.unsupported', safeDiagnostic: 'OpenCode cannot express the routed request' }
+    return {
+      category: 'bad-request', code: 'opencode.route.unsupported',
+      safeDiagnostic: 'OpenCode cannot express the routed request', failurePhase: phase,
+    }
   }
   if (error instanceof OpencodeSessionAbortedError) {
     return {
       category: 'other',
       code: 'opencode.prompt.session-aborted',
       safeDiagnostic: 'OpenCode aborted the active session before returning a valid result',
+      failurePhase: phase,
     }
   }
   if (error instanceof OpencodeMalformedResponseError) {
@@ -120,6 +189,7 @@ function classify(error: unknown): ExecutorFailure {
         ? 'opencode.session.id-missing'
         : 'opencode.prompt.response-missing-data',
       safeDiagnostic: 'OpenCode returned an incomplete SDK response',
+      failurePhase: phase,
     }
   }
   if (error instanceof OpencodeServerStartError) {
@@ -127,19 +197,25 @@ function classify(error: unknown): ExecutorFailure {
       category: 'other',
       code: 'opencode.server.start-failed',
       safeDiagnostic: 'OpenCode server failed before becoming ready',
+      failurePhase: phase,
     }
   }
   if (error instanceof OpencodePromptFailureError) {
     return {
-      category: 'other',
-      code: 'opencode.prompt.failed',
-      safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
+      category: 'other', ...PROMPT_FAILURE_DIAGNOSTICS[error.kind], failurePhase: phase,
+    }
+  }
+  if (error instanceof OpencodeSessionCreateFailureError) {
+    return {
+      category: 'other', code: 'opencode.session.create-failed',
+      safeDiagnostic: 'OpenCode session creation failed', failurePhase: phase,
     }
   }
   return {
     category: 'other',
     code: 'opencode.run.failed',
     safeDiagnostic: 'OpenCode run failed before returning a valid result',
+    failurePhase: phase,
   }
 }
 
@@ -168,7 +244,7 @@ async function teardown(
     await step()
     return undefined
   } catch (error) {
-    return cleanupFailure(category, error)
+    return cleanupFailure(category, error, 'CLEANUP')
   }
 }
 
@@ -188,15 +264,35 @@ async function runOnce(
   adapter: OpencodeAdapter,
   request: ExecutorStartRequest,
   cleanup: ExecutorCleanupFailure[],
+  quiescence: { proof?: ExecutorWriterQuiescenceProof },
 ): Promise<ExecutorResult> {
+  if (request.signal.aborted) return { status: 'aborted', output: '' }
+  const deadlineAtMs = request.deadlineAtMs
+  if (!Number.isSafeInteger(deadlineAtMs) || deadlineAtMs === undefined
+    || deadlineAtMs - Date.now() > MAX_ATTEMPT_TIMER_MS) {
+    return {
+      status: 'error', output: '', failure: {
+        category: 'bad-request', code: 'opencode.attempt.deadline-invalid',
+        safeDiagnostic: 'OpenCode requires a valid Harness attempt deadline', failurePhase: 'STARTUP',
+      },
+    }
+  }
+  if (deadlineAtMs <= Date.now()) {
+    return { status: 'error', output: '', failure: classifySdkFailure(new OpencodeAttemptDeadlineError(), { failurePhase: 'STARTUP' }) }
+  }
+  const deadlineController = new AbortController()
+  const deadlineTimer = setTimeout(() => { deadlineController.abort() }, deadlineAtMs - Date.now())
+  const attemptSignal = AbortSignal.any([request.signal, deadlineController.signal])
   let server: OpencodeServerHandle | undefined
   let client: OpencodeClientHandle | undefined
   let sessionId: string | undefined
   let settled = false
+  let phase: ExecutorFailurePhase = 'STARTUP'
   // Read through a call so the compiler cannot narrow the flag and conclude
   // a later check is dead: the signal is aborted by the caller between
   // these statements, which is exactly the case being checked.
   const aborted = (): boolean => request.signal.aborted
+  const deadlineExpired = (): boolean => deadlineController.signal.aborted
   try {
     // Translate before spawning anything: a route this provider cannot
     // express should cost no process.
@@ -206,15 +302,25 @@ async function runOnce(
     server = await adapter.startServer({
       hostname: LOOPBACK,
       port: EPHEMERAL_PORT,
-      signal: request.signal,
+      signal: attemptSignal,
       config: { permission },
     })
-    client = adapter.connect(server.url, request.cwd)
-    sessionId = await client.createSession(request.cwd)
+    client = adapter.connect(server.url, request.cwd, attemptSignal)
+    phase = 'SESSION_CREATE'
+    try {
+      sessionId = await client.createSession(request.cwd)
+    } catch (error) {
+      if (error instanceof OpencodeHttpStatusError || error instanceof OpencodeTransportFailureError
+        || error instanceof OpencodeSessionAbortedError || error instanceof OpencodeMalformedResponseError) throw error
+      if (error instanceof Error && error.name === 'MessageAbortedError') throw new OpencodeSessionAbortedError()
+      throw new OpencodeSessionCreateFailureError()
+    }
 
     if (aborted()) return { status: 'aborted', output: '' }
+    if (deadlineExpired()) throw new OpencodeAttemptDeadlineError()
 
     let result
+    phase = 'PROMPT'
     try {
       result = await client.prompt({
         sessionId,
@@ -223,16 +329,22 @@ async function runOnce(
         text: request.task,
       })
     } catch (error) {
-      if (error instanceof OpencodeSessionAbortedError || error instanceof OpencodeMalformedResponseError) throw error
+      if (error instanceof OpencodeSessionAbortedError || error instanceof OpencodeMalformedResponseError
+        || error instanceof OpencodePromptFailureError) throw error
       if (error instanceof Error && error.name === 'MessageAbortedError') throw new OpencodeSessionAbortedError()
-      throw new OpencodePromptFailureError()
+      if (error instanceof OpencodeHttpStatusError || error instanceof OpencodeTransportFailureError) throw error
+      throw new OpencodePromptFailureError('rejected-unclassified')
     }
     if (aborted()) return { status: 'aborted', output: '' }
+    if (deadlineExpired()) throw new OpencodeAttemptDeadlineError()
     settled = true
     return { status: 'completed', output: finalText(result.parts) }
   } catch (error) {
     if (aborted()) return { status: 'aborted', output: '' }
-    return { status: 'error', output: '', failure: classify(error) }
+    if (deadlineExpired()) {
+      return { status: 'error', output: '', failure: classifySdkFailure(new OpencodeAttemptDeadlineError(), { failurePhase: phase }) }
+    }
+    return { status: 'error', output: '', failure: classifySdkFailure(error, { failurePhase: phase }) }
   } finally {
     // Ownership is explicit and unconditional. A turn that did not finish
     // on its own is aborted first, so the product stops working rather than
@@ -249,9 +361,21 @@ async function runOnce(
     }
     if (server !== undefined) {
       const boundServer = server
-      const fault = await teardown(OPENCODE_SERVER_CLOSE_CLEANUP, () => boundServer.close())
-      if (fault !== undefined) cleanup.push(fault)
+      try {
+        const proof = await boundServer.close()
+        if (proof !== undefined && Number.isSafeInteger(proof.processId) && proof.processId > 0
+          && Number.isSafeInteger(proof.observedAtMs) && proof.observedAtMs >= 0) {
+          quiescence.proof = Object.freeze({
+            kind: 'owned-process-tree-exited',
+            processId: proof.processId,
+            observedAtMs: proof.observedAtMs,
+          })
+        }
+      } catch (error) {
+        cleanup.push(cleanupFailure(OPENCODE_SERVER_CLOSE_CLEANUP, error, 'CLEANUP'))
+      }
     }
+    clearTimeout(deadlineTimer)
   }
 }
 
@@ -267,10 +391,15 @@ export function createOpencodeProvider(adapter: OpencodeAdapter): ExecutorProvid
 
     async start(request: ExecutorStartRequest): Promise<ExecutorResult> {
       const cleanup: ExecutorCleanupFailure[] = []
-      const result = await runOnce(adapter, request, cleanup)
+      const quiescence: { proof?: ExecutorWriterQuiescenceProof } = {}
+      const result = await runOnce(adapter, request, cleanup, quiescence)
       // Attached, never merged into the outcome: a completed run whose server
       // would not close stays completed, and carries the fact that it did not.
-      return cleanup.length === 0 ? result : { ...result, cleanup: Object.freeze([...cleanup]) }
+      return {
+        ...result,
+        ...(quiescence.proof === undefined ? {} : { writerQuiescence: quiescence.proof }),
+        ...(cleanup.length === 0 ? {} : { cleanup: Object.freeze([...cleanup]) }),
+      }
     },
   }
 }

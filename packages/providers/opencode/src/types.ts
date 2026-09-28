@@ -2,13 +2,15 @@
  * The narrow OpenCode surface this provider depends on.
  *
  * The provider is written against this seam rather than against
- * `@opencode-ai/sdk` directly, so the behaviour that matters — which
+ * `@opencode-ai/sdk` directly, so the behaviour that matters â€” which
  * configuration reaches the server, which model reaches the prompt, what
- * happens on cancellation — is testable without a real product process, and so
+ * happens on cancellation â€” is testable without a real product process, and so
  * an SDK change lands in one adapter instead of throughout the provider.
  *
  * @module @trick-harness/provider-opencode/types
  */
+
+import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 
 /** OpenCode's per-tool permission decision. */
 export type OpencodePermission = 'ask' | 'allow' | 'deny'
@@ -43,7 +45,7 @@ export interface OpencodeServerOptions {
 /** A running server this provider owns and must close. */
 export interface OpencodeServerHandle {
   readonly url: string
-  close(): void | Promise<void>
+  close(): Promise<{ readonly processId: number; readonly observedAtMs: number } | undefined>
 }
 
 /** A provider/model pair, which is how OpenCode names a model. */
@@ -85,11 +87,19 @@ export interface OpencodeClientHandle {
 /** Everything the provider needs from OpenCode, and nothing more. */
 export interface OpencodeAdapter {
   startServer(options: OpencodeServerOptions): Promise<OpencodeServerHandle>
-  connect(url: string, directory: string): OpencodeClientHandle
+  connect(url: string, directory: string, signal: AbortSignal): OpencodeClientHandle
 }
 
 /** Deployment settings for the real SDK binding. */
 export interface OpencodeSdkOptions {
   /** Positive integer milliseconds, at most 2147483647, to wait for server readiness. */
   readonly startupTimeoutMs: number
+  /** Managed process-tree ownership for production OpenCode servers. */
+  readonly spawn?: (spec: SubprocessSpawnSpec) => SubprocessHandle
+  /** Project root used by the managed OpenCode server process. */
+  readonly cwd?: string
+  /** Process-tree termination grace in milliseconds. */
+  readonly disposeGraceMs?: number
+  /** Maximum time to join the owned process tree after termination begins. */
+  readonly quiescenceDeadlineMs?: number
 }

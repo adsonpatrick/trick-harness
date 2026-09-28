@@ -22,6 +22,8 @@ Every request but `GET /health` carries a bearer token the server mints per proc
 
 ## A status is a projection, not a stream
 
+Each live poll re-reads bounded progress from the durable workflow journal, including the current stage and attempt, executor correlation, recent event time, constraints, and completed stage summaries. The same projection is attached to restart assessments, so process replacement does not reduce an interrupted run to an empty stage list. Provider output and arbitrary extra fields are dropped at the control-server response boundary.
+
 `ControlWorkflowStatus` carries the workflow id, a state, a verdict, a bounded summary, a capped list of stages with their own bounded summaries, and two counters. It has no field for provider output, no field for a finding's evidence, and no field for anything a stage reasoned about privately. A bridge that rendered those into a chat window would be publishing somebody's working notes, so there is nowhere for them to go.
 
 Free text is truncated rather than trusted. A summary is a thing a person glances at.
@@ -72,6 +74,5 @@ await server.dispose()
 ## Known Limitations and Deferred Work
 
 - There is no streaming endpoint. A caller polls `GET /workflows/:id`, which is enough for a bridge that renders status and not enough for one that wants a live transcript — and a live transcript is not something this surface intends to carry.
-- A completed workflow stays in the live map for the process's lifetime, so its id cannot be reused while the server is up. That is deliberate for a durable workflow id, and it means a long-lived server accumulates finished entries.
-- The durable projection reports no stages, because `RestartAssessment` carries open stage ids rather than stage facts. A restart says what is unsettled, not what each stage concluded before the process stopped.
+- The server retains at most 200 finished statuses in memory; older executions remain addressable through the durable journal.
 - Only one Harness is served per process. Multi-tenant hosting, per-caller scoping and any authorization finer than one process token are out of scope here.

@@ -49,7 +49,16 @@ const PROFILE: HarnessProfile = Object.freeze({
   id: 'test',
   policyVersion: 'test-v1.0.0',
   routingPolicy: Object.freeze({ rules: POLICY.rules, fallbackRules: POLICY.fallbackRules }),
-  workflowPolicy: Object.freeze({ maxRepairCycles: 3, maxExecutorStarts: 24 }),
+  workflowPolicy: Object.freeze({ maxRepairCycles: 3, maxExecutorStarts: 24, recoveryPolicy: Object.freeze({
+    version: 'test-recovery-v1',
+    attemptDeadlineMsByRole: Object.freeze({
+      refine: 1_000, plan: 1_000, implement: 1_000, debug: 1_000, repair: 1_000, verify: 1_000,
+      review: 1_000, security: 1_000, qa: 1_000, conformance: 1_000, delivery: 1_000,
+    }),
+    maxSameExecutorRetriesPerStage: 2, maxReroutesPerStage: 1, maxReprovisionsPerStage: 1,
+    maxReconciliationsPerStage: 1, maxRecoveryTransitionsPerWorkflow: 4, recoveryDeadlineMs: 10_000,
+    backoffInitialMs: 100, backoffMultiplier: 2, backoffMaxMs: 500, quiescenceDeadlineMs: 1_000,
+  }) }),
   independencePolicy: Object.freeze({
     low: 'fresh-context',
     medium: 'cross-executor-preferred',
@@ -317,7 +326,10 @@ beforeEach(() => {
   session = Session.create(SessionId('s'))
   executors = createExecutorRuntime()
   journal = new WorkflowJournal(session, 'wf-1', async () => true)
-  runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+  runner = new WorkflowRunner('wf-1', {
+    profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
+    workspaceState: { snapshot: async () => ({ revision: 'a'.repeat(40), entries: [], observable: true }) },
+  })
   started = []
   deliveries = 0
   scripted = new Map()
@@ -449,6 +461,7 @@ describe('two confirmed bugs and one improvement', () => {
     runner = new WorkflowRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['builder'],
       capabilities: { delivery: DELIVERY },
+      workspaceState: { snapshot: async () => ({ revision: 'a'.repeat(40), entries: [], observable: true }) },
     })
 
     await runLifecycle()

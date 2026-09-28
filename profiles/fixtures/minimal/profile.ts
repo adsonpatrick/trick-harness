@@ -19,7 +19,13 @@ export const minimalProfile: HarnessProfile = {
     rules: [{ id: 'default', when: {}, use: { executor: 'opencode', tier: 'opencode.workhorse' } }],
     fallbackRules: [],
   },
-  workflowPolicy: { maxRepairCycles: 1, maxExecutorStarts: 4 },
+  workflowPolicy: { maxRepairCycles: 1, maxExecutorStarts: 4, recoveryPolicy: {
+    version: 'minimal-fixture-recovery-v1',
+    attemptDeadlineMsByRole: { refine: 1_000, plan: 1_000, implement: 1_000, debug: 1_000, repair: 1_000, verify: 1_000, review: 1_000, security: 1_000, qa: 1_000, conformance: 1_000, delivery: 1_000 },
+    maxSameExecutorRetriesPerStage: 1, maxReroutesPerStage: 1, maxReprovisionsPerStage: 1,
+    maxReconciliationsPerStage: 1, maxRecoveryTransitionsPerWorkflow: 3, recoveryDeadlineMs: 3_000,
+    backoffInitialMs: 100, backoffMultiplier: 2, backoffMaxMs: 200, quiescenceDeadlineMs: 500,
+  } },
   independencePolicy: {
     low: 'fresh-context',
     medium: 'cross-executor-preferred',

@@ -18,6 +18,7 @@ import type {
   ExecutorResult,
   ExecutorRoute,
   ExecutorStartRequest,
+  ExecutorWriterQuiescenceResult,
   ReasoningEffort,
 } from './types.ts'
 
@@ -64,6 +65,7 @@ export class ExecutorCapabilityError extends Error {
  * kind: a report of 900 faults with 64 examples still says 900.
  */
 export const CLEANUP_EVIDENCE_LIMIT = 64
+const QUIESCENCE_EVIDENCE_LIMIT = 256
 
 /** What a runtime observed of its providers' teardown, across every run. */
 export interface ExecutorCleanupReport {
@@ -120,6 +122,7 @@ export interface HarnessExecutorRuntime {
    * @returns the standing cleanup evidence.
    */
   cleanupReport(): ExecutorCleanupReport
+  ensureWriterQuiescence(attemptId: string, workspaceId: string, deadlineAt: number): Promise<ExecutorWriterQuiescenceResult>
   /**
    * Unregister every provider, abort every run in flight, and wait for them.
    *
@@ -279,6 +282,10 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
   // are deliberately not cleared by disposal, because the question they answer
   // is asked after disposal.
   const retainedCleanup: ExecutorCleanupFailure[] = []
+  const quiescenceEvidence = new Map<string, {
+    readonly workspaceId: string
+    readonly proof?: ExecutorResult['writerQuiescence']
+  }>()
   let totalCleanup = 0
 
   return {
@@ -332,6 +339,18 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
       inFlight.add(run)
       try {
         const result = await provider.start({ ...request, signal: controller.signal })
+        if (result.status !== 'completed' && request.attemptId !== undefined && request.workspaceId !== undefined) {
+          quiescenceEvidence.delete(request.attemptId)
+          quiescenceEvidence.set(request.attemptId, {
+            workspaceId: request.workspaceId,
+            ...(result.writerQuiescence === undefined ? {} : { proof: result.writerQuiescence }),
+          })
+          while (quiescenceEvidence.size > QUIESCENCE_EVIDENCE_LIMIT) {
+            const oldest = quiescenceEvidence.keys().next().value
+            if (oldest === undefined) break
+            quiescenceEvidence.delete(oldest)
+          }
+        }
         // Recorded on the way past, not interpreted: the runtime keeps the fact
         // so it survives the run, and hands the caller the same result it was
         // given, with the same status the provider decided.
@@ -351,6 +370,19 @@ export function createExecutorRuntime(): HarnessExecutorRuntime {
 
     activeRuns(): number {
       return inFlight.size
+    },
+
+    ensureWriterQuiescence(attemptId, workspaceId, deadlineAt) {
+      const evidence = quiescenceEvidence.get(attemptId)
+      if (evidence === undefined || evidence.workspaceId !== workspaceId) {
+        return Promise.resolve({ status: 'UNPROVEN', reasonCode: 'ATTEMPT_UNKNOWN' })
+      }
+      quiescenceEvidence.delete(attemptId)
+      const proof = evidence.proof
+      if (proof === undefined || !Number.isSafeInteger(deadlineAt) || deadlineAt < 0 || proof.observedAtMs > deadlineAt) {
+        return Promise.resolve({ status: 'UNPROVEN', reasonCode: 'CONTAINMENT_UNAVAILABLE' })
+      }
+      return Promise.resolve({ status: 'QUIESCENT', proof })
     },
 
     cleanupReport(): ExecutorCleanupReport {
@@ -438,6 +470,10 @@ export class ExecutorRuntime extends Service implements HarnessExecutorRuntime {
    */
   activeRuns(): number {
     return this.runtime.activeRuns()
+  }
+
+  ensureWriterQuiescence(attemptId: string, workspaceId: string, deadlineAt: number): Promise<ExecutorWriterQuiescenceResult> {
+    return this.runtime.ensureWriterQuiescence(attemptId, workspaceId, deadlineAt)
   }
 
   /**

@@ -358,6 +358,48 @@ describe('what a restart may say', () => {
     expect(seen).toEqual([])
   })
 
+  it('reconstructs bounded stage progress from a durable restart projection', async () => {
+    const assessment: RestartAssessment = {
+      workflowId: 'wf-earlier',
+      objectiveId: 'obj-earlier',
+      state: 'interrupted',
+      verdict: 'INCONCLUSIVE',
+      openStages: ['repair-1'],
+      requiresWorldVerification: true,
+      summary: 'a repair was in flight when the process stopped',
+    }
+    const { base, auth } = await serve({
+      start: starter(['wf-run-1']),
+      restart: async () => ({
+        ...assessment,
+        progress: {
+          hostRunId: 'host-1',
+          currentStageId: 'repair-1',
+          currentRole: 'repair',
+          executor: 'codex',
+          attempt: 2,
+          attemptId: 'wf-earlier:repair-1:2',
+          executorRunId: 'host-1:9',
+          lastEventAt: 123,
+          recoveryDisposition: 'RETRY_SAME_EXECUTOR',
+          reasonCode: 'TRANSIENT_EXECUTOR_UNAVAILABLE',
+          nextAction: 'Retry after the recorded backoff',
+          stages: [{ stageId: 'repair-1', role: 'repair', executor: 'codex', verdict: 'INCONCLUSIVE', summary: 'bounded' }],
+          transcript: 'provider-private-marker',
+        },
+      } as never),
+    })
+
+    const status = await readStatus(base, auth, 'wf-earlier')
+    const rendered = JSON.stringify(status)
+    expect(rendered).toContain('"currentStageId":"repair-1"')
+    expect(rendered).toContain('"executorRunId":"host-1:9"')
+    expect(rendered).toContain('"recoveryDisposition":"RETRY_SAME_EXECUTOR"')
+    expect(rendered).toContain('"reasonCode":"TRANSIENT_EXECUTOR_UNAVAILABLE"')
+    expect(rendered).toContain('"stages":[{"stageId":"repair-1"')
+    expect(rendered).not.toContain('provider-private-marker')
+  })
+
   it('reads a canceled run`s world check out of the durable log, not out of nothing', async () => {
     const { base, auth } = await serve({
       start: starter(['wf-run-1'], async (_record, canceled) => {
@@ -537,6 +579,35 @@ async function readStatus(
   const read = await fetch(base + '/workflows/' + workflowId, { headers: auth })
   return (await read.json()) as ControlWorkflowStatus
 }
+
+describe('what a status poll may say about live progress', () => {
+  it('refreshes bounded stage progress while a workflow is still running', async () => {
+    let finish!: (value: WorkflowOutcome) => void
+    const pending = new Promise<WorkflowOutcome>((resolve) => { finish = resolve })
+    let currentStageId = 'implement'
+    const { base, auth } = await serve({
+      start: (_objective): ControlStartedWorkflow => ({
+        workflowId: 'wf-live',
+        outcome: pending,
+        cancel: () => undefined,
+        readProgress: () => ({ currentStageId, transcript: 'provider-private-marker' } as never),
+      }),
+    })
+    await post(base, auth, OBJECTIVE)
+
+    try {
+      const first = JSON.stringify(await readStatus(base, auth, 'wf-live'))
+      expect(first).toContain('"currentStageId":"implement"')
+      expect(first).not.toContain('provider-private-marker')
+
+      currentStageId = 'verify'
+      const second = JSON.stringify(await readStatus(base, auth, 'wf-live'))
+      expect(second).toContain('"currentStageId":"verify"')
+    } finally {
+      finish(outcome('wf-live', OBJECTIVE.id))
+    }
+  })
+})
 
 describe('what a status poll may say about conformance', () => {
   const CONFORMANCE = {

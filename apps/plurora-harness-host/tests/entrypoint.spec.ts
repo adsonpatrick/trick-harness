@@ -108,7 +108,13 @@ describe('runPluroraHost', () => {
     const fake = fakeRuntime({ PLURORA_HARNESS_TOKEN: 'redacted', PLURORA_OPENCODE_STARTUP_TIMEOUT_MS: value })
     const running = runPluroraHost(invocation(), fake.runtime)
     await vi.waitFor(() => { expect(fake.start).toHaveBeenCalledOnce() })
-    expect(fake.runtime.createOpencode).toHaveBeenCalledWith({ startupTimeoutMs: value === undefined ? 60000 : 90000 })
+    expect(fake.runtime.createOpencode).toHaveBeenCalledWith({
+      startupTimeoutMs: value === undefined ? 60000 : 90000,
+      spawn: fake.managedSpawn,
+      cwd: resolve('/repo'),
+      disposeGraceMs: 5000,
+      quiescenceDeadlineMs: 120000,
+    })
     fake.stop()
     expect(await running).toBe(0)
   })

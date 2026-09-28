@@ -6,6 +6,8 @@ This is a fork-local package: private to `adsonpatrick/trick-harness`, never pub
 
 ## Why the log is the state
 
+The `harness/workflow-start` event records the host session identity. Executor events let `projectWorkflow` reconstruct bounded in-flight stage, attempt, executor, and event-time facts for live and restarted status reads.
+
 `projectWorkflow` reads `harness/*` events and nothing else. Nothing the projection cannot see is durable, which is the point: a workflow that resumed from live memory would resume one way after a restart and another way after a compaction, and neither would be reproducible from the record afterwards. Pruning tool results or compacting the conversation therefore cannot remove a finding, a diagnosis, or the evidence a verdict rests on — those live in their own events, not in the transcript that produced them.
 
 ## What a payload may hold

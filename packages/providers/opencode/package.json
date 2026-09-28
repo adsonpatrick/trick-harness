@@ -31,11 +31,13 @@
   "peerDependencies": {
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-subprocess": "workspace:^",
     "@trick-harness/executor": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-subprocess": "workspace:^",
     "@trick-harness/executor": "workspace:^"
   }
 }

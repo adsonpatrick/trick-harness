@@ -16,9 +16,11 @@ The runtime decides which provider a route selects, whether that provider can ho
 
 **The provider sees a chained signal, not the caller's.** The runtime must be able to end a run the caller has no reason to cancel — disposal, budget exhaustion — so it owns the signal that reaches the provider. Aborting must terminate the owned process tree to quiescence, not merely return.
 
-**Failures are structured and safe.** `ExecutorFailure` carries a canonical category, stable code, and redacted diagnostic. Routing classifies the category against its closed availability and quality sets before considering fallback; the provider does not attach a separate routing decision to the failure. Raw stderr, environment, and credentials are not part of the public result: providers talk to products the user is authenticated against, and anything that escapes here reaches durable event logs and PR comments.
+**Failures are structured and safe.** `ExecutorFailure` carries a canonical category, stable code, redacted diagnostic and optional bounded `failurePhase` identifying the provider operation. Routing classifies the category against its closed availability and quality sets before considering fallback; the provider does not attach a separate routing decision to the failure. Raw stderr, environment, and credentials are not part of the public result: providers talk to products the user is authenticated against, and anything that escapes here reaches durable event logs and PR comments.
 
 **Results are bounded.** `output` is the final result, never the child transcript.
+
+**Quiescence evidence is attempt-scoped.** A workflow request carries the attempt and physical workspace identities. After the provider has completed teardown, `ensureWriterQuiescence` consumes the matching result once and checks its proof against the requested workspace and absolute quiescence deadline. Missing, mismatched, expired, or already-consumed evidence returns `UNPROVEN`; an abort request by itself is never proof.
 
 **Teardown faults travel beside the outcome, never inside it.** A run that completed and then failed to close its server still completed, so a teardown fault cannot be reported as an execution failure. `ExecutorCleanupFailure` carries a stable category and a diagnostic derived from the error's class name only — never its message, which for teardown exceptions routinely holds ports, URLs and authorization headers. It deliberately has no `availability` field: giving it one would let a failed cleanup reroute the next run, so the guarantee is structural rather than a rule someone must remember. `ctx.executors.cleanupReport()` returns an `ExecutorCleanupReport` — whether the runtime is clean, how many faults it saw in total, and up to `CLEANUP_EVIDENCE_LIMIT` retained facts. The total stays exact when the retained list truncates, so evidence is never silently short, and the report survives `dispose()` because that is when the question gets asked.
 
@@ -38,6 +40,7 @@ const result = await runtime.start({
   task: 'implement the parser',
   route: { executor: 'opencode', model: 'resolved-model-id', permissionMode: 'workspace-write' },
   signal: controller.signal,
+  deadlineAtMs: Date.now() + 60_000,
 })
 ```
 

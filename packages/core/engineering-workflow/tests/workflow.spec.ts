@@ -29,6 +29,7 @@ import type {
   WorkspaceStateReader,
   WorkflowOutcome,
   WorkflowDeliveryInput,
+  WorkflowRuntimeOptions,
 } from '../src/index.ts'
 
 const POLICY: RoutingPolicy = Object.freeze({
@@ -52,7 +53,16 @@ const PROFILE: HarnessProfile = Object.freeze({
   id: 'test',
   policyVersion: 'test-v1.0.0',
   routingPolicy: Object.freeze({ rules: POLICY.rules, fallbackRules: POLICY.fallbackRules }),
-  workflowPolicy: Object.freeze({ maxRepairCycles: 3, maxExecutorStarts: 24 }),
+  workflowPolicy: Object.freeze({ maxRepairCycles: 3, maxExecutorStarts: 24, recoveryPolicy: Object.freeze({
+    version: 'test-recovery-v1',
+    attemptDeadlineMsByRole: Object.freeze({
+      refine: 1_000, plan: 1_000, implement: 1_000, debug: 1_000, repair: 1_000, verify: 1_000,
+      review: 1_000, security: 1_000, qa: 1_000, conformance: 1_000, delivery: 1_000,
+    }),
+    maxSameExecutorRetriesPerStage: 2, maxReroutesPerStage: 1, maxReprovisionsPerStage: 1,
+    maxReconciliationsPerStage: 1, maxRecoveryTransitionsPerWorkflow: 4, recoveryDeadlineMs: 10_000,
+    backoffInitialMs: 100, backoffMultiplier: 2, backoffMaxMs: 500, quiescenceDeadlineMs: 1_000,
+  }) }),
   independencePolicy: Object.freeze({
     low: 'fresh-context',
     medium: 'cross-executor-preferred',
@@ -122,6 +132,17 @@ function interpretAllPass(stage: StageSpec, executor: string): StageResult {
 
 function taskFor(stage: StageSpec, objective: WorkflowObjective): string {
   return `${stage.role}: ${objective.requirement}`
+}
+
+const TEST_WORKSPACE_STATE: WorkspaceStateReader = {
+  snapshot: async () => ({ revision: 'a'.repeat(40), entries: [], observable: true }),
+}
+
+function testRunner(workflowId: string, options: WorkflowRuntimeOptions): WorkflowRunner {
+  return new WorkflowRunner(workflowId, {
+    ...options,
+    workspaceState: options.workspaceState ?? TEST_WORKSPACE_STATE,
+  })
 }
 
 /**
@@ -264,6 +285,26 @@ describe('role-specific permission modes', () => {
 })
 
 describe('a normal run', () => {
+  it('passes the role policy as an absolute deadline to each executor attempt', async () => {
+    let deadlineAtMs: number | undefined
+    const localExecutors = createExecutorRuntime()
+    localExecutors.register(provider('builder', async (request) => {
+      deadlineAtMs = request.deadlineAtMs
+      return passing('builder')
+    }))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+    const localRunner = testRunner('wf-attempt-deadline', {
+      profile: PROFILE, policy: POLICY, executors: localExecutors,
+      journal: new WorkflowJournal(Session.create(SessionId('attempt-deadline')), 'wf-attempt-deadline', async () => true),
+      capabilities: { delivery: DELIVERY }, now: () => 1_000,
+    })
+
+    await localRunner.run({ objective: OBJECTIVE, plan: () => [{ stageId: 'deadline-implement', role: 'implement' }],
+      interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+
+    expect(deadlineAtMs).toBe(2_000)
+  })
+
   let session: Session
   let executors: HarnessExecutorRuntime
   let journal: WorkflowJournal
@@ -273,7 +314,7 @@ describe('a normal run', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
   it('walks implement to verify to delivery and completes', async () => {
@@ -358,7 +399,7 @@ describe('a run that goes wrong', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
   it('stops on a cancelled run and reports it as inconclusive, not failed', async () => {
@@ -389,9 +430,57 @@ describe('a run that goes wrong', () => {
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.verdict).toBe('BLOCKED')
     expect(JSON.stringify(session.events)).toContain('transport-unavailable')
     expect(JSON.stringify(session.events)).toContain('provider did not start')
+  })
+
+  it('journals each bounded read-only retry before starting the same executor again', async () => {
+    const startTimes: number[] = []
+    let clock = 1_000
+    let starts = 0
+    executors.register(provider('reviewer', async () => {
+      starts += 1
+      startTimes.push(clock)
+      return starts < 3
+        ? { status: 'error', output: '', failure: {
+          category: 'transport-unavailable', code: 'fixture.transport', safeDiagnostic: 'temporary outage',
+        } }
+        : passing('reviewer')
+    }))
+    executors.register(provider('spare', async () => passing('spare')))
+    runner = testRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: { delivery: DELIVERY },
+      now: () => clock,
+      waitUntil: async (eligibleAt) => { clock = eligibleAt },
+    })
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      plan: () => [{ stageId: 'review-retry', role: 'review' }],
+      interpret: interpretAllPass,
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    const decisions = projectWorkflow(session.events, 'wf-1').recoveryDecisions
+    expect(outcome.state, JSON.stringify({ summary: outcome.summary, starts, decisions })).toBe('completed')
+    expect(starts).toBe(3)
+    expect(startTimes).toEqual([1_000, 1_100, 1_300])
+    expect(decisions.map(entry => entry.decision)).toMatchObject([
+      { disposition: 'RETRY_SAME_EXECUTOR', executor: 'reviewer', attempt: 2, retryAtMs: 1_100 },
+      { disposition: 'RETRY_SAME_EXECUTOR', executor: 'reviewer', attempt: 3, retryAtMs: 1_300 },
+    ])
+    expect(decisions.map(entry => entry.counters.sameExecutorRetries)).toEqual([1, 2])
+    const recoveryEvents = session.events.filter(event => event.type === 'harness/recovery-decision')
+    const stageStarts = session.events.filter(event =>
+      event.type === 'harness/executor-start' && event.data.stageId === 'review-retry')
+    expect(recoveryEvents[0]?.seq).toBeLessThan(stageStarts[1]?.seq ?? -1)
+    expect(recoveryEvents[1]?.seq).toBeLessThan(stageStarts[2]?.seq ?? -1)
   })
 
   it('keeps a non-reroutable provider error inconclusive without opening repair', async () => {
@@ -403,10 +492,189 @@ describe('a run that goes wrong', () => {
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.verdict).toBe('BLOCKED')
     expect(outcome.repairCycles).toBe(0)
     expect(outcome.stages[0]?.verdict).toBe('INCONCLUSIVE')
-    expect(projectWorkflow(session.events, 'wf-1').end?.verdict).toBe('INCONCLUSIVE')
+    expect(projectWorkflow(session.events, 'wf-1').end?.verdict).toBe('BLOCKED')
+  })
+
+  it('does not retry a failed writable attempt without quiescence and reconciliation', async () => {
+    const localSession = Session.create(SessionId('unproven-writer'))
+    const localExecutors = createExecutorRuntime()
+    let ensureCalls = 0
+    const localRunner = testRunner('wf-unproven-writer', {
+      profile: {
+        ...PROFILE,
+        workflowPolicy: {
+          ...PROFILE.workflowPolicy,
+          recoveryPolicy: { ...PROFILE.workflowPolicy.recoveryPolicy, quiescenceDeadlineMs: 20 },
+        },
+      },
+      policy: POLICY,
+      executors: localExecutors,
+      journal: new WorkflowJournal(localSession, 'wf-unproven-writer', async () => true),
+      capabilities: { delivery: DELIVERY },
+      writerQuiescence: {
+        ensureWriterQuiescence: (attemptId, workspaceId, deadlineAt) => {
+          ensureCalls += 1
+          expect(attemptId).toBe('wf-unproven-writer:ambiguous-implement:1')
+          expect(workspaceId).toBe(OBJECTIVE.cwd)
+          expect(deadlineAt).toBeGreaterThan(Date.now())
+          return new Promise<never>(() => {})
+        },
+      },
+    })
+    let starts = 0
+    let snapshotCalls = 0
+    let lateWriteCompleted = false
+    localExecutors.register(provider('builder', async () => {
+      starts += 1
+      setTimeout(() => { lateWriteCompleted = true }, 0)
+      return {
+        status: 'error', output: '',
+        failure: { category: 'transport-unavailable', code: 'fixture.transport', safeDiagnostic: 'connection lost' },
+      }
+    }))
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      plan: () => [{ stageId: 'ambiguous-implement', role: 'implement' }],
+      interpret: interpretAllPass,
+      task: taskFor,
+      workspaceState: { snapshot: async () => {
+        snapshotCalls += 1
+        expect(lateWriteCompleted).toBe(false)
+        return { revision: 'a'.repeat(40), entries: [], observable: true }
+      } },
+      ...CONFORMS,
+    })
+
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(starts).toBe(1)
+    expect(ensureCalls).toBe(1)
+    // The pre-write checkpoint is allowed; a post-timeout/cancel read is not
+    // certifying evidence until writer authority has been revoked.
+    expect(snapshotCalls).toBe(1)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(lateWriteCompleted).toBe(true)
+    expect(projectWorkflow(localSession.events, 'wf-unproven-writer').recoveryDecisions.at(-1)?.decision)
+      .toMatchObject({ disposition: 'PAUSE_FOR_HUMAN', reasonCode: 'WRITER_QUIESCENCE_UNPROVEN' })
+    expect(projectWorkflow(localSession.events, 'wf-unproven-writer').workspaceCheckpoints).toHaveLength(1)
+    expect(projectWorkflow(localSession.events, 'wf-unproven-writer').workspaceReconciliations[0])
+      .toMatchObject({
+        status: 'SNAPSHOT_UNREADABLE', writerQuiescent: false, conclusive: false,
+        writerQuiescenceReasonCode: 'QUIESCENCE_DEADLINE_EXCEEDED',
+      })
+  })
+
+  it('preserves reconciled implementation work for a fresh read-only verifier', async () => {
+    const localSession = Session.create(SessionId('recovered-implementation'))
+    const localExecutors = createExecutorRuntime()
+    const localJournal = new WorkflowJournal(localSession, 'wf-recovered-implementation', async () => true)
+    const localRunner = testRunner('wf-recovered-implementation', {
+      profile: PROFILE, policy: POLICY, executors: localExecutors, journal: localJournal,
+      capabilities: { delivery: DELIVERY },
+      now: () => Date.now(),
+    })
+    let implementationStarts = 0
+    let verificationStarts = 0
+    localExecutors.register(provider('builder', async () => {
+      implementationStarts += 1
+      return {
+        status: 'error', output: '',
+        failure: { category: 'transport-unavailable', code: 'fixture.transport', safeDiagnostic: 'connection lost' },
+        writerQuiescence: {
+          kind: 'owned-process-tree-exited', processId: 123, observedAtMs: Date.now(),
+        },
+      }
+    }))
+    localExecutors.register(provider('reviewer', async () => {
+      verificationStarts += 1
+      return passing('reviewer')
+    }))
+    const snapshots: WorkspaceSnapshot[] = [
+      { revision: 'a'.repeat(40), entries: [], observable: true },
+      { revision: 'a'.repeat(40), entries: [
+        { path: 'src/feature.ts', fingerprint: 'writer output', surface: 'worktree' },
+      ], observable: true },
+      { revision: 'a'.repeat(40), entries: [
+        { path: 'src/feature.ts', fingerprint: 'writer output', surface: 'worktree' },
+      ], observable: true },
+      { revision: 'a'.repeat(40), entries: [
+        { path: 'src/feature.ts', fingerprint: 'writer output', surface: 'worktree' },
+      ], observable: true },
+    ]
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      interpret: interpretAllPass,
+      task: taskFor,
+      changeImpact: { plannedPaths: async () => ['src/feature.ts'], actualPaths: async () => ['src/feature.ts'] },
+      workspaceState: { snapshot: async () => snapshots.shift() as WorkspaceSnapshot },
+      ...CONFORMS,
+    })
+
+    const projection = projectWorkflow(localSession.events, 'wf-recovered-implementation')
+    expect(implementationStarts).toBe(1)
+    expect(verificationStarts, JSON.stringify({ summary: outcome.summary, decisions: projection.recoveryDecisions,
+      reconciliations: projection.workspaceReconciliations }))
+      .toBe(5)
+    expect(outcome.stages.find(stage => stage.role === 'implement')?.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.stages.map(stage => stage.stageId)).toContain('verify-recovered-implement-1-1')
+    expect(projectWorkflow(localSession.events, 'wf-recovered-implementation').routes)
+      .toContainEqual(expect.objectContaining({
+        stageId: 'verify-recovered-implement-1-1', role: 'verify', reasonCodes: ['override:recovery', 'tier:reasoning'],
+      }))
+    expect(projection.recoveryDecisions.at(-1)?.decision.disposition).toBe('VERIFY_RECOVERED_MUTATION')
+    expect(projection.workspaceReconciliations[0]).toMatchObject({
+      status: 'IN_SCOPE_MUTATION', writerQuiescent: true, conclusive: true,
+      writerProof: { kind: 'owned-process-tree-exited', processId: 123 },
+    })
+  })
+
+  it('does not reconstruct repair evidence from an ambiguous workspace result', async () => {
+    const localSession = Session.create(SessionId('ambiguous-repair'))
+    const localExecutors = createExecutorRuntime()
+    const localJournal = new WorkflowJournal(localSession, 'wf-ambiguous-repair', async () => true)
+    const localRunner = testRunner('wf-ambiguous-repair', {
+      profile: PROFILE, policy: POLICY, executors: localExecutors, journal: localJournal,
+      capabilities: { delivery: DELIVERY }, now: () => 10_000,
+    })
+    let repairStarts = 0
+    localExecutors.register(provider('builder', async (request) => {
+      if (!request.task.startsWith('repair:')) return passing('builder')
+      repairStarts += 1
+      return {
+        status: 'error', output: '',
+        failure: { category: 'transport-unavailable', code: 'fixture.transport', safeDiagnostic: 'connection lost' },
+        writerQuiescence: { kind: 'owned-process-tree-exited', processId: 456, observedAtMs: 9_999 },
+      }
+    }))
+    localExecutors.register(provider('reviewer', async () => passing('reviewer')))
+    const unchanged: WorkspaceSnapshot = { revision: 'b'.repeat(40), entries: [], observable: true }
+
+    const outcome = await localRunner.run({
+      objective: OBJECTIVE,
+      interpret: (stage, executor) => stage.role === 'verify'
+        ? { role: stage.role, executor, verdict: 'FAIL', summary: 'focused suite red', findings: [bug()], constraints: [], evidence: [] }
+        : interpretAllPass(stage, executor),
+      diagnose: () => DIAGNOSIS,
+      repairEvidence: () => REPAIRED,
+      task: taskFor,
+      changeImpact: REPAIR_CHANGE_IMPACT,
+      workspaceState: { snapshot: async () => unchanged },
+      ...CONFORMS,
+    })
+
+    const projection = projectWorkflow(localSession.events, 'wf-ambiguous-repair')
+    expect(repairStarts, JSON.stringify({ summary: outcome.summary, stages: outcome.stages, projection })).toBe(1)
+    expect(outcome.verdict).toBe('BLOCKED')
+    expect(outcome.stages.find(stage => stage.role === 'repair')?.verdict).toBe('INCONCLUSIVE')
+    expect(projection.recoveryDecisions.at(-1)?.decision).toMatchObject({ disposition: 'PAUSE_FOR_HUMAN' })
+    expect(projection.workspaceReconciliations[0]).toMatchObject({
+      status: 'NO_MUTATION', writerQuiescent: true, conclusive: true,
+    })
+    expect(outcome.stages.map(stage => stage.stageId)).not.toContain('verify-recovered-repair-1-1')
   })
 
   it('does not repair a certifying PARTIAL result without a confirmed repair target', async () => {
@@ -444,9 +712,61 @@ describe('a run that goes wrong', () => {
       ...CONFORMS,
     })
 
-    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(outcome.verdict).toBe('BLOCKED')
     expect(outcome.repairCycles).toBe(0)
     expect(projectWorkflow(session.events, 'wf-1').constraints).toHaveLength(1)
+    expect(projectWorkflow(session.events, 'wf-1').recoveryDecisions[0]?.decision).toMatchObject({
+      disposition: 'PAUSE_FOR_HUMAN',
+      reasonCode: 'WORKSPACE_NOT_RECONSTRUCTIBLE',
+    })
+  })
+
+  it('recovers a read-only availability constraint through the policy engine', async () => {
+    let clock = 1_000
+    let reads = 0
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+    runner = testRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      now: () => clock,
+      waitUntil: async (eligibleAt) => { clock = eligibleAt },
+    })
+
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      plan: () => [{ stageId: 'review-constraint-retry', role: 'review' }],
+      interpret: (stage, executor) => {
+        reads += 1
+        return reads === 1
+          ? {
+            role: stage.role,
+            executor,
+            verdict: 'PASS',
+            summary: 'provider was temporarily unavailable',
+            findings: [],
+            constraints: [{
+              id: 'availability',
+              class: 'EXTERNAL_SERVICE_UNAVAILABLE',
+              raisedBy: 'review',
+              summary: 'provider was temporarily unavailable',
+              evidence: [],
+            }],
+            evidence: [],
+          }
+          : interpretAllPass(stage, executor)
+      },
+      task: taskFor,
+      ...CONFORMS,
+    })
+
+    expect(outcome.state).toBe('completed')
+    expect(reads).toBe(2)
+    expect(projectWorkflow(session.events, 'wf-1').recoveryDecisions[0]?.decision).toMatchObject({
+      disposition: 'RETRY_SAME_EXECUTOR',
+      retryAtMs: 1_100,
+    })
   })
 
   it('blocks rather than guessing when a stage returns a product decision', async () => {
@@ -688,8 +1008,8 @@ describe('a run that goes wrong', () => {
   })
 
   it('stops at the executor-start budget', async () => {
-    const tight = new WorkflowRunner('wf-1', {
-      profile: { ...PROFILE, workflowPolicy: { maxRepairCycles: 3, maxExecutorStarts: 2 } },
+    const tight = testRunner('wf-1', {
+      profile: { ...PROFILE, workflowPolicy: { ...PROFILE.workflowPolicy, maxRepairCycles: 3, maxExecutorStarts: 2 } },
       policy: POLICY,
       executors,
       journal,
@@ -728,7 +1048,7 @@ describe('workspace snapshot gates', () => {
     }
     const localSession = Session.create(SessionId('s'))
     const localExecutors = createExecutorRuntime()
-    const localRunner = new WorkflowRunner('wf-1', {
+    const localRunner = testRunner('wf-1', {
       profile: PROFILE,
       policy: POLICY,
       executors: localExecutors,
@@ -773,7 +1093,7 @@ describe('workspace snapshot gates', () => {
     }
     const localSession = Session.create(SessionId('s'))
     const localExecutors = createExecutorRuntime()
-    const localRunner = new WorkflowRunner('wf-1', {
+    const localRunner = testRunner('wf-1', {
       profile: PROFILE,
       policy: POLICY,
       executors: localExecutors,
@@ -828,7 +1148,7 @@ describe('workspace snapshot gates', () => {
     }
     const localSession = Session.create(SessionId('s'))
     const localExecutors = createExecutorRuntime()
-    const localRunner = new WorkflowRunner('wf-1', {
+    const localRunner = testRunner('wf-1', {
       profile: PROFILE,
       policy: POLICY,
       executors: localExecutors,
@@ -864,7 +1184,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    const runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async (request) => {
       await new Promise((resolve) => { request.signal.addEventListener('abort', resolve, { once: true }) })
       return { status: 'aborted', output: '' }
@@ -881,7 +1201,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    const runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     const aborted = vi.fn()
     let announce: () => void = () => {}
     const started = new Promise<void>((resolve) => { announce = resolve })
@@ -906,7 +1226,7 @@ describe('the lifecycle owner', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    const runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     runner.dispose()
 
     await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS }))
@@ -919,7 +1239,7 @@ describe('what a restart may conclude', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    const runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
     await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
@@ -1051,7 +1371,7 @@ describe('triage inside a run', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
   })
@@ -1204,7 +1524,7 @@ describe('independence the profile actually requires', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: SOLO_POLICY, executors, journal,
       capabilities: { delivery: DELIVERY },
     })
@@ -1230,7 +1550,7 @@ describe('independence the profile actually requires', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: SOLO_POLICY, executors, journal,
       capabilities: { delivery: DELIVERY },
     })
@@ -1251,7 +1571,7 @@ describe('a pass the route it ran on cannot support', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['reviewer'],
       capabilities: { delivery: DELIVERY },
     })
@@ -1273,7 +1593,7 @@ describe('a pass the route it ran on cannot support', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, degradedExecutors: ['reviewer'],
       capabilities: { delivery: DELIVERY },
     })
@@ -1298,7 +1618,7 @@ describe('a stage the policy cannot answer for', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: NO_FALLBACK, executors, journal, degradedExecutors: ['builder'],
       capabilities: { delivery: DELIVERY },
     })
@@ -1321,7 +1641,7 @@ describe('a plan that asks for a repair with nothing to repair', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    const runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     executors.register(provider('builder', async () => passing('builder')))
 
     const outcome = await runner.run({
@@ -1346,7 +1666,7 @@ describe('an executor that stops serving mid-run', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
   })
 
   function failing(name: string, category: 'usage-limit-exceeded' | 'server-overloaded' | 'bad-request' | 'other', seen: string[]): ExecutorProvider {
@@ -1356,23 +1676,41 @@ describe('an executor that stops serving mid-run', () => {
     })
   }
 
-  it('moves the stage to another product when the first one cannot serve', async () => {
+  it('routes a transient read-only failure only after the retry budget is exhausted', async () => {
     const seen: string[] = []
-    executors.register(failing('builder', 'usage-limit-exceeded', seen))
-    executors.register(provider('reviewer', async () => passing('reviewer')))
+    let clock = 1_000
+    executors.register(failing('reviewer', 'server-overloaded', seen))
     executors.register(provider('spare', async () => { seen.push('spare'); return passing('spare') }))
+    runner = testRunner('wf-1', {
+      profile: PROFILE,
+      policy: POLICY,
+      executors,
+      journal,
+      capabilities: { delivery: DELIVERY },
+      now: () => clock,
+      waitUntil: async (eligibleAt) => { clock = eligibleAt },
+    })
 
-    const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+    const outcome = await runner.run({
+      objective: OBJECTIVE,
+      plan: () => [{ stageId: 'review-availability', role: 'review' }],
+      interpret: interpretAllPass,
+      task: taskFor,
+      ...CONFORMS,
+    })
 
-    expect(outcome.state).toBe('completed')
-    expect(seen).toContain('spare')
-    // The reroute is a real start against a real product, so the budget sees it:
-    // two executor stages, three starts.
+    expect(outcome.state, JSON.stringify({
+      summary: outcome.summary,
+      seen,
+      decisions: projectWorkflow(session.events, 'wf-1').recoveryDecisions,
+    })).toBe('completed')
+    expect(seen).toEqual(['reviewer', 'reviewer', 'reviewer', 'spare'])
+    const decisions = projectWorkflow(session.events, 'wf-1').recoveryDecisions
+    expect(decisions.map(entry => entry.decision.disposition)).toEqual([
+      'RETRY_SAME_EXECUTOR', 'RETRY_SAME_EXECUTOR', 'REROUTE_EXECUTOR',
+    ])
+    expect(decisions[2]?.decision).toMatchObject({ executor: 'spare' })
     expect(outcome.executorStarts).toBeGreaterThan(2)
-    const events = JSON.stringify(session.events)
-    expect(events).toContain('harness/route-fallback')
-    expect(events).toContain('usage-limit-exceeded')
-    expect(projectWorkflow(session.events, 'wf-1').circuits['builder']).toBe('DEGRADED')
   })
 
   it('does not ask a second product the same question after a wrong answer', async () => {
@@ -1390,17 +1728,20 @@ describe('an executor that stops serving mid-run', () => {
     expect(JSON.stringify(session.events)).not.toContain('harness/route-fallback')
   })
 
-  it('counts every reroute against the start budget the run was given', async () => {
+  it('does not reroute a failed write without workspace reconciliation proof', async () => {
     const seen: string[] = []
     executors.register(failing('builder', 'server-overloaded', seen))
     executors.register(failing('spare', 'server-overloaded', seen))
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
-    expect(seen).toEqual(['builder', 'spare'])
-    expect(outcome.executorStarts).toBe(2)
-    expect(outcome.verdict).toBe('INCONCLUSIVE')
+    expect(seen).toEqual(['builder'])
+    expect(outcome.executorStarts).toBe(1)
+    expect(outcome.verdict).toBe('BLOCKED')
     expect(outcome.repairCycles).toBe(0)
+    expect(projectWorkflow(session.events, 'wf-1').recoveryDecisions[0]?.decision).toMatchObject({
+      disposition: 'PAUSE_FOR_HUMAN', reasonCode: 'WRITER_QUIESCENCE_UNPROVEN',
+    })
   })
 })
 
@@ -1415,7 +1756,7 @@ describe('a human route override', () => {
     session = Session.create(SessionId('s'))
     executors = createExecutorRuntime()
     journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
+    runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY } })
     seen = []
     for (const name of ['builder', 'reviewer', 'spare']) {
       executors.register(provider(name, async (request) => {
@@ -1488,6 +1829,31 @@ describe('a human route override', () => {
 })
 
 describe('the durable barrier in front of a dispatch', () => {
+  it('flushes a checkpoint before granting the first workspace-write attempt', async () => {
+    const session = Session.create(SessionId('checkpoint-order'))
+    const executors = createExecutorRuntime()
+    let flushes = 0
+    const journal = new WorkflowJournal(session, 'wf-checkpoint-order', async () => {
+      flushes += 1
+      return true
+    })
+    const runner = testRunner('wf-checkpoint-order', {
+      profile: PROFILE, policy: POLICY, executors, journal,
+      capabilities: { delivery: DELIVERY },
+    })
+    let authorized = false
+    executors.register(provider('builder', async () => {
+      const checkpoint = session.events.find(event => event.type === 'harness/workspace-checkpoint')
+      const start = session.events.find(event => event.type === 'harness/executor-start')
+      authorized = checkpoint !== undefined && start !== undefined && checkpoint.seq < start.seq && flushes >= 3
+      return passing('builder')
+    }))
+    executors.register(provider('reviewer', async () => passing('reviewer')))
+
+    await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
+    expect(authorized).toBe(true)
+  })
+
   it('does not start a provider until the start fact has reached the log', async () => {
     const session = Session.create(SessionId('barrier'))
     const executors = createExecutorRuntime()
@@ -1501,7 +1867,7 @@ describe('the durable barrier in front of a dispatch', () => {
       if (flushes === 1) await held
       return true
     })
-    const runner = new WorkflowRunner('wf-barrier', {
+    const runner = testRunner('wf-barrier', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: { delivery: DELIVERY },
     })
@@ -1532,7 +1898,7 @@ describe('the durable barrier in front of a dispatch', () => {
     const session = Session.create(SessionId('barrier-failed'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-barrier-failed', async () => false)
-    const runner = new WorkflowRunner('wf-barrier-failed', {
+    const runner = testRunner('wf-barrier-failed', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: { delivery: DELIVERY },
     })
@@ -1556,10 +1922,10 @@ describe('the durable barrier in front of a dispatch', () => {
     let flushes = 0
     const journal = new WorkflowJournal(session, 'wf-barrier-read', async () => {
       flushes += 1
-      // Passes the implementing stage, refuses the verifying one.
-      return flushes < 2
+      // Passes workflow admission and routing, refuses the mutation checkpoint.
+      return flushes < 3
     })
-    const runner = new WorkflowRunner('wf-barrier-read', {
+    const runner = testRunner('wf-barrier-read', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: { delivery: DELIVERY },
     })
@@ -1573,12 +1939,11 @@ describe('the durable barrier in front of a dispatch', () => {
       return passing('reviewer')
     }))
 
-    // One rule for every start. A barrier that read the role first would make
-    // the role classification itself a durability decision, and a stage
-    // misclassified once would dispatch unrecorded forever after.
+    // The writer checkpoint must be durable before the executor can receive
+    // workspace-write authority.
     await expect(runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS }))
       .rejects.toThrow(/durable checkpoint/)
-    expect(starts).toEqual(['builder'])
+    expect(starts).toEqual([])
   })
 })
 
@@ -1597,7 +1962,7 @@ describe('who is allowed to publish the work', () => {
 
   it('asks the capability once and asks no executor to deliver anything', async () => {
     const delivered: string[] = []
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: { delivery: deliveryStub(delivered) },
     })
@@ -1613,7 +1978,7 @@ describe('who is allowed to publish the work', () => {
   })
 
   it('blocks a lifecycle that must publish when nothing was composed to publish with', async () => {
-    const runner = new WorkflowRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
+    const runner = testRunner('wf-1', { profile: PROFILE, policy: POLICY, executors, journal })
 
     const outcome = await runner.run({ objective: OBJECTIVE, interpret: interpretAllPass, task: taskFor, ...CONFORMS })
 
@@ -1626,7 +1991,7 @@ describe('who is allowed to publish the work', () => {
   })
 
   it('fails the run when the capability reports it did not publish', async () => {
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: {
         delivery: {
@@ -1643,7 +2008,7 @@ describe('who is allowed to publish the work', () => {
   })
 
   it('closes the capability window even when the capability throws', async () => {
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: {
         delivery: {
@@ -1659,7 +2024,7 @@ describe('who is allowed to publish the work', () => {
   })
 
   it('spends no executor-start budget on publishing', async () => {
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: { delivery: DELIVERY },
     })
@@ -1698,7 +2063,7 @@ describe('a run that changes a database', () => {
     databaseVerification: DatabaseVerificationCapabilityPort | undefined,
     delivered: string[],
   ): WorkflowRunner {
-    return new WorkflowRunner('wf-1', {
+    return testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal,
       capabilities: {
         delivery: deliveryStub(delivered),
@@ -1861,7 +2226,7 @@ describe('splitting a pull-request run at delivery', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
@@ -1920,7 +2285,7 @@ describe('splitting a pull-request run at delivery', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
@@ -1947,7 +2312,7 @@ describe('splitting a pull-request run at delivery', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: IMPACT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
@@ -1987,7 +2352,7 @@ describe('routing a stage as what the change turned out to be', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: ROUTED_PROFILE, policy: IMPACT_POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
     for (const name of ['builder', 'reviewer', 'workhorse', 'auditor']) {
@@ -2058,7 +2423,7 @@ describe('a database change nobody declared', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: DB_PROFILE, policy: POLICY, executors, journal,
       capabilities: {
         delivery: deliveryStub(options.delivered ?? []),
@@ -2133,7 +2498,7 @@ describe('what evidence a certifying stage is told to produce', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: EVIDENCE_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
     const seen = new Map<string, StageSpec>()
@@ -2234,7 +2599,7 @@ describe('recertifying what a repair turned the change into', () => {
     const session = Session.create(SessionId('s'))
     const executors = createExecutorRuntime()
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: DRIFT_PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
     executors.register(provider('builder', async () => passing('builder')))
@@ -2315,7 +2680,7 @@ describe('when the run writes down what it thinks the change is', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
 
@@ -2352,7 +2717,7 @@ describe('when the run writes down what it thinks the change is', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
 
@@ -2374,7 +2739,7 @@ describe('when the run writes down what it thinks the change is', () => {
     const journal = new WorkflowJournal(session, 'wf-1', async () => true)
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE, policy: POLICY, executors, journal, capabilities: { delivery: DELIVERY },
     })
 
@@ -2403,7 +2768,7 @@ describe('the external certification contract', () => {
     const executors = createExecutorRuntime()
     executors.register(provider('builder', async () => passing('builder')))
     executors.register(provider('reviewer', async () => passing('reviewer')))
-    const runner = new WorkflowRunner('wf-cert', {
+    const runner = testRunner('wf-cert', {
       profile: PROFILE,
       policy: POLICY,
       executors,
@@ -2472,7 +2837,7 @@ describe('marking a delivered revision as pending certification', () => {
 
   it('publishes pending once, after the branch exists and before anyone reviews it', async () => {
     const log: string[] = []
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE,
       policy: POLICY,
       executors,
@@ -2496,7 +2861,7 @@ describe('marking a delivered revision as pending certification', () => {
 
   it('publishes pending again for the branch a repair replaced the first one with', async () => {
     const log: string[] = []
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE,
       policy: POLICY,
       executors,
@@ -2549,7 +2914,7 @@ describe('marking a delivered revision as pending certification', () => {
     for (const _pass of [1, 2]) {
       const log: string[] = []
       const fresh = Session.create(SessionId('s'))
-      const runner = new WorkflowRunner('wf-1', {
+      const runner = testRunner('wf-1', {
         profile: PROFILE,
         policy: POLICY,
         executors,
@@ -2568,7 +2933,7 @@ describe('marking a delivered revision as pending certification', () => {
 
   it('ends fail-closed when certification is required and this deployment composed none', async () => {
     const log: string[] = []
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE,
       policy: POLICY,
       executors,
@@ -2590,7 +2955,7 @@ describe('marking a delivered revision as pending certification', () => {
 
   it('does not reach readiness when the pending status could not be published', async () => {
     const log: string[] = []
-    const runner = new WorkflowRunner('wf-1', {
+    const runner = testRunner('wf-1', {
       profile: PROFILE,
       policy: POLICY,
       executors,
@@ -2674,7 +3039,7 @@ describe('publishing the terminal certification', () => {
   }
 
   /** Build a runner over one certification capability. */
-  const runnerWith = (certification: CertificationCapabilityPort): WorkflowRunner => new WorkflowRunner('wf-1', {
+  const runnerWith = (certification: CertificationCapabilityPort): WorkflowRunner => testRunner('wf-1', {
     profile: PROFILE,
     policy: POLICY,
     executors,
@@ -2840,7 +3205,7 @@ describe('the durable record of what was certified', () => {
         }
       },
     }
-    await new WorkflowRunner('wf-1', {
+    await testRunner('wf-1', {
       profile: PROFILE,
       policy: POLICY,
       executors,

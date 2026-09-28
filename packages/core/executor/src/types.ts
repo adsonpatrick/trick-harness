@@ -40,6 +40,10 @@ export interface ExecutorRoute {
 
 /** One unit of work handed to a provider. */
 export interface ExecutorStartRequest {
+  /** Workflow-generated identity, used to correlate teardown evidence. */
+  readonly attemptId?: string
+  /** Physical workspace identity for host containment checks. */
+  readonly workspaceId?: string
   /** Absolute working directory the run is rooted in. */
   readonly cwd: string
   /** The task text delivered to the product runtime. */
@@ -48,6 +52,8 @@ export interface ExecutorStartRequest {
   readonly route: ExecutorRoute
   /** Cancellation signal; aborting must terminate the owned process tree. */
   readonly signal: AbortSignal
+  /** Absolute Harness-owned attempt deadline in Unix milliseconds, when enforced by the workflow. */
+  readonly deadlineAtMs?: number
 }
 
 /**
@@ -77,6 +83,8 @@ export interface ExecutorCapabilities {
 export interface ExecutorFailure {
   /** Stable machine-readable failure class. */
   readonly category: ExecutorFailureCategory
+  /** Operation boundary that produced this failure, when the provider can identify it. */
+  readonly failurePhase?: ExecutorFailurePhase
   /**
    * Whether the executor's own reachability explains this failure.
    *
@@ -95,6 +103,9 @@ export interface ExecutorFailure {
   readonly httpStatus?: number
 }
 
+/** Provider operation boundary attached to a bounded executor failure. */
+export type ExecutorFailurePhase = 'STARTUP' | 'SESSION_CREATE' | 'PROMPT' | 'SESSION_ABORT' | 'CLEANUP'
+
 /**
  * One owned-resource teardown that failed, described in terms safe to store.
  *
@@ -112,9 +123,23 @@ export interface ExecutorFailure {
 export interface ExecutorCleanupFailure {
   /** Stable machine-readable cleanup class, e.g. `'opencode-server-close'`. */
   readonly category: string
+  /** Teardown boundary that produced this secondary operational fact. */
+  readonly failurePhase?: ExecutorFailurePhase
   /** Redacted diagnostic, derived from the category and the error's class name. */
   readonly safeDiagnostic: string
 }
+
+/** Positive proof that a provider-owned writable process tree has exited. */
+export interface ExecutorWriterQuiescenceProof {
+  readonly kind: 'owned-process-tree-exited'
+  readonly processId: number
+  readonly observedAtMs: number
+}
+
+/** Result of asking the trusted executor boundary whether an attempt can still write. */
+export type ExecutorWriterQuiescenceResult =
+  | { readonly status: 'QUIESCENT'; readonly proof: ExecutorWriterQuiescenceProof }
+  | { readonly status: 'UNPROVEN'; readonly reasonCode: 'ATTEMPT_UNKNOWN' | 'CONTAINMENT_UNAVAILABLE' }
 
 /** The bounded outcome of one run. */
 export interface ExecutorResult {
@@ -133,6 +158,8 @@ export interface ExecutorResult {
    * nothing. A run can fail more than one teardown, so it is a list.
    */
   readonly cleanup?: readonly ExecutorCleanupFailure[]
+  /** Present only when the provider joined every process tree it owned for this attempt. */
+  readonly writerQuiescence?: ExecutorWriterQuiescenceProof
 }
 
 /** One product runtime, adapted to the executor contract. */

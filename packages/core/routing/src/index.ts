@@ -176,7 +176,8 @@ function decide(
  * and it still cannot raise a read-only role's authority.
  */
 function overrideDecision(context: RoutingContext, policy: RoutingPolicy): RouteDecision | undefined {
-  const override = context.userOverride
+  const recoveryOverride = context.recoveryOverride
+  const override = recoveryOverride ?? context.userOverride
   if (override === undefined) return undefined
   if (override.executor.trim().length === 0) {
     throw new RoutingError('invalid-override', 'a routing override must name a non-empty executor')
@@ -192,7 +193,7 @@ function overrideDecision(context: RoutingContext, policy: RoutingPolicy): Route
     permissionMode: READ_ONLY_ROLES.includes(context.role)
       ? ('read-only' as const)
       : ('workspace-write' as const),
-    reasonCodes: Object.freeze(['override:user', `tier:${tier}`]),
+    reasonCodes: Object.freeze([`override:${recoveryOverride === undefined ? 'user' : 'recovery'}`, `tier:${tier}`]),
     policyVersion: policy.policyVersion,
     ...override.reasoningEffort === undefined ? {} : { reasoningEffort: override.reasoningEffort },
   })

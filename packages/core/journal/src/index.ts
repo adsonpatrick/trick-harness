@@ -10,8 +10,9 @@
  * @module @trick-harness/journal
  */
 
+import { createHash } from 'node:crypto'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { EXTERNAL_CERTIFICATION_STATES, summarizeChangeImpact } from '@trick-harness/contracts'
+import { EXTERNAL_CERTIFICATION_STATES, RECOVERY_DISPOSITIONS, ROLES, summarizeChangeImpact } from '@trick-harness/contracts'
 import type {
   ChangeImpactFacts,
   ChangeImpactStatusSummary,
@@ -20,6 +21,7 @@ import type {
   EvidenceRef,
   ExternalCertificationState,
   Finding,
+  RecoveryDecision,
   StageConstraint,
   RouteDecision,
   Risk,
@@ -34,6 +36,10 @@ import type {
   DeliveryAction,
   ExecutorOutcome,
   WorkflowEndState,
+  RecoveryDecisionRecord,
+  RecoveryPolicyRecord,
+  WorkspaceCheckpointRecord,
+  WorkspaceReconciliationRecord,
 } from './types.ts'
 
 export * from './types.ts'
@@ -48,10 +54,13 @@ export * from './types.ts'
  */
 export const HARNESS_EVENT_TYPES = [
   'harness/workflow-start',
+  'harness/workspace-checkpoint',
+  'harness/workspace-reconciliation',
   'harness/route-decision',
   'harness/route-fallback',
   'harness/executor-start',
   'harness/executor-end',
+  'harness/recovery-decision',
   'harness/capability-start',
   'harness/capability-end',
   'harness/finding',
@@ -177,6 +186,30 @@ export interface RepairAuthorizationRecord {
 /** The whole state of one workflow, rebuilt from its events. */
 export interface WorkflowProjection {
   readonly workflowId: string
+  /** Host session identity written when the workflow starts. */
+  readonly hostRunId?: string
+  /** Finite policy and hash this workflow was admitted under. */
+  readonly recoveryPolicy?: RecoveryPolicyRecord
+  /** Durable policy decisions in event order. */
+  readonly recoveryDecisions: readonly RecoveryDecisionRecord[]
+  /** Durable pre-write workspace snapshots in attempt order. */
+  readonly workspaceCheckpoints: readonly WorkspaceCheckpointRecord[]
+  /** Read-only workspace reconciliation observations in event order. */
+  readonly workspaceReconciliations: readonly WorkspaceReconciliationRecord[]
+  /** Latest in-flight stage facts, derived from the event log on every read. */
+  readonly progress?: {
+    readonly currentStageId: string
+    readonly currentRole: Role
+    readonly executor: string
+    readonly attempt: number
+    readonly attemptId: string
+    readonly executorRunId?: string
+    readonly lastEventAt: number
+    readonly failureCode?: string
+    readonly constraintClass?: StageConstraint['class']
+    readonly recoveryDisposition?: RecoveryDecision['disposition']
+    readonly reasonCode?: string
+  }
   /** Absent when the log holds no start event for this workflow. */
   readonly objective?:
     & Pick<WorkflowObjective, 'id' | 'cwd' | 'requirement' | 'risk' | 'workload' | 'profileId'>
@@ -287,9 +320,10 @@ export class WorkflowJournal {
    * Record that a workflow was accepted.
    * @param objective - The objective it was accepted for.
    */
-  start(objective: WorkflowObjective): void {
+  start(objective: WorkflowObjective, recoveryPolicy?: RecoveryPolicyRecord): void {
     this.#session.append('harness/workflow-start', {
       workflowId: this.#workflowId,
+      hostRunId: String(this.#session.id),
       objectiveId: objective.id,
       profileId: objective.profileId,
       cwd: objective.cwd,
@@ -300,7 +334,61 @@ export class WorkflowJournal {
       specSha256: objective.approvedArtifacts.spec.sha256,
       planPath: objective.approvedArtifacts.plan.path,
       planSha256: objective.approvedArtifacts.plan.sha256,
+      ...recoveryPolicy === undefined ? {} : { recoveryPolicy: copyRecoveryPolicy(recoveryPolicy) },
     })
+  }
+
+  /** Persist the accepted objective and its exact frozen policy before dispatch. */
+  async startDurably(objective: WorkflowObjective, recoveryPolicy: RecoveryPolicyRecord): Promise<void> {
+    this.start(objective, recoveryPolicy)
+    await this.#durable()
+  }
+
+  /** Persist a deterministic recovery choice before the next action may run. */
+  async recoveryDecision(record: RecoveryDecisionRecord): Promise<void> {
+    const bounded = copyRecoveryDecision(record.decision)
+    if (!isJournalIdentifier(record.stageId) || !isJournalIdentifier(record.attemptId)
+      || !Number.isSafeInteger(record.recordedAtMs) || record.recordedAtMs < 0
+      || !isNonnegativeSafeInteger(record.recoveryDeadlineAtMs)
+      || Object.values(record.counters).some(value => !isNonnegativeSafeInteger(value))) {
+      throw new JournalError('invalid-record', 'recovery decision record has invalid bounded identity, time, or counters')
+    }
+    this.#session.append('harness/recovery-decision', {
+      workflowId: this.#workflowId,
+      stageId: record.stageId,
+      attemptId: record.attemptId,
+      decision: bounded,
+      recordedAtMs: record.recordedAtMs,
+      recoveryDeadlineAtMs: record.recoveryDeadlineAtMs,
+      counters: {
+        sameExecutorRetries: record.counters.sameExecutorRetries,
+        reroutes: record.counters.reroutes,
+        reprovisions: record.counters.reprovisions,
+        reconciliations: record.counters.reconciliations,
+        transitions: record.counters.transitions,
+      },
+    })
+    await this.#durable()
+  }
+
+  /** Persist a bounded workspace checkpoint before a writable executor starts. */
+  async workspaceCheckpoint(record: WorkspaceCheckpointRecord): Promise<void> {
+    const checkpoint = copyWorkspaceCheckpoint(record)
+    this.#session.append('harness/workspace-checkpoint', {
+      workflowId: this.#workflowId,
+      ...checkpoint,
+    })
+    await this.#durable()
+  }
+
+  /** Persist a read-only reconciliation result tied to its pre-write checkpoint. */
+  async workspaceReconciliation(record: WorkspaceReconciliationRecord): Promise<void> {
+    const reconciliation = copyWorkspaceReconciliation(record)
+    this.#session.append('harness/workspace-reconciliation', {
+      workflowId: this.#workflowId,
+      ...reconciliation,
+    })
+    await this.#durable()
   }
 
   /**
@@ -763,6 +851,176 @@ function credentialShaped(value: string): boolean {
   return CREDENTIAL_PATTERNS.some(pattern => pattern.test(value))
 }
 
+/** Rebuild only declared policy fields from a journal value. */
+function copyRecoveryPolicy(value: unknown): RecoveryPolicyRecord {
+  const record = value as Record<string, unknown> | null
+  const deadlines = record?.attemptDeadlineMsByRole as Record<string, unknown> | null
+  if (record === null || typeof record !== 'object' || Array.isArray(record)
+    || typeof record.version !== 'string' || record.version.length < 1 || record.version.length > 64
+    || typeof record.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(record.sha256)
+    || deadlines === null || typeof deadlines !== 'object' || Array.isArray(deadlines)
+    || Object.keys(deadlines).length !== ROLES.length
+    || ROLES.some(role => !isPositiveSafeInteger(deadlines[role]))) {
+    throw new JournalError('invalid-record', 'recovery policy is missing bounded roles, values, or identity')
+  }
+  const counts = [
+    'maxSameExecutorRetriesPerStage', 'maxReroutesPerStage', 'maxReprovisionsPerStage',
+    'maxReconciliationsPerStage', 'maxRecoveryTransitionsPerWorkflow',
+  ] as const
+  if (counts.some(key => !isNonnegativeSafeInteger(record[key]))) {
+    throw new JournalError('invalid-record', 'recovery policy has an invalid count')
+  }
+  const durations = ['recoveryDeadlineMs', 'backoffInitialMs', 'backoffMaxMs', 'quiescenceDeadlineMs'] as const
+  if (durations.some(key => !isPositiveSafeInteger(record[key]))) {
+    throw new JournalError('invalid-record', 'recovery policy has an invalid duration')
+  }
+  if (typeof record.backoffMultiplier !== 'number' || !Number.isFinite(record.backoffMultiplier) || record.backoffMultiplier < 1) {
+    throw new JournalError('invalid-record', 'recovery policy has an invalid backoff multiplier')
+  }
+  return Object.freeze({
+    version: record.version,
+    attemptDeadlineMsByRole: Object.freeze(Object.fromEntries(ROLES.map(role => [role, deadlines[role]])) as Record<string, number>),
+    maxSameExecutorRetriesPerStage: record.maxSameExecutorRetriesPerStage as number,
+    maxReroutesPerStage: record.maxReroutesPerStage as number,
+    maxReprovisionsPerStage: record.maxReprovisionsPerStage as number,
+    maxReconciliationsPerStage: record.maxReconciliationsPerStage as number,
+    maxRecoveryTransitionsPerWorkflow: record.maxRecoveryTransitionsPerWorkflow as number,
+    recoveryDeadlineMs: record.recoveryDeadlineMs as number,
+    backoffInitialMs: record.backoffInitialMs as number,
+    backoffMultiplier: record.backoffMultiplier,
+    backoffMaxMs: record.backoffMaxMs as number,
+    quiescenceDeadlineMs: record.quiescenceDeadlineMs as number,
+    sha256: record.sha256,
+  })
+}
+
+function copyWorkspaceCheckpoint(value: WorkspaceCheckpointRecord): WorkspaceCheckpointRecord {
+  const entries = [...value.entries].map(entry => ({
+    path: entry.path, surface: entry.surface, fingerprint: entry.fingerprint,
+  })).sort((left, right) => left.path.localeCompare(right.path) || left.surface.localeCompare(right.surface))
+  if (!isJournalIdentifier(value.checkpointId) || !isJournalIdentifier(value.stageId)
+    || !isJournalIdentifier(value.attemptId) || !/^[a-f0-9]{40}$/.test(value.revision)
+    || !/^[a-f0-9]{64}$/.test(value.sha256) || !isNonnegativeSafeInteger(value.capturedAtMs)
+    || typeof value.observable !== 'boolean' || entries.length > 10_000) {
+    throw new JournalError('invalid-record', 'workspace checkpoint has invalid bounded identity or metadata')
+  }
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    if (typeof entry.path !== 'string' || entry.path.length === 0 || entry.path.length > 512
+      || entry.path.startsWith('/') || entry.path.includes('\\')
+      || entry.path.split('/').some(part => part === '' || part === '.' || part === '..')
+      || !['index', 'worktree', 'untracked'].includes(entry.surface)
+      || seen.has(`${entry.surface}:${entry.path}`) || !/^[a-f0-9]{64}$/.test(entry.fingerprint)) {
+      throw new JournalError('invalid-record', 'workspace checkpoint contains an invalid path fingerprint')
+    }
+    seen.add(`${entry.surface}:${entry.path}`)
+  }
+  const canonical = JSON.stringify({ revision: value.revision, entries })
+  const digest = createHash('sha256').update(canonical, 'utf8').digest('hex')
+  if (digest !== value.sha256 || value.checkpointId !== `checkpoint:${digest.slice(0, 24)}`) {
+    throw new JournalError('invalid-record', 'workspace checkpoint content identity did not match its fingerprints')
+  }
+  return Object.freeze({
+    checkpointId: value.checkpointId,
+    stageId: value.stageId,
+    attemptId: value.attemptId,
+    revision: value.revision,
+    entries: Object.freeze(entries.map(entry => Object.freeze(entry))),
+    sha256: digest,
+    capturedAtMs: value.capturedAtMs,
+    observable: value.observable,
+  })
+}
+
+function copyWorkspaceReconciliation(value: WorkspaceReconciliationRecord): WorkspaceReconciliationRecord {
+  const changedPaths = [...value.changedPaths].sort()
+  const digest = createHash('sha256').update(JSON.stringify({
+    checkpointId: value.checkpointId,
+    stageId: value.stageId,
+    attemptId: value.attemptId,
+    status: value.status,
+    changedPaths,
+    writerQuiescent: value.writerQuiescent,
+    ...value.writerQuiescenceReasonCode === undefined
+      ? {} : { writerQuiescenceReasonCode: value.writerQuiescenceReasonCode },
+    ...(value.writerProof === undefined ? {} : { writerProof: value.writerProof }),
+    conclusive: value.conclusive,
+    recordedAtMs: value.recordedAtMs,
+  }), 'utf8').digest('hex')
+  if (!isJournalIdentifier(value.checkpointId) || !isJournalIdentifier(value.stageId)
+    || !isJournalIdentifier(value.attemptId) || value.reconciliationId !== `reconciliation:${digest.slice(0, 24)}`
+    || !['NO_MUTATION', 'IN_SCOPE_MUTATION', 'OUT_OF_SCOPE_MUTATION', 'PREEXISTING_USER_STATE_TOUCHED',
+      'REVISION_MOVED', 'SNAPSHOT_UNREADABLE', 'UNOBSERVABLE_MUTATION_SURFACE'].includes(value.status)
+    || !isNonnegativeSafeInteger(value.recordedAtMs) || typeof value.writerQuiescent !== 'boolean'
+    || (value.writerQuiescenceReasonCode !== undefined && ![
+      'ATTEMPT_UNKNOWN', 'WRITER_STILL_ACTIVE', 'CONTAINMENT_UNAVAILABLE', 'QUIESCENCE_DEADLINE_EXCEEDED',
+    ].includes(value.writerQuiescenceReasonCode))
+    || (value.writerQuiescent && (value.writerProof === undefined
+      || (value.writerProof.kind === 'owned-process-tree-exited'
+        ? !isPositiveSafeInteger(value.writerProof.processId)
+          || !isNonnegativeSafeInteger(value.writerProof.observedAtMs)
+        : !isJournalIdentifier(value.writerProof.evidenceId)
+          || !isNonnegativeSafeInteger(value.writerProof.observedAtMs))))
+    || typeof value.conclusive !== 'boolean' || (value.conclusive && !value.writerQuiescent)
+    || (value.conclusive && value.status !== 'NO_MUTATION' && value.status !== 'IN_SCOPE_MUTATION')
+    || changedPaths.length > 10_000 || changedPaths.some(path => typeof path !== 'string' || path.length === 0
+      || path.length > 512 || path.startsWith('/') || path.includes('\\')
+      || path.split('/').some(part => part === '' || part === '.' || part === '..'))) {
+    throw new JournalError('invalid-record', 'workspace reconciliation has invalid bounded evidence')
+  }
+  return Object.freeze({ ...value, changedPaths: Object.freeze(changedPaths),
+    ...value.writerProof === undefined ? {} : { writerProof: Object.freeze({ ...value.writerProof }) } })
+}
+
+/** Rebuild only the bounded variant fields permitted for one decision. */
+function copyRecoveryDecision(value: unknown): RecoveryDecision {
+  const record = value as Record<string, unknown> | null
+  if (record === null || typeof record !== 'object' || Array.isArray(record)
+    || typeof record.disposition !== 'string'
+    || !(RECOVERY_DISPOSITIONS as readonly string[]).includes(record.disposition)
+    || typeof record.reasonCode !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(record.reasonCode)) {
+    throw new JournalError('invalid-record', 'recovery decision has an unknown disposition or reason code')
+  }
+  const identifier = (key: string): string => {
+    const candidate = record[key]
+    if (!isJournalIdentifier(candidate)) throw new JournalError('invalid-record', 'recovery decision has an invalid identifier')
+    return candidate
+  }
+  const numeric = (key: string, positive = false): number => {
+    const candidate = record[key]
+    if (positive ? !isPositiveSafeInteger(candidate) : !isNonnegativeSafeInteger(candidate)) {
+      throw new JournalError('invalid-record', 'recovery decision has an invalid numeric field')
+    }
+    return candidate as number
+  }
+  const reasonCode = record.reasonCode
+  switch (record.disposition) {
+    case 'RETRY_SAME_EXECUTOR': return Object.freeze({ disposition: record.disposition, reasonCode, executor: identifier('executor'), attempt: numeric('attempt', true), retryAtMs: numeric('retryAtMs') })
+    case 'REROUTE_EXECUTOR': return Object.freeze({ disposition: record.disposition, reasonCode, executor: identifier('executor') })
+    case 'REPROVISION_WORKSPACE': return Object.freeze({ disposition: record.disposition, reasonCode })
+    case 'RECONCILE_WORKSPACE': return Object.freeze({ disposition: record.disposition, reasonCode, attemptId: identifier('attemptId'), checkpointId: identifier('checkpointId') })
+    case 'RECONCILE_WORLD_STATE': return Object.freeze({ disposition: record.disposition, reasonCode, operationId: identifier('operationId') })
+    case 'VERIFY_RECOVERED_MUTATION': return Object.freeze({ disposition: record.disposition, reasonCode, sourceAttemptId: identifier('sourceAttemptId'), checkpointId: identifier('checkpointId'), reconciliationId: identifier('reconciliationId'), evidenceAnchorId: identifier('evidenceAnchorId'), verificationStageId: identifier('verificationStageId') })
+    case 'PAUSE_FOR_HUMAN': return Object.freeze({ disposition: record.disposition, reasonCode })
+    case 'TERMINAL_BLOCKED': return Object.freeze({ disposition: record.disposition, reasonCode })
+    case 'TERMINAL_INCONCLUSIVE': return Object.freeze({ disposition: record.disposition, reasonCode })
+    case 'TERMINAL_FAIL': return Object.freeze({ disposition: record.disposition, reasonCode })
+    default: throw new JournalError('invalid-record', 'recovery decision disposition is unsupported')
+  }
+}
+
+function isJournalIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value)
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function isNonnegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
 /**
  * Refuse anything that is not a certification a certifier could have published.
  * @param record - The record as the caller offered it.
@@ -815,6 +1073,11 @@ function harnessPayload(event: SessionEvent): HarnessPayload | undefined {
 
 /** Mutable accumulator behind {@link projectWorkflow}. */
 interface Projected {
+  hostRunId?: string
+  recoveryPolicy?: RecoveryPolicyRecord
+  recoveryDecisions: RecoveryDecisionRecord[]
+  workspaceCheckpoints: WorkspaceCheckpointRecord[]
+  workspaceReconciliations: WorkspaceReconciliationRecord[]
   objective?: WorkflowProjection['objective']
   conformance?: ConformanceStatusSummary
   changeImpact?: { planned?: ChangeImpactStatusSummary; actual?: ChangeImpactStatusSummary }
@@ -832,6 +1095,9 @@ interface Projected {
   ended: string[]
   capabilityStarted: string[]
   capabilityEnded: string[]
+  stageAttempts: Map<string, number>
+  activeStage?: Omit<NonNullable<WorkflowProjection['progress']>, 'lastEventAt'>
+  lastEventAt?: number
   end?: WorkflowProjection['end']
 }
 
@@ -839,7 +1105,9 @@ interface Projected {
 function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): void {
   switch (type) {
     case 'harness/workflow-start': {
-      const payload = data as unknown as { objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload']; specPath: string; specSha256: string; planPath: string; planSha256: string }
+      const payload = data as unknown as { hostRunId?: string; objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload']; specPath: string; specSha256: string; planPath: string; planSha256: string; recoveryPolicy?: RecoveryPolicyRecord }
+      if (payload.hostRunId !== undefined) state.hostRunId = payload.hostRunId
+      if (payload.recoveryPolicy !== undefined) state.recoveryPolicy = copyRecoveryPolicy(payload.recoveryPolicy)
       state.objective = {
         id: payload.objectiveId,
         cwd: payload.cwd,
@@ -851,6 +1119,40 @@ function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): v
           spec: { path: payload.specPath, sha256: payload.specSha256 },
           plan: { path: payload.planPath, sha256: payload.planSha256 },
         },
+      }
+      return
+    }
+    case 'harness/workspace-checkpoint': {
+      state.workspaceCheckpoints.push(copyWorkspaceCheckpoint(data as unknown as WorkspaceCheckpointRecord))
+      return
+    }
+    case 'harness/workspace-reconciliation': {
+      state.workspaceReconciliations.push(copyWorkspaceReconciliation(data as unknown as WorkspaceReconciliationRecord))
+      return
+    }
+    case 'harness/recovery-decision': {
+      const payload = data as unknown as RecoveryDecisionRecord
+      const decision = copyRecoveryDecision(payload.decision)
+      if (!isJournalIdentifier(payload.stageId) || !isJournalIdentifier(payload.attemptId)
+        || !Number.isSafeInteger(payload.recordedAtMs) || payload.recordedAtMs < 0
+        || !isNonnegativeSafeInteger(payload.recoveryDeadlineAtMs)
+        || Object.values(payload.counters).some(value => !isNonnegativeSafeInteger(value))) {
+        throw new JournalError('invalid-record', 'recovery decision record has invalid bounded identity, time, or counters')
+      }
+      state.recoveryDecisions.push({
+        stageId: payload.stageId,
+        attemptId: payload.attemptId,
+        decision,
+        recordedAtMs: payload.recordedAtMs,
+        recoveryDeadlineAtMs: payload.recoveryDeadlineAtMs,
+        counters: Object.freeze({ ...payload.counters }),
+      })
+      if (state.activeStage?.currentStageId === payload.stageId) {
+        state.activeStage = {
+          ...state.activeStage,
+          recoveryDisposition: decision.disposition,
+          reasonCode: decision.reasonCode,
+        }
       }
       return
     }
@@ -1043,8 +1345,14 @@ function unmatched(starts: readonly string[], ends: readonly string[]): string[]
  * @returns The reconstructed state, with in-flight stages named.
  * @throws {JournalError} when the log holds a `harness/*` type this build does not know.
  */
-export function projectWorkflow(events: readonly SessionEvent[], workflowId: string): WorkflowProjection {
+export function projectWorkflow(
+  events: readonly SessionEvent[],
+  workflowId: string,
+): WorkflowProjection {
   const state: Projected = {
+    recoveryDecisions: [],
+    workspaceCheckpoints: [],
+    workspaceReconciliations: [],
     routes: [],
     findings: [],
     constraints: [],
@@ -1059,17 +1367,76 @@ export function projectWorkflow(events: readonly SessionEvent[], workflowId: str
     ended: [],
     capabilityStarted: [],
     capabilityEnded: [],
+    stageAttempts: new Map(),
   }
   for (const event of events) {
     const data = harnessPayload(event)
     if (data === undefined || data.workflowId !== workflowId) continue
+    state.lastEventAt = event.time
+    if (event.type === 'harness/executor-start') {
+      const payload = data as unknown as { stageId: string; role: Role; executor: string }
+      const attempt = (state.stageAttempts.get(payload.stageId) ?? 0) + 1
+      const lastRecovery = state.recoveryDecisions.filter(record => record.stageId === payload.stageId).at(-1)
+      state.stageAttempts.set(payload.stageId, attempt)
+      state.activeStage = {
+        currentStageId: payload.stageId,
+        currentRole: payload.role,
+        executor: payload.executor,
+        attempt,
+        attemptId: `${workflowId}:${payload.stageId}:${String(attempt)}`,
+        executorRunId: `${state.hostRunId ?? workflowId}:${String(event.seq)}`,
+        ...(lastRecovery === undefined ? {} : {
+          recoveryDisposition: lastRecovery.decision.disposition,
+          reasonCode: lastRecovery.decision.reasonCode,
+        }),
+      }
+    } else if (event.type === 'harness/executor-end') {
+      const payload = data as unknown as { stageId: string; outcome: ExecutorOutcome; failureCode?: string }
+      if (state.activeStage?.currentStageId === payload.stageId) {
+        if (payload.outcome === 'completed') delete state.activeStage
+        else state.activeStage = { ...state.activeStage, failureCode: payload.failureCode ?? payload.outcome }
+      }
+    } else if (event.type === 'harness/stage-constraint') {
+      const payload = data as unknown as { stageId: string; constraint: { class: StageConstraint['class'] } }
+      if (state.activeStage?.currentStageId === payload.stageId) {
+        state.activeStage = { ...state.activeStage, constraintClass: payload.constraint.class }
+      }
+    } else if (event.type === 'harness/recovery-decision') {
+      const payload = data as unknown as RecoveryDecisionRecord
+      const route = state.routes.filter(record => record.stageId === payload.stageId).at(-1)
+      const current = state.activeStage?.currentStageId === payload.stageId ? state.activeStage : undefined
+      if (current !== undefined || route !== undefined) {
+        const decision = copyRecoveryDecision(payload.decision)
+        state.activeStage = {
+          currentStageId: payload.stageId,
+          currentRole: current?.currentRole ?? route?.role as Role,
+          executor: current?.executor ?? route?.executor as string,
+          attempt: current?.attempt ?? state.stageAttempts.get(payload.stageId) ?? 1,
+          attemptId: payload.attemptId,
+          ...(current?.executorRunId === undefined ? {} : { executorRunId: current.executorRunId }),
+          ...(current?.failureCode === undefined ? {} : { failureCode: current.failureCode }),
+          ...(current?.constraintClass === undefined ? {} : { constraintClass: current.constraintClass }),
+          recoveryDisposition: decision.disposition,
+          reasonCode: decision.reasonCode,
+        }
+      }
+    }
     fold(state, event.type as HarnessEventType, data)
   }
   const openStages = unmatched(state.started, state.ended)
   const openCapabilities = unmatched(state.capabilityStarted, state.capabilityEnded)
   const latestCertification = state.certifications.at(-1)
+  const progress = state.activeStage === undefined || state.lastEventAt === undefined
+    ? undefined
+    : Object.freeze({ ...state.activeStage, lastEventAt: state.lastEventAt })
   return Object.freeze({
     workflowId,
+    ...state.hostRunId === undefined ? {} : { hostRunId: state.hostRunId },
+    ...state.recoveryPolicy === undefined ? {} : { recoveryPolicy: state.recoveryPolicy },
+    recoveryDecisions: Object.freeze(state.recoveryDecisions),
+    workspaceCheckpoints: Object.freeze(state.workspaceCheckpoints),
+    workspaceReconciliations: Object.freeze(state.workspaceReconciliations),
+    ...(progress === undefined ? {} : { progress }),
     routes: Object.freeze(state.routes),
     findings: Object.freeze(state.findings),
     constraints: Object.freeze(state.constraints),

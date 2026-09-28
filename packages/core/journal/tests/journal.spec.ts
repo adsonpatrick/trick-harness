@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
 
@@ -75,10 +76,13 @@ describe('the harness event vocabulary', () => {
   it('declares the durable lifecycle events in order', () => {
     expect([...HARNESS_EVENT_TYPES]).toStrictEqual([
       'harness/workflow-start',
+      'harness/workspace-checkpoint',
+      'harness/workspace-reconciliation',
       'harness/route-decision',
       'harness/route-fallback',
       'harness/executor-start',
       'harness/executor-end',
+      'harness/recovery-decision',
       'harness/capability-start',
       'harness/capability-end',
       'harness/finding',
@@ -123,6 +127,150 @@ describe('writing and replaying one workflow', () => {
     journal = new WorkflowJournal(session, 'wf-1', flush)
   })
 
+  it('reconstructs the frozen recovery policy and hash from workflow admission', () => {
+    journal.start(objective)
+    const start = session.events[0]
+    const policy = {
+      version: 'fixture-recovery-v1',
+      attemptDeadlineMsByRole: {
+        refine: 1_000, plan: 1_000, implement: 1_000, debug: 1_000, repair: 1_000,
+        verify: 1_000, review: 1_000, security: 1_000, qa: 1_000, conformance: 1_000, delivery: 1_000,
+      },
+      maxSameExecutorRetriesPerStage: 2,
+      maxReroutesPerStage: 1,
+      maxReprovisionsPerStage: 1,
+      maxReconciliationsPerStage: 2,
+      maxRecoveryTransitionsPerWorkflow: 12,
+      recoveryDeadlineMs: 10_000,
+      backoffInitialMs: 100,
+      backoffMultiplier: 2,
+      backoffMaxMs: 500,
+      quiescenceDeadlineMs: 1_000,
+      sha256: 'a'.repeat(64),
+      secret: 'must-not-survive',
+    }
+    const event = { ...start, data: { ...start?.data, recoveryPolicy: policy } } as unknown as SessionEvent
+
+    expect(projectWorkflow([event], 'wf-1').recoveryPolicy).toEqual({
+      ...policy,
+      secret: undefined,
+    })
+  })
+
+  it('reconstructs a bounded recovery decision, deadline and consumed counters', () => {
+    const recoveryEvents = [
+      {
+        type: 'harness/executor-start', seq: 1, time: 900,
+        data: { workflowId: 'wf-1', stageId: 'verify-1', role: 'verify', executor: 'codex', resolvedModel: 'm', permissionMode: 'read-only' },
+      },
+      {
+        type: 'harness/executor-end', seq: 2, time: 950,
+        data: { workflowId: 'wf-1', stageId: 'verify-1', executor: 'codex', outcome: 'failed', failureCode: 'transport', durationMs: 50 },
+      },
+      {
+        type: 'harness/recovery-decision', seq: 3, time: 1_000,
+        data: {
+          workflowId: 'wf-1',
+          stageId: 'verify-1',
+          attemptId: 'wf-1:verify-1:1',
+          decision: {
+            disposition: 'RETRY_SAME_EXECUTOR',
+            reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+            executor: 'codex',
+            attempt: 2,
+            retryAtMs: 1_100,
+            privateOutput: 'must-not-survive',
+          },
+          recordedAtMs: 1_000,
+          recoveryDeadlineAtMs: 10_000,
+          counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
+          privateOutput: 'must-not-survive',
+        },
+      },
+    ] as unknown as SessionEvent[]
+
+    const projection = projectWorkflow(recoveryEvents, 'wf-1')
+    expect(projection.recoveryDecisions).toEqual([{
+      stageId: 'verify-1',
+      attemptId: 'wf-1:verify-1:1',
+      decision: {
+        disposition: 'RETRY_SAME_EXECUTOR',
+        reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+        executor: 'codex',
+        attempt: 2,
+        retryAtMs: 1_100,
+      },
+      recordedAtMs: 1_000,
+      recoveryDeadlineAtMs: 10_000,
+      counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
+    }])
+    expect(projection.progress).toMatchObject({
+      currentStageId: 'verify-1',
+      recoveryDisposition: 'RETRY_SAME_EXECUTOR',
+      reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+    })
+  })
+
+  it('replays recovered-mutation verification as a typed recovery decision', () => {
+    const event = {
+      type: 'harness/recovery-decision',
+      seq: 1,
+      time: 2_000,
+      data: {
+        workflowId: 'wf-1',
+        stageId: 'implement-1',
+        attemptId: 'wf-1:implement-1:1',
+        decision: {
+          disposition: 'VERIFY_RECOVERED_MUTATION',
+          reasonCode: 'RECONCILED_MUTATION_REQUIRES_FRESH_VERIFICATION',
+          sourceAttemptId: 'wf-1:implement-1:1',
+          checkpointId: 'checkpoint-1',
+          reconciliationId: 'reconciliation-1',
+          evidenceAnchorId: 'workspace-snapshot-1',
+          verificationStageId: 'verify-final-1',
+        },
+        recordedAtMs: 2_000,
+        recoveryDeadlineAtMs: 10_000,
+        counters: { sameExecutorRetries: 0, reroutes: 0, reprovisions: 0, reconciliations: 1, transitions: 1 },
+      },
+    } as unknown as SessionEvent
+
+    expect(projectWorkflow([event], 'wf-1').recoveryDecisions[0]?.decision).toEqual({
+      disposition: 'VERIFY_RECOVERED_MUTATION',
+      reasonCode: 'RECONCILED_MUTATION_REQUIRES_FRESH_VERIFICATION',
+      sourceAttemptId: 'wf-1:implement-1:1',
+      checkpointId: 'checkpoint-1',
+      reconciliationId: 'reconciliation-1',
+      evidenceAnchorId: 'workspace-snapshot-1',
+      verificationStageId: 'verify-final-1',
+    })
+  })
+
+  it('durably records a bounded pre-write workspace checkpoint', async () => {
+    const entries = [{ path: 'src/a.ts', surface: 'worktree' as const, fingerprint: 'a'.repeat(64) }]
+    const sha256 = createHash('sha256').update(JSON.stringify({ revision: 'b'.repeat(40), entries })).digest('hex')
+    await journal.workspaceCheckpoint({
+      checkpointId: `checkpoint:${sha256.slice(0, 24)}`,
+      stageId: 'implement-1',
+      attemptId: 'wf-1:implement-1:1',
+      revision: 'b'.repeat(40),
+      entries,
+      sha256,
+      capturedAtMs: 1_000,
+      observable: true,
+    })
+
+    const projection = replay()
+    expect(session.events.at(-1)?.type).toBe('harness/workspace-checkpoint')
+    expect(projection.workspaceCheckpoints[0]).toMatchObject({
+      checkpointId: `checkpoint:${sha256.slice(0, 24)}`,
+      stageId: 'implement-1',
+      attemptId: 'wf-1:implement-1:1',
+      sha256,
+      observable: true,
+    })
+  })
+
   /** Project the session as a fresh process would: from the log alone. */
   function replay(workflowId = 'wf-1'): ReturnType<typeof projectWorkflow> {
     return projectWorkflow(session.events, workflowId)
@@ -130,6 +278,34 @@ describe('writing and replaying one workflow', () => {
 
   it('serializes every event type without the append path rejecting a payload', async () => {
     journal.start(objective)
+    const checkpointEntries = [{ path: 'src/a.ts', surface: 'worktree' as const, fingerprint: 'a'.repeat(64) }]
+    const checkpointSha = createHash('sha256').update(JSON.stringify({ revision: 'b'.repeat(40), entries: checkpointEntries })).digest('hex')
+    await journal.workspaceCheckpoint({
+      checkpointId: `checkpoint:${checkpointSha.slice(0, 24)}`,
+      stageId: 'impl-1',
+      attemptId: 'wf-1:impl-1:1',
+      revision: 'b'.repeat(40),
+      entries: checkpointEntries,
+      sha256: checkpointSha,
+      capturedAtMs: 1_000,
+      observable: true,
+    })
+    const reconciliationPayload = {
+      checkpointId: `checkpoint:${checkpointSha.slice(0, 24)}`,
+      stageId: 'impl-1',
+      attemptId: 'wf-1:impl-1:1',
+      status: 'NO_MUTATION' as const,
+      changedPaths: [] as string[],
+      writerQuiescent: true,
+      writerProof: { kind: 'owned-process-tree-exited' as const, processId: 123, observedAtMs: 1_000 },
+      conclusive: true,
+      recordedAtMs: 1_000,
+    }
+    const reconciliationSha = createHash('sha256').update(JSON.stringify(reconciliationPayload)).digest('hex')
+    await journal.workspaceReconciliation({
+      reconciliationId: `reconciliation:${reconciliationSha.slice(0, 24)}`,
+      ...reconciliationPayload,
+    })
     journal.routeDecision({ stageId: 'impl-1', role: 'implement', decision })
     await journal.routeFallback(
       { stageId: 'impl-1', role: 'implement', decision: { ...decision, fallbackFrom: 'codex' } },
@@ -138,6 +314,20 @@ describe('writing and replaying one workflow', () => {
     )
     journal.executorStart({ stageId: 'impl-1', role: 'implement', decision })
     journal.executorEnd('impl-1', 'opencode', 'completed', 1_200)
+    await journal.recoveryDecision({
+      stageId: 'verify-1',
+      attemptId: 'wf-1:verify-1:1',
+      decision: {
+        disposition: 'RETRY_SAME_EXECUTOR',
+        reasonCode: 'EXTERNAL_SERVICE_UNAVAILABLE',
+        executor: 'codex',
+        attempt: 2,
+        retryAtMs: 1_100,
+      },
+      recordedAtMs: 1_000,
+      recoveryDeadlineAtMs: 10_000,
+      counters: { sameExecutorRetries: 1, reroutes: 0, reprovisions: 0, reconciliations: 0, transitions: 1 },
+    })
     await journal.beginCapability('deliver-1', 'github-delivery', true)
     await journal.endCapability('deliver-1', 'github-delivery', 'completed', 900)
     journal.finding('review-1', finding)
@@ -252,6 +442,35 @@ describe('writing and replaying one workflow', () => {
     expect(state.end).toBeUndefined()
   })
 
+  it('reconstructs bounded live progress and constraint class from durable events', () => {
+    journal.start(objective)
+    journal.routeDecision({ stageId: 'verify-1', role: 'verify', decision })
+    journal.executorStart({ stageId: 'verify-1', role: 'verify', decision })
+    journal.stageConstraint('verify-1', {
+      id: 'constraint-1',
+      class: 'EXTERNAL_RUNTIME_UNREADABLE',
+      raisedBy: 'verify',
+      summary: 'raw-provider-output-marker',
+      evidence,
+    })
+
+    const first = replay().progress
+    const afterRestart = projectWorkflow([...session.events], 'wf-1').progress
+    expect(first).toMatchObject({
+      currentStageId: 'verify-1',
+      currentRole: 'verify',
+      executor: 'opencode',
+      attempt: 1,
+      attemptId: 'wf-1:verify-1:1',
+      executorRunId: `s-1:${String(session.events.find(event => event.type === 'harness/executor-start')?.seq)}`,
+      constraintClass: 'EXTERNAL_RUNTIME_UNREADABLE',
+    })
+    expect(replay().hostRunId).toBe('s-1')
+    expect(first?.lastEventAt).toBe(session.events.at(-1)?.time)
+    expect(afterRestart).toEqual(first)
+    expect(JSON.stringify(first)).not.toContain('raw-provider-output-marker')
+  })
+
   it('projects the last circuit state each executor was left in', () => {
     journal.circuitBreaker('codex', 'AVAILABLE', 'DEGRADED', 'failure:usage-limit-exceeded')
     journal.circuitBreaker('codex', 'DEGRADED', 'AVAILABLE', 'manual-refresh')
@@ -282,6 +501,9 @@ describe('writing and replaying one workflow', () => {
       verdicts: [],
       deliveries: [],
       certifications: [],
+      recoveryDecisions: [],
+      workspaceCheckpoints: [],
+      workspaceReconciliations: [],
       blockers: [],
       circuits: {},
       openStages: [],

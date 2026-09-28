@@ -441,7 +441,7 @@ Source: [`packages/goal/goal/src/domain.ts:66`](../packages/goal/goal/src/domain
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:217`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:295`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscapability-end--log-only"></a>
 
@@ -459,7 +459,7 @@ Source: [`packages/core/journal/src/types.ts:217`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:158`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:236`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscapability-start--log-only"></a>
 
@@ -483,7 +483,7 @@ Source: [`packages/core/journal/src/types.ts:158`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:151`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:229`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscertification--log-only"></a>
 
@@ -511,7 +511,7 @@ Source: [`packages/core/journal/src/types.ts:151`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:207`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:285`](../packages/core/journal/src/types.ts)
 
 <a id="harnesschange-impact--log-only"></a>
 
@@ -533,7 +533,7 @@ Source: [`packages/core/journal/src/types.ts:207`](../packages/core/journal/src/
 'harness/change-impact': { workflowId: string } & ChangeImpactStatusSummary
 ```
 
-Source: [`packages/core/journal/src/types.ts:88`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:166`](../packages/core/journal/src/types.ts)
 
 <a id="harnesscircuit-breaker--log-only"></a>
 
@@ -550,7 +550,7 @@ Source: [`packages/core/journal/src/types.ts:88`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:225`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:303`](../packages/core/journal/src/types.ts)
 
 <a id="harnessconformance--log-only"></a>
 
@@ -571,7 +571,7 @@ Source: [`packages/core/journal/src/types.ts:225`](../packages/core/journal/src/
 'harness/conformance': { workflowId: string } & ConformanceStatusSummary
 ```
 
-Source: [`packages/core/journal/src/types.ts:75`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:153`](../packages/core/journal/src/types.ts)
 
 <a id="harnessdelivery--log-only"></a>
 
@@ -593,7 +593,7 @@ Source: [`packages/core/journal/src/types.ts:75`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:189`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:267`](../packages/core/journal/src/types.ts)
 
 <a id="harnessdiagnosis--log-only"></a>
 
@@ -604,7 +604,7 @@ Source: [`packages/core/journal/src/types.ts:189`](../packages/core/journal/src/
 'harness/diagnosis': { workflowId: string; stageId: string; diagnosis: DiagnosisContract }
 ```
 
-Source: [`packages/core/journal/src/types.ts:173`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:251`](../packages/core/journal/src/types.ts)
 
 <a id="harnessexecutor-end--log-only"></a>
 
@@ -623,7 +623,7 @@ Source: [`packages/core/journal/src/types.ts:173`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:133`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:211`](../packages/core/journal/src/types.ts)
 
 <a id="harnessexecutor-start--log-only"></a>
 
@@ -641,7 +641,7 @@ Source: [`packages/core/journal/src/types.ts:133`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:124`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:202`](../packages/core/journal/src/types.ts)
 
 <a id="harnessfinding--log-only"></a>
 
@@ -652,7 +652,18 @@ Source: [`packages/core/journal/src/types.ts:124`](../packages/core/journal/src/
 'harness/finding': { workflowId: string; stageId: string; finding: Finding }
 ```
 
-Source: [`packages/core/journal/src/types.ts:167`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:245`](../packages/core/journal/src/types.ts)
+
+<a id="harnessrecovery-decision--log-only"></a>
+
+#### `harness/recovery-decision` — log-only
+
+```ts persistence-catalog
+/** One deterministic recovery choice, flushed before its action may run. */
+'harness/recovery-decision': { workflowId: string } & RecoveryDecisionRecord
+```
+
+Source: [`packages/core/journal/src/types.ts:137`](../packages/core/journal/src/types.ts)
 
 <a id="harnessrepair-authorization--log-only"></a>
 
@@ -663,7 +674,7 @@ Source: [`packages/core/journal/src/types.ts:167`](../packages/core/journal/src/
 'harness/repair-authorization': { workflowId: string; stageId: string; findingId: string; scopeSha256: string; allowedPathCount: number; allowedSurfaces: string[]; reasonCodes: string[] }
 ```
 
-Source: [`packages/core/journal/src/types.ts:171`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:249`](../packages/core/journal/src/types.ts)
 
 <a id="harnessroute-decision--log-only"></a>
 
@@ -689,7 +700,7 @@ Source: [`packages/core/journal/src/types.ts:171`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:94`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:172`](../packages/core/journal/src/types.ts)
 
 <a id="harnessroute-fallback--log-only"></a>
 
@@ -715,7 +726,7 @@ Source: [`packages/core/journal/src/types.ts:94`](../packages/core/journal/src/t
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:112`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:190`](../packages/core/journal/src/types.ts)
 
 <a id="harnessstage-constraint--log-only"></a>
 
@@ -726,7 +737,7 @@ Source: [`packages/core/journal/src/types.ts:112`](../packages/core/journal/src/
 'harness/stage-constraint': { workflowId: string; stageId: string; constraint: StageConstraint }
 ```
 
-Source: [`packages/core/journal/src/types.ts:169`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:247`](../packages/core/journal/src/types.ts)
 
 <a id="harnessverdict--log-only"></a>
 
@@ -745,7 +756,7 @@ Source: [`packages/core/journal/src/types.ts:169`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:175`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:253`](../packages/core/journal/src/types.ts)
 
 <a id="harnessworkflow-end--log-only"></a>
 
@@ -761,7 +772,7 @@ Source: [`packages/core/journal/src/types.ts:175`](../packages/core/journal/src/
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:233`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:311`](../packages/core/journal/src/types.ts)
 
 <a id="harnessworkflow-start--log-only"></a>
 
@@ -771,6 +782,8 @@ Source: [`packages/core/journal/src/types.ts:233`](../packages/core/journal/src/
 /** One workflow accepted, with the objective it was accepted for. */
 'harness/workflow-start': {
   workflowId: string
+  /** Durable identity of the host session that admitted this workflow. */
+  hostRunId?: string
   objectiveId: string
   profileId: string
   cwd: string
@@ -785,10 +798,34 @@ Source: [`packages/core/journal/src/types.ts:233`](../packages/core/journal/src/
   planPath: string
   /** SHA-256 of that plan. */
   planSha256: string
+  /** Full finite policy and hash selected before workflow dispatch. */
+  recoveryPolicy?: RecoveryPolicyRecord
 }
 ```
 
-Source: [`packages/core/journal/src/types.ts:47`](../packages/core/journal/src/types.ts)
+Source: [`packages/core/journal/src/types.ts:115`](../packages/core/journal/src/types.ts)
+
+<a id="harnessworkspace-checkpoint--log-only"></a>
+
+#### `harness/workspace-checkpoint` — log-only
+
+```ts persistence-catalog
+/** A durable pre-write snapshot identity and path fingerprints. */
+'harness/workspace-checkpoint': { workflowId: string } & WorkspaceCheckpointRecord
+```
+
+Source: [`packages/core/journal/src/types.ts:139`](../packages/core/journal/src/types.ts)
+
+<a id="harnessworkspace-reconciliation--log-only"></a>
+
+#### `harness/workspace-reconciliation` — log-only
+
+```ts persistence-catalog
+/** A read-only reconciliation observation tied to one durable checkpoint. */
+'harness/workspace-reconciliation': { workflowId: string } & WorkspaceReconciliationRecord
+```
+
+Source: [`packages/core/journal/src/types.ts:141`](../packages/core/journal/src/types.ts)
 
 ### `hook/*`
 

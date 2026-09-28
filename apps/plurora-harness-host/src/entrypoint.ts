@@ -15,6 +15,7 @@ import { Context } from '@deepseek-ai/cordis'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { createSdkAdapter } from '@trick-harness/provider-opencode'
 import type { OpencodeAdapter, OpencodeSdkOptions } from '@trick-harness/provider-opencode'
+import { pluroraProfile } from '../../../profiles/plurora/profile.ts'
 import { nativeCatalogueReader, type NativeCatalogueOptions } from './catalogue.ts'
 import { DEFAULT_DISPOSE_GRACE_MS, startPluroraHost, validatePluroraDeployment, type PluroraHost, type PluroraHostOptions } from './main.ts'
 import type { ModelCatalogReader } from './model-registry.ts'
@@ -317,7 +318,13 @@ export async function runPluroraHost(invocation: PluroraHostInvocation, runtime:
       signal: controller.signal,
       catalogue,
       spawn: subprocess.spawn,
-      opencode: runtime.createOpencode({ startupTimeoutMs }),
+      opencode: runtime.createOpencode({
+        startupTimeoutMs,
+        spawn: subprocess.spawn,
+        cwd: invocation.projectRoot,
+        disposeGraceMs: DEFAULT_DISPOSE_GRACE_MS,
+        quiescenceDeadlineMs: pluroraProfile.workflowPolicy.recoveryPolicy.quiescenceDeadlineMs,
+      }),
       ...(invocation.sessionId === undefined ? {} : { sessionId: invocation.sessionId }),
     })
     // The host only resolves once the control server is listening, so a ready

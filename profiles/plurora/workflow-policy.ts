@@ -19,6 +19,32 @@ import type { IndependencePolicyDefinition, WorkflowPolicyDefinition } from '@tr
 export const workflowPolicy: WorkflowPolicyDefinition = {
   maxRepairCycles: 3,
   maxExecutorStarts: 24,
+  recoveryPolicy: {
+    version: 'plurora-recovery-v1',
+    attemptDeadlineMsByRole: {
+      refine: 1_200_000,
+      plan: 1_200_000,
+      implement: 3_600_000,
+      debug: 1_800_000,
+      repair: 2_700_000,
+      verify: 1_800_000,
+      review: 1_800_000,
+      security: 2_100_000,
+      qa: 2_700_000,
+      conformance: 1_800_000,
+      delivery: 900_000,
+    },
+    maxSameExecutorRetriesPerStage: 2,
+    maxReroutesPerStage: 1,
+    maxReprovisionsPerStage: 1,
+    maxReconciliationsPerStage: 2,
+    maxRecoveryTransitionsPerWorkflow: 12,
+    recoveryDeadlineMs: 2_700_000,
+    backoffInitialMs: 5_000,
+    backoffMultiplier: 2,
+    backoffMaxMs: 20_000,
+    quiescenceDeadlineMs: 120_000,
+  },
 }
 
 /**

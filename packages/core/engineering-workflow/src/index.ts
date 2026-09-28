@@ -30,9 +30,15 @@ import type {
   WorkflowObjective,
   WorkflowVerdict,
   WriteVolume,
+  ExecutorFailureCategory,
 } from '@trick-harness/contracts'
 import { dispatchableRoute } from '@trick-harness/executor'
-import type { ExecutorResult, HarnessExecutorRuntime, ReasoningEffort } from '@trick-harness/executor'
+import type {
+  ExecutorResult,
+  ExecutorWriterQuiescenceProof,
+  HarnessExecutorRuntime,
+  ReasoningEffort,
+} from '@trick-harness/executor'
 import type { WorkflowJournal, WorkflowProjection } from '@trick-harness/journal'
 import type { BlockerKind, WorkflowEndState } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
@@ -49,6 +55,8 @@ import {
 } from '@trick-harness/routing'
 import type { ExecutorCircuit, RoutingPolicy } from '@trick-harness/routing'
 import type { RouteDecision, RoutingContext, StageRouteOverride } from '@trick-harness/contracts'
+import { decideRecovery, freezeRecoveryBudgetPolicy } from './recovery-policy.ts'
+import type { RecoveryAttemptCounters } from '@trick-harness/journal'
 
 export type * from './types.ts'
 // The one value in `types.ts`: the certification vocabulary is checked
@@ -87,8 +95,20 @@ import {
   summarizeConformance,
   validateConformanceCoverage,
 } from './conformance.ts'
-import { changedPathsBetween, WorkspaceStateError } from './workspace-state.ts'
-import type { ApprovedArtifactTexts, WorkspaceSnapshot } from './types.ts'
+import {
+  changedPathsBetween,
+  createWorkspaceCheckpoint,
+  createWorkspaceReconciliationRecord,
+  reconcileWorkspaceMutation,
+  WorkspaceStateError,
+} from './workspace-state.ts'
+import type {
+  ApprovedArtifactTexts,
+  WorkspaceSnapshot,
+  WorkspaceStateReader,
+  WriterQuiescencePort,
+  WriterQuiescenceResult,
+} from './types.ts'
 import { CERTIFYING_ROLES, reconcileVerdict, triage } from './triage.ts'
 
 import type { CertificationStatusSummary } from '@trick-harness/contracts'
@@ -285,15 +305,6 @@ interface AvailabilityState {
    * would spend the start budget confirming something already known.
    */
   readonly disabled: Set<string>
-  /**
-   * Executor starts this run spent on rerouting, beyond each stage's first.
-   *
-   * Mutable, and read by the loop that owns the budget rather than returned
-   * through the dispatch result, because a reroute that ends in a routing
-   * refusal never produces a result to carry it: the starts were still spent,
-   * and a budget that forgot them would let an outage loop for free.
-   */
-  rerouteStarts: number
 }
 
 /**
@@ -332,7 +343,49 @@ interface PendingCertification {
 
 /** Fresh availability state for one run. */
 function availabilityState(): AvailabilityState {
-  return { circuits: new Map(), disabled: new Set(), rerouteStarts: 0 }
+  return { circuits: new Map(), disabled: new Set() }
+}
+
+/** Wait until a persisted absolute retry time, or until the run is canceled. */
+function waitUntil(eligibleAtMs: number, signal: AbortSignal): Promise<void> {
+  const delay = Math.max(0, eligibleAtMs - Date.now())
+  if (signal.aborted || delay === 0) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, delay)
+    function done(): void {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    signal.addEventListener('abort', done, { once: true })
+  })
+}
+
+/** Bound a trusted quiescence check even if a host implementation rejects or never settles. */
+async function ensureWriterQuiescenceBy(
+  port: WriterQuiescencePort,
+  attemptId: string,
+  workspaceId: string,
+  deadlineAt: number,
+  nowMs: number,
+): Promise<WriterQuiescenceResult> {
+  if (!Number.isSafeInteger(deadlineAt) || deadlineAt < nowMs) {
+    return { status: 'UNPROVEN', reasonCode: 'QUIESCENCE_DEADLINE_EXCEEDED' }
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const check = Promise.resolve()
+    .then(() => port.ensureWriterQuiescence(attemptId, workspaceId, deadlineAt))
+    .catch((): WriterQuiescenceResult => ({ status: 'UNPROVEN', reasonCode: 'CONTAINMENT_UNAVAILABLE' }))
+  const deadline = new Promise<WriterQuiescenceResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({ status: 'UNPROVEN', reasonCode: 'QUIESCENCE_DEADLINE_EXCEEDED' })
+    }, Math.max(0, deadlineAt - nowMs))
+  })
+  try {
+    return await Promise.race([check, deadline])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 /** Everything the runtime needs, supplied once when the runner is built. */
@@ -341,6 +394,10 @@ export interface WorkflowRuntimeOptions {
   readonly policy: RoutingPolicy
   readonly executors: HarnessExecutorRuntime
   readonly journal: WorkflowJournal
+  /** Deployment-owned fallback reader for runs whose request does not override it. */
+  readonly workspaceState?: WorkspaceStateReader
+  /** Trusted host service that proves interrupted writers have lost write authority. */
+  readonly writerQuiescence?: WriterQuiescencePort
   /**
    * The deterministic capabilities this deployment composed, if any.
    *
@@ -364,6 +421,8 @@ export interface WorkflowRuntimeOptions {
   readonly degradedExecutors?: readonly string[]
   /** Injectable clock, so a stage's duration is measurable in a test. */
   readonly now?: () => number
+  /** Injectable bounded recovery delay, with the absolute eligible time. */
+  readonly waitUntil?: (eligibleAtMs: number, signal: AbortSignal) => Promise<void>
 }
 
 /** One stage's dispatch, after routing and before the executor is asked. */
@@ -371,6 +430,7 @@ interface Dispatched {
   readonly facts: StageFacts
   readonly canceled: boolean
   readonly failed: boolean
+  readonly failureCategory?: ExecutorFailureCategory
   /**
    * The provider result, kept only for the caller's own readers.
    *
@@ -435,6 +495,7 @@ export class WorkflowRunner {
   #certified: CertificationStatusSummary | undefined
   readonly #options: WorkflowRuntimeOptions
   readonly #now: () => number
+  readonly #waitUntil: (eligibleAtMs: number, signal: AbortSignal) => Promise<void>
   #controller: AbortController | undefined
   #disposed = false
 
@@ -445,6 +506,7 @@ export class WorkflowRunner {
   constructor(workflowId: string, options: WorkflowRuntimeOptions) {
     this.#workflowId = workflowId
     this.#options = options
+    this.#waitUntil = options.waitUntil ?? waitUntil
     this.#now = options.now ?? (() => Date.now())
   }
 
@@ -509,11 +571,15 @@ export class WorkflowRunner {
 
   /** Walk the stage queue until something terminal happens. */
   async #drive(request: WorkflowRunRequest, signal: AbortSignal): Promise<WorkflowOutcome> {
+    if (request.workspaceState === undefined && this.#options.workspaceState !== undefined) {
+      request = { ...request, workspaceState: this.#options.workspaceState }
+    }
     const { objective } = request
     const { journal, profile } = this.#options
     const { maxRepairCycles, maxExecutorStarts } = profile.workflowPolicy
 
-    journal.start(objective)
+    const recoveryPolicy = freezeRecoveryBudgetPolicy(profile.workflowPolicy.recoveryPolicy)
+    await journal.startDurably(objective, recoveryPolicy)
     // A run that can read its own change set plans in two halves: what it does,
     // then what that turned out to be worth certifying. Everything else keeps
     // the fixed risk-driven plan, and an explicit caller plan still wins.
@@ -525,6 +591,13 @@ export class WorkflowRunner {
     let repairCycles = 0
     let executorStarts = 0
     const attempts = new Map<Role, number>()
+    const attemptOrdinals = new Map<string, number>()
+    const recoveryCounters = new Map<string, RecoveryAttemptCounters>()
+    const recoveryRoutes = new Map<string, StageRouteOverride>()
+    const workspaceCheckpoints = new Map<string, string>()
+    const workspaceCheckpointSnapshots = new Map<string, WorkspaceSnapshot>()
+    let recoveryTransitions = 0
+    let recoveryStartedAtMs: number | undefined
     // The repair session: one defect, what a debugger established about it, and
     // what the gate allowed. All three are cleared when a repair stage ends, so
     // the next cycle cannot inherit the last cycle's authority.
@@ -586,6 +659,8 @@ export class WorkflowRunner {
 
     while (queue.length > 0) {
       const stage = queue.shift() as StageSpec
+      const attemptOrdinal = (attemptOrdinals.get(stage.stageId) ?? 0) + 1
+      attemptOrdinals.set(stage.stageId, attemptOrdinal)
       if (executorStarts >= maxExecutorStarts) {
         return await this.#blocked(
           objective, stages, repairCycles, executorStarts, 'budget-exhausted',
@@ -865,14 +940,58 @@ export class WorkflowRunner {
         repairCycles = pendingRepairCycle
         pendingRepairCycle = undefined
       }
+      if (permissionModeFor(stage.role) === 'workspace-write') {
+        if (request.workspaceState === undefined) {
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'a writable stage cannot start without a readable workspace checkpoint source',
+            [{ kind: 'gate', locator: 'harness:workspace-checkpoint', summary: 'pre-write workspace state is unavailable' }],
+            stage.stageId,
+          )
+        }
+        try {
+          const attemptId = `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`
+          // The run baseline is captured immediately before its first writer;
+          // reuse that exact snapshot for the first attempt checkpoint.
+          const snapshot = attemptOrdinal === 1 && deliveryBaseline !== undefined
+            ? deliveryBaseline
+            : await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+          const checkpoint = createWorkspaceCheckpoint(snapshot, {
+            stageId: stage.stageId,
+            attemptId,
+            capturedAtMs: this.#now(),
+          })
+          if (snapshot.observable === false) {
+            return await this.#blocked(
+              objective, stages, repairCycles, executorStarts, 'external',
+              'a writable stage cannot start because a workspace mutation surface is unobservable',
+              [{ kind: 'gate', locator: 'harness:workspace-checkpoint', summary: 'workspace mutation surface is unobservable' }],
+              stage.stageId,
+            )
+          }
+          await journal.workspaceCheckpoint(checkpoint)
+          const attemptKey = `${stage.stageId}:${attemptOrdinal}`
+          workspaceCheckpoints.set(attemptKey, checkpoint.checkpointId)
+          workspaceCheckpointSnapshots.set(attemptKey, snapshot)
+        } catch (error) {
+          if (!(error instanceof WorkspaceStateError)) throw error
+          return await this.#blocked(
+            objective, stages, repairCycles, executorStarts, 'external',
+            'the pre-write workspace checkpoint could not be established',
+            [{ kind: 'gate', locator: 'harness:workspace-checkpoint', summary: 'workspace checkpoint read failed' }],
+            stage.stageId,
+          )
+        }
+      }
       executorStarts += 1
-      const reroutesBefore = availability.rerouteStarts
       let dispatched: Dispatched
       try {
         dispatched = await this.#dispatch(
-          stage, request, signal, repairCycles, lastMutator, availability,
-          maxExecutorStarts - executorStarts, humanOverride, measurement, authorization,
+          stage, `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`, request, signal, repairCycles, lastMutator, availability,
+          humanOverride, measurement, authorization,
+          recoveryRoutes.get(stage.stageId),
         )
+        recoveryRoutes.delete(stage.stageId)
       } catch (error) {
         // A policy that cannot answer for this stage — a degraded executor no
         // fallback row covers, a tier the registry does not know — is a refusal,
@@ -880,15 +999,11 @@ export class WorkflowRunner {
         // terminal event at all, and a restart would then read a deterministic
         // refusal as an interrupted run whose effect on the world is unknown.
         if (!(error instanceof RoutingError)) throw error
-        // Account the reroutes before reporting: they were spent whether or not
-        // the last one found anywhere to go.
-        executorStarts += availability.rerouteStarts - reroutesBefore
         return await this.#blocked(
           objective, stages, repairCycles, executorStarts, 'external',
           `${stage.role} could not be routed: ${error.message}`,
         )
       }
-      executorStarts += availability.rerouteStarts - reroutesBefore
       stages.push(dispatched.facts)
       if (dispatched.refusal !== undefined) {
         return await this.#blocked(
@@ -937,9 +1052,278 @@ export class WorkflowRunner {
           )
         }
       }
-      if (dispatched.failed) {
+      const recoveryTriage = triage(dispatched.facts.findings)
+      const constraintIsOperational = dispatched.facts.constraints.length > 0
+        && recoveryTriage.blocking.length === 0
+        && !recoveryTriage.material
+        && recoveryTriage.repairable.length === 0
+        && recoveryTriage.uncertain.length === 0
+      if (dispatched.failed || constraintIsOperational) {
+        if (!dispatched.failed && dispatched.facts.verdict !== 'INCONCLUSIVE') {
+          const summary = 'the stage returned an operational constraint; its assurance is inconclusive pending recovery'
+          await journal.verdict(stage.stageId, stage.role, 'INCONCLUSIVE', summary, [])
+          const constrained = { ...dispatched.facts, verdict: 'INCONCLUSIVE' as const, summary }
+          dispatched = { ...dispatched, facts: constrained }
+          stages[stages.length - 1] = constrained
+        }
+        recoveryStartedAtMs ??= this.#now()
+        const priorCounters = recoveryCounters.get(stage.stageId) ?? {
+          sameExecutorRetries: 0,
+          reroutes: 0,
+          reprovisions: 0,
+          reconciliations: 0,
+          transitions: 0,
+        }
+        const routed = dispatched.routed
+        if (routed === undefined) {
+          return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'INCONCLUSIVE',
+            'the failed attempt has no durable route context for recovery')
+        }
+        const permissionMode = routed.decision.permissionMode
+        const writable = permissionMode === 'workspace-write'
+        const budgets = profile.workflowPolicy.recoveryPolicy
+        const fallbackFacts = { ...routed.context, unavailable: dispatched.facts.executor } as Record<string, unknown>
+        const compatibleFallbacks = this.#options.policy.fallbackRules
+          .filter(rule => Object.entries(rule.when).every(([key, value]) => fallbackFacts[key] === value))
+          .map(rule => rule.use.executor)
+          .filter((name, index, names) => names.indexOf(name) === index)
+          .flatMap((name) => {
+            const provider = this.#options.executors.list().find(candidate => candidate.name === name)
+            return provider !== undefined && provider.name !== dispatched.facts.executor
+              && provider.capabilities.permissionModes.includes(permissionMode)
+              ? [provider.name]
+              : []
+          })
+        const checkpointId = workspaceCheckpoints.get(`${stage.stageId}:${attemptOrdinal}`)
+        const checkpointSnapshot = workspaceCheckpointSnapshots.get(`${stage.stageId}:${attemptOrdinal}`)
+        const attemptId = `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`
+        const quiescencePort = this.#options.writerQuiescence ?? this.#options.executors
+        const quiescenceDeadlineAt = this.#now() + budgets.quiescenceDeadlineMs
+        const quiescence = await ensureWriterQuiescenceBy(
+          quiescencePort,
+          attemptId,
+          objective.cwd,
+          quiescenceDeadlineAt,
+          this.#now(),
+        )
+        const writerProof = quiescence.status === 'QUIESCENT' ? quiescence.proof : undefined
+        const writerQuiescent = writerProof !== undefined && validWriterQuiescenceProof(writerProof, this.#now())
+        const validWriterProof = writerQuiescent ? writerProof : undefined
+        const writerQuiescenceReasonCode = writerQuiescent
+          ? undefined
+          : quiescence.status === 'UNPROVEN' ? quiescence.reasonCode : 'CONTAINMENT_UNAVAILABLE'
+        let reconciliation: ReturnType<typeof createWorkspaceReconciliationRecord> | undefined
+        if (writable && checkpointId !== undefined && checkpointSnapshot !== undefined
+          && request.workspaceState !== undefined) {
+          let observation: ReturnType<typeof reconcileWorkspaceMutation>
+          if (!writerQuiescent) {
+            // A stable-looking snapshot is not evidence while a timed-out writer
+            // could still change the tree. Do not dispatch even a certifying read.
+            observation = {
+              status: 'SNAPSHOT_UNREADABLE',
+              conclusive: false,
+              changedPaths: Object.freeze([]),
+              reasonCode: 'WRITER_QUIESCENCE_UNPROVEN',
+            }
+          } else {
+            try {
+              const after = await readWorkspaceSnapshot(request.workspaceState, objective, signal)
+              observation = reconcileWorkspaceMutation(checkpointSnapshot, after, {
+                allowedPaths: plannedPaths ?? [],
+                writerQuiescent,
+                observable: checkpointSnapshot.observable === true && after.observable === true,
+              })
+            } catch {
+              observation = {
+                status: 'SNAPSHOT_UNREADABLE',
+                conclusive: false,
+                changedPaths: Object.freeze([]),
+                reasonCode: 'WORKSPACE_SNAPSHOT_UNREADABLE',
+              }
+            }
+          }
+          reconciliation = createWorkspaceReconciliationRecord(observation, {
+            checkpointId,
+            stageId: stage.stageId,
+            attemptId,
+            recordedAtMs: this.#now(),
+            writerQuiescent,
+            ...(writerQuiescenceReasonCode === undefined ? {} : { writerQuiescenceReasonCode }),
+            ...(validWriterProof === undefined ? {} : { writerProof: validWriterProof }),
+          })
+          await journal.workspaceReconciliation(reconciliation)
+        }
+        const recoveredMutation = stage.role === 'implement' && reconciliation !== undefined
+          && writerQuiescent && reconciliation.conclusive && reconciliation.status === 'IN_SCOPE_MUTATION'
+          && reconciliation.changedPaths.length > 0 && checkpointId !== undefined
+        const verificationStageId = recoveredMutation
+          ? `verify-recovered-${stage.stageId}-${String(attemptOrdinal)}`
+          : undefined
+        const independentVerifierNames = this.#options.executors.list()
+          .filter(candidate => candidate.capabilities.permissionModes.includes('read-only')
+            && (routed.context.independenceRequirement !== 'cross-executor-required'
+              || candidate.name !== dispatched.facts.executor))
+          .map(candidate => candidate.name)
+        const verificationRules = [
+          ...this.#options.policy.rules.filter(rule => rule.when.role === 'verify'),
+          ...this.#options.policy.fallbackRules.filter(rule => rule.when.role === 'verify'
+            && rule.when.unavailable === dispatched.facts.executor),
+        ]
+        const verificationRule = recoveredMutation
+          ? verificationRules.find(rule => typeof rule.use.executor === 'string'
+            && independentVerifierNames.includes(rule.use.executor))
+          : undefined
+        const verificationExecutor = typeof verificationRule?.use.executor === 'string'
+          ? verificationRule.use.executor : undefined
+        const verificationTier = typeof verificationRule?.use.tier === 'string'
+          ? verificationRule.use.tier : undefined
+        const recoveryReconciliationId = reconciliation?.reconciliationId
+        const canVerifyRecoveredMutation = recoveredMutation && verificationStageId !== undefined
+          && verificationExecutor !== undefined && verificationTier !== undefined
+          && recoveryReconciliationId !== undefined
+        const decision = decideRecovery({
+          stageId: stage.stageId,
+          role: stage.role,
+          risk: routed.context.risk,
+          permissionMode,
+          attempt: attemptOrdinal,
+          priorRecoveryAttempts: { ...priorCounters, transitions: recoveryTransitions },
+          priorRouteFailures: priorCounters.reroutes,
+          executor: dispatched.facts.executor,
+          constraints: dispatched.facts.constraints.map(constraint => constraint.class),
+          failure: canVerifyRecoveredMutation
+            ? {
+              kind: 'recovered-mutation',
+              sourceAttemptId: `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`,
+              checkpointId,
+              reconciliationId: recoveryReconciliationId,
+              evidenceAnchorId: recoveryReconciliationId,
+              verificationStageId,
+              verificationExecutor,
+              verificationRole: 'verify',
+              verificationPermissionMode: 'read-only',
+              writerQuiescent: true,
+              attributionProven: true,
+              scopeProven: true,
+            }
+            : dispatched.failureCategory !== undefined
+              ? { kind: 'executor', category: dispatched.failureCategory }
+              : dispatched.facts.constraints[0] !== undefined
+                ? {
+                  kind: 'constraint',
+                  constraintClass: dispatched.facts.constraints[0].class,
+                  toolDeclared: false,
+                  ...(dispatched.facts.constraints[0].class === 'EXTERNAL_RUNTIME_UNREADABLE'
+                    ? { affectedBoundary: 'workspace' as const }
+                    : {}),
+                }
+                : { kind: 'unknown' },
+          workspace: {
+            state: canVerifyRecoveredMutation ? 'reconciled' : writable ? 'ambiguous' : 'known-clean',
+            writerQuiescent: canVerifyRecoveredMutation ? true : !writable,
+            reconstructible: false,
+            attributionProven: canVerifyRecoveredMutation || !writable,
+            scopeProven: canVerifyRecoveredMutation || !writable,
+            ...(checkpointId === undefined ? {} : { checkpointId }),
+          },
+          externalSideEffect: { state: 'none' },
+          independenceRequirement: routed.context.independenceRequirement,
+          compatibleExecutors: canVerifyRecoveredMutation ? independentVerifierNames : compatibleFallbacks,
+          budgets,
+          nowMs: this.#now(),
+          recoveryStartedAtMs,
+          ...(verificationStageId === undefined ? {} : { verificationStageId }),
+        })
+        const nextCounters: RecoveryAttemptCounters = {
+          sameExecutorRetries: priorCounters.sameExecutorRetries + (decision.disposition === 'RETRY_SAME_EXECUTOR' ? 1 : 0),
+          reroutes: priorCounters.reroutes + (decision.disposition === 'REROUTE_EXECUTOR' ? 1 : 0),
+          reprovisions: priorCounters.reprovisions + (decision.disposition === 'REPROVISION_WORKSPACE' ? 1 : 0),
+          reconciliations: priorCounters.reconciliations + (decision.disposition === 'RECONCILE_WORKSPACE'
+            || decision.disposition === 'RECONCILE_WORLD_STATE'
+            || decision.disposition === 'VERIFY_RECOVERED_MUTATION' ? 1 : 0),
+          transitions: Math.min(budgets.maxRecoveryTransitionsPerWorkflow, recoveryTransitions + 1),
+        }
+        recoveryTransitions = nextCounters.transitions
+        recoveryCounters.set(stage.stageId, nextCounters)
+        const recoveryDeadlineAtMs = recoveryStartedAtMs + budgets.recoveryDeadlineMs
+        const recordedAtMs = this.#now()
+        await journal.recoveryDecision({
+          stageId: stage.stageId,
+          attemptId: `${this.#workflowId}:${stage.stageId}:${attemptOrdinal}`,
+          decision,
+          recordedAtMs,
+          recoveryDeadlineAtMs,
+          counters: nextCounters,
+        })
+        if (decision.disposition === 'RETRY_SAME_EXECUTOR' || decision.disposition === 'REROUTE_EXECUTOR') {
+          const fallbackRule = decision.disposition === 'REROUTE_EXECUTOR'
+            ? this.#options.policy.fallbackRules.find(rule => rule.use.executor === decision.executor
+              && Object.entries(rule.when).every(([key, value]) => fallbackFacts[key] === value))
+            : undefined
+          const fallbackTier = typeof fallbackRule?.use.tier === 'string' ? fallbackRule.use.tier : undefined
+          const fallbackEffort = typeof fallbackRule?.use.effort === 'string' ? fallbackRule.use.effort : undefined
+          recoveryRoutes.set(stage.stageId, {
+            role: stage.role,
+            executor: decision.executor,
+            semanticModelTier: fallbackTier ?? routed.decision.semanticModelTier,
+            ...(fallbackEffort ?? routed.decision.reasoningEffort) === undefined
+              ? {}
+              : { reasoningEffort: fallbackEffort ?? routed.decision.reasoningEffort },
+          })
+          if (decision.disposition === 'RETRY_SAME_EXECUTOR') {
+            await this.#waitUntil(decision.retryAtMs, signal)
+            if (signal.aborted) {
+              return await this.#end(objective, stages, repairCycles, executorStarts, 'canceled', 'INCONCLUSIVE',
+                'the run was canceled during its recorded recovery backoff')
+            }
+          }
+          queue.unshift(stage)
+          continue
+        }
+        if (decision.disposition === 'TERMINAL_FAIL') {
+          return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'FAIL', decision.reasonCode)
+        }
+        if (decision.disposition === 'TERMINAL_BLOCKED') {
+          return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', decision.reasonCode)
+        }
+        if (decision.disposition === 'PAUSE_FOR_HUMAN') {
+          return await this.#blocked(objective, stages, repairCycles, executorStarts, 'external', decision.reasonCode)
+        }
+        if (decision.disposition === 'VERIFY_RECOVERED_MUTATION'
+          && verificationStageId !== undefined && verificationExecutor !== undefined && verificationTier !== undefined) {
+          const verifierRoute: StageRouteOverride = {
+            role: 'verify',
+            executor: verificationExecutor,
+            semanticModelTier: verificationTier,
+          }
+          recoveryRoutes.set(verificationStageId, verifierRoute)
+          const existingVerifyIndex = queue.findIndex(queued => queued.role === 'verify')
+          if (existingVerifyIndex >= 0) {
+            queue[existingVerifyIndex] = { stageId: verificationStageId, role: 'verify' }
+          } else {
+            queue.unshift({ stageId: verificationStageId, role: 'verify' })
+          }
+          continue
+        }
+        if (
+          decision.disposition === 'REPROVISION_WORKSPACE'
+          || decision.disposition === 'RECONCILE_WORKSPACE'
+          || decision.disposition === 'RECONCILE_WORLD_STATE'
+          || decision.disposition === 'VERIFY_RECOVERED_MUTATION'
+        ) {
+          return await this.#blocked(
+            objective,
+            stages,
+            repairCycles,
+            executorStarts,
+            'external',
+            `${decision.disposition}: ${decision.reasonCode}; required recovery evidence or capability is not composed`,
+            [{ kind: 'gate', locator: `harness:recovery:${decision.disposition.toLowerCase()}`, summary: 'recovery action is not composed' }],
+            stage.stageId,
+          )
+        }
         return await this.#end(objective, stages, repairCycles, executorStarts, 'failed', 'INCONCLUSIVE',
-          dispatched.facts.summary)
+          `${decision.disposition}: ${decision.reasonCode}`)
       }
 
       if (stage.role === 'conformance') {
@@ -959,7 +1343,7 @@ export class WorkflowRunner {
       // concluded; it may not report a PASS over a confirmed material defect, and
       // it may not carry on while a decision nobody made is outstanding.
       const triaged = triage(dispatched.facts.findings)
-      const reconciled = reconcileVerdict(dispatched.facts.verdict, triaged, dispatched.facts.constraints, dispatched.facts.summary)
+      const reconciled = reconcileVerdict(dispatched.facts.verdict, triaged, dispatched.facts.summary)
       if (reconciled.corrected) {
         await journal.verdict(stage.stageId, stage.role, reconciled.verdict, reconciled.summary, [])
       }
@@ -1291,50 +1675,27 @@ export class WorkflowRunner {
   /** Route, start, and reduce one stage to facts. */
   async #dispatch(
     stage: StageSpec,
+    attemptId: string,
     request: WorkflowRunRequest,
     signal: AbortSignal,
     priorAttempts: number,
     lastMutator: string | undefined,
     availability: AvailabilityState,
-    extraStarts: number,
     humanOverride: OverrideBox,
     measurement: ImpactBox,
     repairAuthorization: RepairAuthorization | undefined,
+    recoveryOverride: StageRouteOverride | undefined,
   ): Promise<Dispatched> {
-    let spent = 0
-    let lastProviderFailure: Dispatched | undefined
-    for (;;) {
-      let attempt: { readonly dispatched: Dispatched; readonly reroutable: boolean }
-      try {
-        attempt = await this.#attempt(
-          stage, request, signal, priorAttempts, lastMutator, availability,
-          humanOverride, measurement, repairAuthorization,
-        )
-      } catch (error) {
-        // A provider failure remains the established fact if routing cannot
-        // resolve a fallback. The fallback refusal did not establish an
-        // artifact defect, so preserve the provider's INCONCLUSIVE result.
-        if (error instanceof RoutingError && lastProviderFailure !== undefined) return lastProviderFailure
-        throw error
-      }
-      // Only an executor that could not serve the run is retried, and only
-      // while the budget the profile set still has room. A wrong answer is not
-      // retried at all: asking a second product the same question and taking
-      // its answer would report a second opinion as a recovery.
-      // Counted here rather than before the call: a reroute that never found
-      // anywhere to go throws out of `#attempt` without starting anything, and
-      // charging the budget for a start nobody made would be a lie in the
-      // direction that ends runs early.
-      if (spent > 0) availability.rerouteStarts += 1
-      if (!attempt.reroutable || spent >= extraStarts) return attempt.dispatched
-      lastProviderFailure = attempt.dispatched
-      spent += 1
-    }
+    return await this.#attempt(
+      stage, attemptId, request, signal, priorAttempts, lastMutator, availability,
+      humanOverride, measurement, repairAuthorization, recoveryOverride,
+    )
   }
 
-  /** One routed start, and whether its failure permits another. */
+  /** One routed start, reduced to bounded stage facts. */
   async #attempt(
     stage: StageSpec,
+    attemptId: string,
     request: WorkflowRunRequest,
     signal: AbortSignal,
     priorAttempts: number,
@@ -1343,16 +1704,17 @@ export class WorkflowRunner {
     humanOverride: OverrideBox,
     measurement: ImpactBox,
     repairAuthorization: RepairAuthorization | undefined,
-  ): Promise<{ readonly dispatched: Dispatched; readonly reroutable: boolean }> {
+    recoveryOverride: StageRouteOverride | undefined,
+  ): Promise<Dispatched> {
     const { journal, executors, policy } = this.#options
     const context = this.#routingContext(
-      stage, request, priorAttempts, lastMutator, availability, humanOverride, measurement,
+      stage, request, priorAttempts, lastMutator, availability, humanOverride, measurement, recoveryOverride,
     )
     const decision = route(context, policy)
     // Spent only once a route actually resolved. An override the router refused
     // has changed nothing, and burning it there would leave the run with an
     // authority a person granted and nobody used.
-    if (context.userOverride !== undefined) humanOverride.spent = true
+    if (context.userOverride !== undefined && recoveryOverride === undefined) humanOverride.spent = true
     const dispatch = { stageId: stage.stageId, role: stage.role, decision }
 
     const provider = executors.get(decision.executor)
@@ -1380,15 +1742,12 @@ export class WorkflowRunner {
       journal.routeDecision(dispatch)
       await journal.verdict(stage.stageId, stage.role, 'BLOCKED', summary, [])
       return {
-        dispatched: {
-          facts: facts(stage, decision.executor, decision.permissionMode, 'BLOCKED', summary, [], [], 0),
-          canceled: false,
-          failed: false,
-          result: undefined,
-          refusal: summary,
-          routed: { context, decision },
-        },
-        reroutable: false,
+        facts: facts(stage, decision.executor, decision.permissionMode, 'BLOCKED', summary, [], [], 0),
+        canceled: false,
+        failed: false,
+        result: undefined,
+        refusal: summary,
+        routed: { context, decision },
       }
     }
 
@@ -1410,18 +1769,19 @@ export class WorkflowRunner {
       ? `${baseTask}\n\nHarness repair authorization: modify only repository-relative paths in this exact JSON array; do not modify other paths.\n${JSON.stringify(repairAuthorization.scope.allowedPaths)}`
       : baseTask
     const result = await executors.start({
+      attemptId,
+      workspaceId: request.objective.cwd,
       cwd: request.objective.cwd,
       task,
       route: executorRoute,
       signal,
+      deadlineAtMs: startedAt
+        + (this.#options.profile.workflowPolicy.recoveryPolicy.attemptDeadlineMsByRole[stage.role] ?? 0),
     })
     const durationMs = Math.max(0, this.#now() - startedAt)
-    const reroutable = this.#observe(availability, decision.executor, result)
+    this.#observe(availability, decision.executor, result)
 
-    return {
-      dispatched: await this.#reduce(stage, { context, decision }, result, durationMs, request),
-      reroutable,
-    }
+    return await this.#reduce(stage, { context, decision }, result, durationMs, request)
   }
 
   /**
@@ -1433,9 +1793,8 @@ export class WorkflowRunner {
    * @param availability - The run's live circuit and disabled-executor state.
    * @param executor - The executor that just ran.
    * @param result - What it returned.
-   * @returns Whether this stage may be started again on a different executor.
    */
-  #observe(availability: AvailabilityState, executor: string, result: ExecutorResult): boolean {
+  #observe(availability: AvailabilityState, executor: string, result: ExecutorResult): void {
     const { journal } = this.#options
     const now = this.#now()
     const circuit = availability.circuits.get(executor) ?? openCircuit(executor, now)
@@ -1450,10 +1809,10 @@ export class WorkflowRunner {
     if (result.status === 'completed') {
       // A run that served is the only evidence that clears a degraded circuit.
       record(recordSuccess(circuit, now))
-      return false
+      return
     }
     const category = result.status === 'error' ? result.failure?.category : undefined
-    if (category === undefined) return false
+    if (category === undefined) return
 
     // A category outside the vocabulary is a provider bug, and the run must not
     // be the place it is discovered: an unclassifiable failure is treated as
@@ -1464,7 +1823,7 @@ export class WorkflowRunner {
       available = isAvailabilityFailure(category)
       disabling = disablesExecutor(category)
     } catch {
-      return false
+      return
     }
 
     if (disabling) {
@@ -1473,12 +1832,11 @@ export class WorkflowRunner {
       // The executor leaves the pool, and this run still ends here: rerouting
       // now would hand the same task to another product and report its answer
       // as recovery from a credential problem.
-      return false
+      return
     }
-    if (!available) return false
+    if (!available) return
 
     record(recordFailure(circuit, category, now))
-    return true
   }
 
   /** The cause a fallback is recorded under, taken from what degraded it. */
@@ -1522,7 +1880,8 @@ export class WorkflowRunner {
         facts: facts(stage, executor, permissionMode, 'INCONCLUSIVE', summary, [], [], durationMs),
         canceled: false,
         failed: true,
-        result: undefined,
+        ...(failure === undefined ? {} : { failureCategory: failure.category }),
+        result,
         refusal: undefined,
         routed,
       }
@@ -1558,6 +1917,7 @@ export class WorkflowRunner {
     availability: AvailabilityState,
     humanOverride: OverrideBox,
     measurement: ImpactBox,
+    recoveryOverride?: StageRouteOverride,
   ): RoutingContext {
     const { objective } = request
     const { profile, degradedExecutors = [], executors, policy } = this.#options
@@ -1596,6 +1956,7 @@ export class WorkflowRunner {
         ...objective.taskClass === undefined ? {} : { taskClass: objective.taskClass },
       }
       : impactRoutingFacts(stage, objective, profile, impact)
+    const routeOverride = recoveryOverride ?? applies
     return {
       role: stage.role,
       workload: objective.workload,
@@ -1606,7 +1967,9 @@ export class WorkflowRunner {
       ...implementer === undefined || !READ_ONLY_ROLES.includes(stage.role)
         ? {}
         : { implementationExecutor: implementer },
-      ...applies === undefined ? {} : { userOverride: applies },
+      ...(routeOverride === undefined ? {} : recoveryOverride === undefined
+        ? { userOverride: routeOverride }
+        : { recoveryOverride: routeOverride }),
     }
   }
 
@@ -2004,4 +2367,20 @@ async function readWorkspaceSnapshot(
   // duplicate entries at this trust boundary without retaining file contents.
   changedPathsBetween(snapshot, snapshot)
   return snapshot
+}
+
+function validWriterQuiescenceProof(
+  proof: ExecutorWriterQuiescenceProof | {
+    readonly kind: 'write-authority-revoked'
+    readonly evidenceId: string
+    readonly observedAtMs: number
+  },
+  nowMs: number,
+): boolean {
+  if (proof.kind === 'owned-process-tree-exited') {
+    return Number.isSafeInteger(proof.processId) && proof.processId > 0
+      && Number.isSafeInteger(proof.observedAtMs) && proof.observedAtMs >= 0 && proof.observedAtMs <= nowMs
+  }
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(proof.evidenceId)
+    && Number.isSafeInteger(proof.observedAtMs) && proof.observedAtMs >= 0 && proof.observedAtMs <= nowMs
 }

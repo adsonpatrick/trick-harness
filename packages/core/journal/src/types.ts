@@ -18,6 +18,7 @@ import type {
   EvidenceRef,
   ExternalCertificationState,
   Finding,
+  RecoveryDecision,
   Risk,
   Role,
   RoutedPermissionMode,
@@ -41,11 +42,88 @@ export type CapabilityOutcome = 'completed' | 'aborted' | 'error'
 /** Why a workflow stopped short of a verdict. */
 export type BlockerKind = 'product-decision' | 'design-decision' | 'budget-exhausted' | 'unroutable' | 'external'
 
+/** Profile recovery limits plus the stable identity frozen at admission. */
+export interface RecoveryPolicyRecord {
+  readonly version: string
+  readonly attemptDeadlineMsByRole: Readonly<Record<string, number>>
+  readonly maxSameExecutorRetriesPerStage: number
+  readonly maxReroutesPerStage: number
+  readonly maxReprovisionsPerStage: number
+  readonly maxReconciliationsPerStage: number
+  readonly maxRecoveryTransitionsPerWorkflow: number
+  readonly recoveryDeadlineMs: number
+  readonly backoffInitialMs: number
+  readonly backoffMultiplier: number
+  readonly backoffMaxMs: number
+  readonly quiescenceDeadlineMs: number
+  readonly sha256: string
+}
+
+/** Recovery counters captured before the next transition is dispatched. */
+export interface RecoveryAttemptCounters {
+  readonly sameExecutorRetries: number
+  readonly reroutes: number
+  readonly reprovisions: number
+  readonly reconciliations: number
+  readonly transitions: number
+}
+
+/** One durable policy choice and the frozen workflow budget at that point. */
+export interface RecoveryDecisionRecord {
+  readonly stageId: string
+  readonly attemptId: string
+  readonly decision: RecoveryDecision
+  readonly recordedAtMs: number
+  readonly recoveryDeadlineAtMs: number
+  readonly counters: RecoveryAttemptCounters
+}
+
+/** Bounded, content-free workspace state captured before a writable attempt. */
+export interface WorkspaceCheckpointRecord {
+  readonly checkpointId: string
+  readonly stageId: string
+  readonly attemptId: string
+  readonly revision: string
+  readonly entries: readonly {
+    readonly path: string
+    readonly surface: 'index' | 'worktree' | 'untracked'
+    readonly fingerprint: string
+  }[]
+  readonly sha256: string
+  readonly capturedAtMs: number
+  readonly observable: boolean
+}
+
+/** Read-only result for attributing an interrupted writable attempt. */
+export interface WorkspaceReconciliationRecord {
+  readonly reconciliationId: string
+  readonly checkpointId: string
+  readonly stageId: string
+  readonly attemptId: string
+  readonly status: 'NO_MUTATION' | 'IN_SCOPE_MUTATION' | 'OUT_OF_SCOPE_MUTATION'
+    | 'PREEXISTING_USER_STATE_TOUCHED' | 'REVISION_MOVED' | 'SNAPSHOT_UNREADABLE'
+    | 'UNOBSERVABLE_MUTATION_SURFACE'
+  readonly changedPaths: readonly string[]
+  readonly writerQuiescent: boolean
+  readonly writerQuiescenceReasonCode?:
+    | 'ATTEMPT_UNKNOWN'
+    | 'WRITER_STILL_ACTIVE'
+    | 'CONTAINMENT_UNAVAILABLE'
+    | 'QUIESCENCE_DEADLINE_EXCEEDED'
+  readonly writerProof?:
+    | { readonly kind: 'owned-process-tree-exited'; readonly processId: number; readonly observedAtMs: number }
+    | { readonly kind: 'write-authority-revoked'; readonly evidenceId: string; readonly observedAtMs: number }
+  readonly conclusive: boolean
+  readonly recordedAtMs: number
+}
+
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /** One workflow accepted, with the objective it was accepted for. */
     'harness/workflow-start': {
       workflowId: string
+      /** Durable identity of the host session that admitted this workflow. */
+      hostRunId?: string
       objectiveId: string
       profileId: string
       cwd: string
@@ -60,7 +138,15 @@ declare module '@deepseek-ai/dsh-session/types' {
       planPath: string
       /** SHA-256 of that plan. */
       planSha256: string
+      /** Full finite policy and hash selected before workflow dispatch. */
+      recoveryPolicy?: RecoveryPolicyRecord
     }
+    /** One deterministic recovery choice, flushed before its action may run. */
+    'harness/recovery-decision': { workflowId: string } & RecoveryDecisionRecord
+    /** A durable pre-write snapshot identity and path fingerprints. */
+    'harness/workspace-checkpoint': { workflowId: string } & WorkspaceCheckpointRecord
+    /** A read-only reconciliation observation tied to one durable checkpoint. */
+    'harness/workspace-reconciliation': { workflowId: string } & WorkspaceReconciliationRecord
     /**
      * One conformance reading, reduced to hashes, counts and a verdict.
      *

@@ -128,6 +128,36 @@ export const STAGE_CONSTRAINT_CLASSES = [
 /** One closed class of non-artifact stage constraint. */
 export type StageConstraintClass = typeof STAGE_CONSTRAINT_CLASSES[number]
 
+/** Deterministic control-plane actions selected after a bounded failure fact. */
+export const RECOVERY_DISPOSITIONS = [
+  'RETRY_SAME_EXECUTOR',
+  'REROUTE_EXECUTOR',
+  'REPROVISION_WORKSPACE',
+  'RECONCILE_WORKSPACE',
+  'RECONCILE_WORLD_STATE',
+  'VERIFY_RECOVERED_MUTATION',
+  'PAUSE_FOR_HUMAN',
+  'TERMINAL_BLOCKED',
+  'TERMINAL_INCONCLUSIVE',
+  'TERMINAL_FAIL',
+] as const
+
+/** One deterministic workflow recovery action. */
+export type RecoveryDisposition = typeof RECOVERY_DISPOSITIONS[number]
+
+/** One policy decision, with only the bounded fields its action requires. */
+export type RecoveryDecision =
+  | { readonly disposition: 'RETRY_SAME_EXECUTOR'; readonly reasonCode: string; readonly executor: string; readonly attempt: number; readonly retryAtMs: number }
+  | { readonly disposition: 'REROUTE_EXECUTOR'; readonly reasonCode: string; readonly executor: string }
+  | { readonly disposition: 'REPROVISION_WORKSPACE'; readonly reasonCode: string }
+  | { readonly disposition: 'RECONCILE_WORKSPACE'; readonly reasonCode: string; readonly attemptId: string; readonly checkpointId: string }
+  | { readonly disposition: 'RECONCILE_WORLD_STATE'; readonly reasonCode: string; readonly operationId: string }
+  | { readonly disposition: 'VERIFY_RECOVERED_MUTATION'; readonly reasonCode: string; readonly sourceAttemptId: string; readonly checkpointId: string; readonly reconciliationId: string; readonly evidenceAnchorId: string; readonly verificationStageId: string }
+  | { readonly disposition: 'PAUSE_FOR_HUMAN'; readonly reasonCode: string }
+  | { readonly disposition: 'TERMINAL_BLOCKED'; readonly reasonCode: string }
+  | { readonly disposition: 'TERMINAL_INCONCLUSIVE'; readonly reasonCode: string }
+  | { readonly disposition: 'TERMINAL_FAIL'; readonly reasonCode: string }
+
 /** Stable provider-neutral executor failure categories. */
 export const EXECUTOR_FAILURE_CATEGORIES = [
   'usage-limit-exceeded',
@@ -308,6 +338,8 @@ export interface RoutingContext {
   readonly requiredCapabilities: readonly string[]
   /** An explicit human override for this one run. */
   readonly userOverride?: RouteOverride
+  /** A recorded recovery decision's bounded route, applied for one retry only. */
+  readonly recoveryOverride?: RouteOverride
 }
 
 /**
