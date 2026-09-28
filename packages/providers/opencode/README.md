@@ -28,7 +28,7 @@ The adapter requires an explicit `startupTimeoutMs`: positive integer millisecon
 
 ## Safe failure taxonomy
 
-Provider failures use canonical executor categories, stable `opencode.*` codes and a bounded `failurePhase` (`STARTUP`, `SESSION_CREATE`, `PROMPT`, `SESSION_ABORT` or `CLEANUP`). The adapter classifies allowlisted HTTP status and Node transport codes without persisting response bodies or arbitrary error fields. Unknown errors remain `other`, which routing does not automatically retry or reroute. The pinned SDK compatibility tests assert one HTTP request per prompt, signal propagation, status capture and malformed-response behavior.
+Provider failures use canonical executor categories, stable `opencode.*` codes and a bounded `failurePhase` (`STARTUP`, `SESSION_CREATE`, `PROMPT`, `SESSION_ABORT` or `CLEANUP`). The adapter classifies allowlisted HTTP status, Node transport codes and prompt error discriminators without persisting response bodies or arbitrary error fields. Unrecognized errors remain `other`, which routing does not automatically retry or reroute. The pinned SDK compatibility tests assert one HTTP request per prompt, signal propagation, status capture and malformed-response behavior.
 
 ## Usage
 

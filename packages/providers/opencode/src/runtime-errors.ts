@@ -29,11 +29,11 @@ export class OpencodeServerStartError extends Error {
   }
 }
 
-/** A prompt failed without yielding an SDK result. */
+/** A prompt returned a provider error discriminator from the pinned SDK. */
 export class OpencodePromptFailureError extends Error {
   override readonly name = 'OpencodePromptFailureError'
 
-  constructor() {
+  constructor(readonly kind: 'unknown-error' | 'output-length' | 'unclassified') {
     super('OpenCode prompt failed before returning a valid result')
   }
 }

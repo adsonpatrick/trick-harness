@@ -185,11 +185,13 @@ export function classifySdkFailure(
     }
   }
   if (error instanceof OpencodePromptFailureError) {
+    const diagnostic = error.kind === 'unknown-error'
+      ? { code: 'opencode.prompt.provider-unknown', safeDiagnostic: 'OpenCode provider returned an unknown error' }
+      : error.kind === 'output-length'
+        ? { code: 'opencode.prompt.output-length', safeDiagnostic: 'OpenCode provider stopped at its output length limit' }
+        : { code: 'opencode.prompt.failed', safeDiagnostic: 'OpenCode prompt failed before returning a valid result' }
     return {
-      category: 'other',
-      code: 'opencode.prompt.failed',
-      safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
-      failurePhase: phase,
+      category: 'other', ...diagnostic, failurePhase: phase,
     }
   }
   if (error instanceof OpencodeSessionCreateFailureError) {
@@ -316,10 +318,11 @@ async function runOnce(
         text: request.task,
       })
     } catch (error) {
-      if (error instanceof OpencodeSessionAbortedError || error instanceof OpencodeMalformedResponseError) throw error
+      if (error instanceof OpencodeSessionAbortedError || error instanceof OpencodeMalformedResponseError
+        || error instanceof OpencodePromptFailureError) throw error
       if (error instanceof Error && error.name === 'MessageAbortedError') throw new OpencodeSessionAbortedError()
       if (error instanceof OpencodeHttpStatusError || error instanceof OpencodeTransportFailureError) throw error
-      throw new OpencodePromptFailureError()
+      throw new OpencodePromptFailureError('unclassified')
     }
     if (aborted()) return { status: 'aborted', output: '' }
     if (deadlineExpired()) throw new OpencodeAttemptDeadlineError()

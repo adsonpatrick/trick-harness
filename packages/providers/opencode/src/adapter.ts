@@ -92,7 +92,9 @@ function bindClient(url: string, directory: string, signal: AbortSignal): Openco
           && typeof providerError.data.statusCode === 'number') {
           throw new OpencodeHttpStatusError(providerError.data.statusCode)
         }
-        throw new OpencodePromptFailureError()
+        const kind = providerError.name === 'UnknownError' ? 'unknown-error'
+          : providerError.name === 'MessageOutputLengthError' ? 'output-length' : 'unclassified'
+        throw new OpencodePromptFailureError(kind)
       }
       return { parts: answered.data.parts as OpencodePromptResult['parts'] }
     },

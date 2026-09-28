@@ -116,6 +116,41 @@ describe('SDK response validation', () => {
     expect(JSON.stringify(result)).not.toContain('token=private')
   })
 
+  it.each([
+    ['UnknownError', 'opencode.prompt.provider-unknown', 'OpenCode provider returned an unknown error'],
+    ['MessageOutputLengthError', 'opencode.prompt.output-length', 'OpenCode provider stopped at its output length limit'],
+  ] as const)('preserves the allowlisted %s discriminator without its private message', async (name, code, safeDiagnostic) => {
+    vi.mocked(createOpencodeServer).mockResolvedValue({ url: 'http://127.0.0.1:49152', close: vi.fn() })
+    clientWith({ data: { id: 'ses_1' } }, {
+      data: { parts: [], error: { name, data: { message: 'provider secret=private' } } },
+    })
+    const result = await createOpencodeProvider(createSdkAdapter({ startupTimeoutMs: 1000 })).start({
+      cwd: '/work', task: 'task', route: { executor: 'opencode', permissionMode: 'read-only' },
+      signal: new AbortController().signal, deadlineAtMs: Date.now() + 60_000,
+    })
+
+    expect(result.failure).toMatchObject({ category: 'other', code, safeDiagnostic, failurePhase: 'PROMPT' })
+    expect(JSON.stringify(result)).not.toContain('private')
+  })
+
+  it('keeps an unrecognized provider discriminator generic and private', async () => {
+    vi.mocked(createOpencodeServer).mockResolvedValue({ url: 'http://127.0.0.1:49152', close: vi.fn() })
+    clientWith({ data: { id: 'ses_1' } }, {
+      data: { parts: [], error: { name: 'PrivateServiceCredentialError', data: { message: 'secret=private' } } },
+    })
+    const result = await createOpencodeProvider(createSdkAdapter({ startupTimeoutMs: 1000 })).start({
+      cwd: '/work', task: 'task', route: { executor: 'opencode', permissionMode: 'read-only' },
+      signal: new AbortController().signal, deadlineAtMs: Date.now() + 60_000,
+    })
+
+    expect(result.failure).toMatchObject({
+      category: 'other', code: 'opencode.prompt.failed',
+      safeDiagnostic: 'OpenCode prompt failed before returning a valid result', failurePhase: 'PROMPT',
+    })
+    expect(JSON.stringify(result)).not.toContain('PrivateServiceCredentialError')
+    expect(JSON.stringify(result)).not.toContain('private')
+  })
+
   it('translates only the exact SDK MessageAbortedError name without exposing its message', async () => {
     const aborted = Object.assign(new Error('private prompt detail'), { name: 'MessageAbortedError' })
     const client = clientWith({ data: { id: 'ses_1' } }, Promise.reject(aborted))
