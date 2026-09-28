@@ -169,7 +169,7 @@ describe('writing and replaying one workflow', () => {
     expect(flush).toHaveBeenCalledOnce()
   })
 
-  it('refuses a tampered execution-plan identity on replay', () => {
+  it('refuses a tampered execution-plan identity before writing it', () => {
     const plan = createExecutionPlanRecord({
       planKind: 'explicit',
       profileId: 'plurora',
@@ -177,9 +177,12 @@ describe('writing and replaying one workflow', () => {
       runtimeVersion: JOURNAL_RUNTIME_VERSION,
       stages: [{ stageId: 'verify-1', role: 'verify' }],
     })
-    journal.start(objective, undefined, { ...plan, runtimeVersion: 'tampered-runtime' })
 
-    expect(() => replay()).toThrow(JournalError)
+    expect(() => journal.start(objective, undefined, {
+      ...plan,
+      runtimeVersion: 'tampered-runtime',
+    })).toThrow(JournalError)
+    expect(session.events).toHaveLength(0)
   })
 
   it('reconstructs the frozen recovery policy and hash from workflow admission', () => {
