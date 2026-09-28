@@ -875,6 +875,66 @@ function credentialShaped(value: string): boolean {
   return CREDENTIAL_PATTERNS.some(pattern => pattern.test(value))
 }
 
+/** Build and validate the bounded immutable execution-plan identity. */
+export function createExecutionPlanRecord(
+  input: Omit<ExecutionPlanRecord, 'schemaVersion' | 'sha256'>,
+): ExecutionPlanRecord {
+  const stages = input.stages.map(stage => Object.freeze({ stageId: stage.stageId, role: stage.role }))
+  const canonical = {
+    schemaVersion: EXECUTION_PLAN_SCHEMA_VERSION,
+    planKind: input.planKind,
+    profileId: input.profileId,
+    routingPolicyVersion: input.routingPolicyVersion,
+    runtimeVersion: input.runtimeVersion,
+    stages,
+  }
+  const sha256 = createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex')
+  return copyExecutionPlan({ ...canonical, sha256 })
+}
+
+/** Rebuild one execution-plan record field by field and prove its content identity. */
+function copyExecutionPlan(value: ExecutionPlanRecord): ExecutionPlanRecord {
+  const kinds: readonly ExecutionPlanRecord['planKind'][] = ['default', 'measured-pull-request', 'explicit']
+  if (value.schemaVersion !== EXECUTION_PLAN_SCHEMA_VERSION
+    || !kinds.includes(value.planKind)
+    || typeof value.profileId !== 'string' || value.profileId.length < 1 || value.profileId.length > 128
+    || typeof value.routingPolicyVersion !== 'string' || value.routingPolicyVersion.length < 1
+    || value.routingPolicyVersion.length > 128
+    || typeof value.runtimeVersion !== 'string' || value.runtimeVersion.length < 1 || value.runtimeVersion.length > 128
+    || !Array.isArray(value.stages) || value.stages.length < 1 || value.stages.length > 256
+    || !/^[a-f0-9]{64}$/.test(value.sha256)) {
+    throw new JournalError('invalid-record', 'execution plan has invalid bounded metadata')
+  }
+
+  const stages = value.stages.map((stage) => {
+    if (!isJournalIdentifier(stage.stageId) || !(ROLES as readonly string[]).includes(stage.role)) {
+      throw new JournalError('invalid-record', 'execution plan contains an invalid stage identity')
+    }
+    return Object.freeze({ stageId: stage.stageId, role: stage.role })
+  })
+  const seen = new Set<string>()
+  for (const stage of stages) {
+    if (seen.has(stage.stageId)) {
+      throw new JournalError('invalid-record', 'execution plan contains duplicate stage ids')
+    }
+    seen.add(stage.stageId)
+  }
+
+  const canonical = {
+    schemaVersion: value.schemaVersion,
+    planKind: value.planKind,
+    profileId: value.profileId,
+    routingPolicyVersion: value.routingPolicyVersion,
+    runtimeVersion: value.runtimeVersion,
+    stages,
+  }
+  const sha256 = createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex')
+  if (sha256 !== value.sha256) {
+    throw new JournalError('invalid-record', 'execution plan content identity does not match its fields')
+  }
+  return Object.freeze({ ...canonical, stages: Object.freeze(stages), sha256 })
+}
+
 /** Rebuild only declared policy fields from a journal value. */
 function copyRecoveryPolicy(value: unknown): RecoveryPolicyRecord {
   const record = value as Record<string, unknown> | null
