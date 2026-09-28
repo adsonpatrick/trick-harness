@@ -71,6 +71,22 @@ export const OPENCODE_CAPABILITIES: ExecutorCapabilities = {
   permissionModes: ['read-only', 'workspace-write'],
 }
 
+const PROMPT_FAILURE_DIAGNOSTICS = {
+  'unknown-error': {
+    code: 'opencode.prompt.provider-unknown', safeDiagnostic: 'OpenCode provider returned an unknown error',
+  },
+  'output-length': {
+    code: 'opencode.prompt.output-length', safeDiagnostic: 'OpenCode provider stopped at its output length limit',
+  },
+  'rejected-unclassified': {
+    code: 'opencode.prompt.rejected-unclassified',
+    safeDiagnostic: 'OpenCode prompt call failed without a recognized error signal',
+  },
+  unclassified: {
+    code: 'opencode.prompt.failed', safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
+  },
+} satisfies Record<OpencodePromptFailureError['kind'], Pick<ExecutorFailure, 'code' | 'safeDiagnostic'>>
+
 /** Loopback host; the port is chosen by the OS so concurrent runs never collide. */
 const LOOPBACK = '127.0.0.1'
 const EPHEMERAL_PORT = 0
@@ -185,13 +201,8 @@ export function classifySdkFailure(
     }
   }
   if (error instanceof OpencodePromptFailureError) {
-    const diagnostic = error.kind === 'unknown-error'
-      ? { code: 'opencode.prompt.provider-unknown', safeDiagnostic: 'OpenCode provider returned an unknown error' }
-      : error.kind === 'output-length'
-        ? { code: 'opencode.prompt.output-length', safeDiagnostic: 'OpenCode provider stopped at its output length limit' }
-        : { code: 'opencode.prompt.failed', safeDiagnostic: 'OpenCode prompt failed before returning a valid result' }
     return {
-      category: 'other', ...diagnostic, failurePhase: phase,
+      category: 'other', ...PROMPT_FAILURE_DIAGNOSTICS[error.kind], failurePhase: phase,
     }
   }
   if (error instanceof OpencodeSessionCreateFailureError) {
@@ -322,7 +333,7 @@ async function runOnce(
         || error instanceof OpencodePromptFailureError) throw error
       if (error instanceof Error && error.name === 'MessageAbortedError') throw new OpencodeSessionAbortedError()
       if (error instanceof OpencodeHttpStatusError || error instanceof OpencodeTransportFailureError) throw error
-      throw new OpencodePromptFailureError('unclassified')
+      throw new OpencodePromptFailureError('rejected-unclassified')
     }
     if (aborted()) return { status: 'aborted', output: '' }
     if (deadlineExpired()) throw new OpencodeAttemptDeadlineError()

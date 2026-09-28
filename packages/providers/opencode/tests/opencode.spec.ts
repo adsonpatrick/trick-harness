@@ -201,8 +201,8 @@ describe('bounded provider failure classification', () => {
     const result = await createOpencodeProvider(adapter).start(request())
 
     expect(result.failure).toMatchObject({
-      category: 'other', code: 'opencode.prompt.failed', failurePhase: 'PROMPT',
-      safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
+      category: 'other', code: 'opencode.prompt.rejected-unclassified', failurePhase: 'PROMPT',
+      safeDiagnostic: 'OpenCode prompt call failed without a recognized error signal',
     })
     expect(JSON.stringify(result)).not.toContain('secret')
     expect(JSON.stringify(result)).not.toContain('private')
@@ -346,8 +346,8 @@ describe('results', () => {
       status: 'error',
       failure: {
         category: 'other',
-        code: 'opencode.prompt.failed',
-        safeDiagnostic: 'OpenCode prompt failed before returning a valid result',
+        code: 'opencode.prompt.rejected-unclassified',
+        safeDiagnostic: 'OpenCode prompt call failed without a recognized error signal',
       },
     })
     expect(JSON.stringify(result)).not.toContain('sk-secret')

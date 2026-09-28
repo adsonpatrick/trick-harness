@@ -151,6 +151,22 @@ describe('SDK response validation', () => {
     expect(JSON.stringify(result)).not.toContain('private')
   })
 
+  it('identifies an unclassified rejected prompt call without retaining exception details', async () => {
+    vi.mocked(createOpencodeServer).mockResolvedValue({ url: 'http://127.0.0.1:49152', close: vi.fn() })
+    clientWith({ data: { id: 'ses_1' } }, Promise.reject(new TypeError('credential=private transport detail')))
+    const result = await createOpencodeProvider(createSdkAdapter({ startupTimeoutMs: 1000 })).start({
+      cwd: '/work', task: 'task', route: { executor: 'opencode', permissionMode: 'read-only' },
+      signal: new AbortController().signal, deadlineAtMs: Date.now() + 60_000,
+    })
+
+    expect(result.failure).toMatchObject({
+      category: 'other', code: 'opencode.prompt.rejected-unclassified',
+      safeDiagnostic: 'OpenCode prompt call failed without a recognized error signal', failurePhase: 'PROMPT',
+    })
+    expect(JSON.stringify(result)).not.toContain('credential')
+    expect(JSON.stringify(result)).not.toContain('private')
+  })
+
   it('translates only the exact SDK MessageAbortedError name without exposing its message', async () => {
     const aborted = Object.assign(new Error('private prompt detail'), { name: 'MessageAbortedError' })
     const client = clientWith({ data: { id: 'ses_1' } }, Promise.reject(aborted))
