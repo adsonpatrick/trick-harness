@@ -28,7 +28,7 @@ import { createGitWorkspaceStateReader } from './workspace-state.ts'
 import type { ModelCatalogReader } from './model-registry.ts'
 import { assertModelsAvailable, buildModelRegistry } from './model-registry.ts'
 import { createProjectDatabaseVerifier } from './project-database.ts'
-import { openDurableSession } from './session-store.ts'
+import { defaultHarnessStateRoot, openDurableSession } from './session-store.ts'
 import { createPluroraWorkflowHandlers } from './workflow-handlers.ts'
 
 /**
@@ -91,6 +91,11 @@ export interface PluroraHostOptions {
    * onto the last host's history whether or not that was intended.
    */
   readonly sessionId?: string
+  /**
+   * Host-owned durable state root. Defaults to a stable path outside the
+   * checkout derived by {@link defaultHarnessStateRoot}.
+   */
+  readonly stateRoot?: string
   /** Subprocess termination grace; defaults to {@link DEFAULT_DISPOSE_GRACE_MS}. */
   readonly disposeGraceMs?: number
 }
@@ -128,6 +133,8 @@ export interface PluroraHost {
   readonly harness: ComposedHarness
   /** Where the control server actually bound, once it was listening. */
   readonly control: { readonly host: string; readonly port: number }
+  /** Host-owned durable state root backing the session. */
+  readonly stateRoot: string
   /** The durable session workflow facts are journalled into. */
   readonly session: Session
   /** Force a durable checkpoint on that session. */
@@ -233,6 +240,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
   try {
     const durable = await openDurableSession({
       projectRoot: options.projectRoot,
+      stateRoot: options.stateRoot ?? defaultHarnessStateRoot(options.projectRoot),
       sessionId: options.sessionId ?? `plurora-${randomUUID()}`,
     })
     unwind.push(async () => { await durable.dispose() })
@@ -338,6 +346,7 @@ export async function startPluroraHost(options: PluroraHostOptions): Promise<Plu
       workspaceState,
       harness,
       control,
+      stateRoot: durable.stateRoot,
       session: durable.session,
       flush: durable.flush,
       dispose,

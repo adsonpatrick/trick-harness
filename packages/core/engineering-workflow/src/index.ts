@@ -39,6 +39,7 @@ import type {
   HarnessExecutorRuntime,
   ReasoningEffort,
 } from '@trick-harness/executor'
+import { createExecutionPlanRecord, JOURNAL_RUNTIME_VERSION } from '@trick-harness/journal'
 import type { WorkflowJournal, WorkflowProjection } from '@trick-harness/journal'
 import type { BlockerKind, WorkflowEndState } from '@trick-harness/journal'
 import type { HarnessProfile } from '@trick-harness/profile'
@@ -579,14 +580,24 @@ export class WorkflowRunner {
     const { maxRepairCycles, maxExecutorStarts } = profile.workflowPolicy
 
     const recoveryPolicy = freezeRecoveryBudgetPolicy(profile.workflowPolicy.recoveryPolicy)
-    await journal.startDurably(objective, recoveryPolicy)
     // A run that can read its own change set plans in two halves: what it does,
     // then what that turned out to be worth certifying. Everything else keeps
     // the fixed risk-driven plan, and an explicit caller plan still wins.
     const measured = request.plan === undefined && request.changeImpact !== undefined
-    const queue = measured
+    const initialStages = measured
       ? [...planPullRequestImplementationStages()]
       : [...(request.plan ?? planStages)(objective)]
+    const executionPlan = createExecutionPlanRecord({
+      planKind: request.plan !== undefined ? 'explicit' : measured ? 'measured-pull-request' : 'default',
+      profileId: profile.id,
+      routingPolicyVersion: profile.policyVersion,
+      runtimeVersion: JOURNAL_RUNTIME_VERSION,
+      stages: initialStages.map(stage => ({ stageId: stage.stageId, role: stage.role })),
+    })
+    // Admission facts and the immutable initial plan are durable before the
+    // first stage can be routed or dispatched.
+    await journal.startDurably(objective, recoveryPolicy, executionPlan)
+    const queue = [...initialStages]
     const stages: StageFacts[] = []
     let repairCycles = 0
     let executorStarts = 0

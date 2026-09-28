@@ -169,16 +169,19 @@ function compose(
 
 describe('startPluroraHost', () => {
   let root: string
+  let stateRoot: string
   let controller: AbortController
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'plurora-host-'))
+    stateRoot = await mkdtemp(join(tmpdir(), 'plurora-host-state-'))
     controller = new AbortController()
   })
 
   afterEach(async () => {
     controller.abort()
     await rm(root, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
   })
 
   /** Write `document` as the deployment file and start the host on it. */
@@ -191,6 +194,7 @@ describe('startPluroraHost', () => {
     await writeFile(join(root, 'plurora-harness.json'), JSON.stringify(document), 'utf8')
     return await startPluroraHost({
       projectRoot: root,
+      stateRoot,
       controlToken,
       signal: controller.signal,
       catalogue,
@@ -215,7 +219,7 @@ describe('startPluroraHost', () => {
     await writeFile(join(root, 'plurora-harness.json'), JSON.stringify(deployment()), 'utf8')
     const seam = untouchedOpencode()
     await expect(startPluroraHost({
-      projectRoot: root, controlToken: 'control-token', signal: controller.signal,
+      projectRoot: root, stateRoot, controlToken: 'control-token', signal: controller.signal,
       catalogue: servingCatalogue(), opencode: seam.adapter,
       spawn: () => { throw new Error('fixture Git unavailable') },
     })).rejects.toThrow('git could not be started to read the checkout branch')
@@ -391,9 +395,11 @@ describe('startPluroraHost', () => {
     await host.dispose()
   })
 
-  it('journals into a session that survives the process', async () => {
+  it('journals into host-owned state outside the project checkout', async () => {
     const host = await start(deployment())
-    expect(await entries()).toContain('.plurora-harness')
+    expect(await entries()).not.toContain('.plurora-harness')
+    expect(await readdir(stateRoot)).toContain('sessions')
+    expect(host.stateRoot).toBe(stateRoot)
     expect(await host.flush()).toBe(true)
     await host.dispose()
   })

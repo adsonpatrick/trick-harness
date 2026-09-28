@@ -59,6 +59,27 @@ export interface RecoveryPolicyRecord {
   readonly sha256: string
 }
 
+/** Versioned immutable stage plan persisted before the first dispatch. */
+export interface ExecutionPlanRecord {
+  /** Schema of this record, independently evolvable from the journal envelope. */
+  readonly schemaVersion: number
+  /** How the runtime chose the initial ordered stage sequence. */
+  readonly planKind: 'default' | 'measured-pull-request' | 'explicit'
+  /** Profile whose workflow semantics were admitted. */
+  readonly profileId: string
+  /** Routing policy identity frozen for this workflow. */
+  readonly routingPolicyVersion: string
+  /** Compatibility marker for the workflow runtime that created the record. */
+  readonly runtimeVersion: string
+  /** Ordered initial continuation sequence. Dynamic measured stages are derived from planKind. */
+  readonly stages: readonly {
+    readonly stageId: string
+    readonly role: Role
+  }[]
+  /** SHA-256 over the canonical bounded fields above. */
+  readonly sha256: string
+}
+
 /** Recovery counters captured before the next transition is dispatched. */
 export interface RecoveryAttemptCounters {
   readonly sameExecutorRetries: number
@@ -124,6 +145,10 @@ declare module '@deepseek-ai/dsh-session/types' {
       workflowId: string
       /** Durable identity of the host session that admitted this workflow. */
       hostRunId?: string
+      /** Journal envelope schema. Absent only on pre-Task-5 legacy records. */
+      journalSchemaVersion?: number
+      /** Immutable execution-plan identity. Absent only on legacy records. */
+      executionPlan?: ExecutionPlanRecord
       objectiveId: string
       profileId: string
       cwd: string

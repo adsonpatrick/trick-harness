@@ -1,7 +1,5 @@
 /**
- * A journal that does not survive the process cannot answer the one question a
- * restart asks. These tests pin that the host's session is on disk, that its
- * checkpoint really is one, and that closing it waits for the last append.
+ * Durable host state must survive independently of the executor checkout.
  *
  * @module apps/plurora-harness-host/tests/session-store
  */
@@ -10,56 +8,79 @@ import { mkdtemp, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SESSION_DIRECTORY, openDurableSession } from '../src/session-store.ts'
+import {
+  SESSION_DIRECTORY,
+  defaultHarnessStateRoot,
+  openDurableSession,
+} from '../src/session-store.ts'
 
 describe('openDurableSession', () => {
-  let root: string
+  let projectRoot: string
+  let stateRoot: string
 
-  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'plurora-session-')) })
-  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'plurora-project-'))
+    stateRoot = await mkdtemp(join(tmpdir(), 'plurora-state-'))
+  })
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true })
+    await rm(stateRoot, { recursive: true, force: true })
+  })
 
-  /** Open a durable session under the temporary checkout. */
   async function open(sessionId = 'plurora-test'): ReturnType<typeof openDurableSession> {
-    return await openDurableSession({ projectRoot: root, sessionId })
+    return await openDurableSession({ projectRoot, stateRoot, sessionId })
   }
 
-  it('keeps the log under the checkout it is about', async () => {
+  it('keeps durable state outside the executor checkout', async () => {
     const durable = await open()
-    expect((await stat(join(root, SESSION_DIRECTORY))).isDirectory()).toBe(true)
+    expect((await stat(join(stateRoot, SESSION_DIRECTORY))).isDirectory()).toBe(true)
+    expect(await readdir(projectRoot)).not.toContain('.plurora-harness')
+    expect(durable.stateRoot).toBe(stateRoot)
     await durable.dispose()
   })
 
-  it('creates the log root at open, not at the first thing worth writing', async () => {
-    // A host that reported itself ready and then found the root unwritable
-    // would already have accepted work it could not journal.
+  it('creates the durable root at open, before work is accepted', async () => {
     const durable = await open()
-    expect(await readdir(root)).toContain('.plurora-harness')
+    expect(await readdir(stateRoot)).toContain(SESSION_DIRECTORY)
     await durable.dispose()
   })
 
-  it('names the session the caller asked for, so a log can be found again', async () => {
+  it('refuses a state root inside the project checkout', async () => {
+    await expect(openDurableSession({
+      projectRoot,
+      stateRoot: join(projectRoot, '.state'),
+      sessionId: 'unsafe',
+    })).rejects.toThrow('outside the project checkout')
+  })
+
+  it('derives a stable default outside the checkout', () => {
+    const one = defaultHarnessStateRoot(projectRoot)
+    const two = defaultHarnessStateRoot(projectRoot)
+    expect(one).toBe(two)
+    expect(one.startsWith(projectRoot)).toBe(false)
+  })
+
+  it('names the session the caller asked for', async () => {
     const durable = await open('plurora-named')
     expect(durable.session.id).toBe('plurora-named')
     await durable.dispose()
   })
 
-  it('checkpoints through the backend rather than reporting one it did not take', async () => {
+  it('checkpoints through the backend', async () => {
     const durable = await open()
     await expect(durable.flush()).resolves.toBe(true)
     await durable.dispose()
   })
 
-  it('is disposable more than once, since shutdown and cancellation race', async () => {
+  it('is disposable more than once', async () => {
     const durable = await open()
     await durable.dispose()
     await expect(durable.dispose()).resolves.toBeUndefined()
   })
 
-  it('records which checkout the session ran in, so two are never one log', async () => {
+  it('keeps the checkout only as session metadata', async () => {
     const durable = await open()
-    // The backend groups logs by the directory a session ran in; a session
-    // without one lands in a shared bucket with every other deployment's.
-    expect(durable.session.header.cwd).toBe(root)
+    expect(durable.session.header.cwd).toBe(projectRoot)
     await durable.dispose()
   })
 })
