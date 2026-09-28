@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { changedPathsBetween, reconcileWorkspaceMutation } from '../src/workspace-state.ts'
 import type { WorkspaceSnapshot } from '../src/types.ts'
 
-function snapshot(entries: readonly { path: string; fingerprint: string }[], revision = 'a'.repeat(40)): WorkspaceSnapshot {
+function snapshot(entries: WorkspaceSnapshot['entries'], revision = 'a'.repeat(40)): WorkspaceSnapshot {
   return { revision, entries }
 }
 

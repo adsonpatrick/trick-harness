@@ -19,7 +19,8 @@ function clientWith(createResponse: unknown, promptResponse: unknown): OpencodeC
       abort: vi.fn(async () => ({})),
     },
   } as never)
-  return createSdkAdapter({ startupTimeoutMs: 1000 }).connect('http://127.0.0.1:1234', '/work')
+  return createSdkAdapter({ startupTimeoutMs: 1000 })
+    .connect('http://127.0.0.1:1234', '/work', new AbortController().signal)
 }
 
 describe('SDK response validation', () => {
