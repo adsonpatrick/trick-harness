@@ -34,6 +34,7 @@ import type {
   BlockerKind,
   CapabilityOutcome,
   DeliveryAction,
+  ExecutionPlanRecord,
   ExecutorOutcome,
   WorkflowEndState,
   RecoveryDecisionRecord,
@@ -52,6 +53,15 @@ export * from './types.ts'
  * package's declaration merge fails to reconstruct a session that used it,
  * rather than quietly reading back a run with its findings missing.
  */
+/** Current journal envelope schema written by new workflows. */
+export const JOURNAL_SCHEMA_VERSION = 1
+
+/** Current immutable execution-plan record schema. */
+export const EXECUTION_PLAN_SCHEMA_VERSION = 1
+
+/** Compatibility identity of the journal-facing runtime contract. */
+export const JOURNAL_RUNTIME_VERSION = 'thv2-readiness-002-task5-v1'
+
 export const HARNESS_EVENT_TYPES = [
   'harness/workflow-start',
   'harness/workspace-checkpoint',
@@ -188,6 +198,10 @@ export interface WorkflowProjection {
   readonly workflowId: string
   /** Host session identity written when the workflow starts. */
   readonly hostRunId?: string
+  /** Absent only for pre-Task-5 legacy records. */
+  readonly journalSchemaVersion?: number
+  /** Immutable initial stage-plan identity, absent on legacy records. */
+  readonly executionPlan?: ExecutionPlanRecord
   /** Finite policy and hash this workflow was admitted under. */
   readonly recoveryPolicy?: RecoveryPolicyRecord
   /** Durable policy decisions in event order. */
@@ -320,10 +334,16 @@ export class WorkflowJournal {
    * Record that a workflow was accepted.
    * @param objective - The objective it was accepted for.
    */
-  start(objective: WorkflowObjective, recoveryPolicy?: RecoveryPolicyRecord): void {
+  start(
+    objective: WorkflowObjective,
+    recoveryPolicy?: RecoveryPolicyRecord,
+    executionPlan?: ExecutionPlanRecord,
+  ): void {
     this.#session.append('harness/workflow-start', {
       workflowId: this.#workflowId,
       hostRunId: String(this.#session.id),
+      journalSchemaVersion: JOURNAL_SCHEMA_VERSION,
+      ...executionPlan === undefined ? {} : { executionPlan: copyExecutionPlan(executionPlan) },
       objectiveId: objective.id,
       profileId: objective.profileId,
       cwd: objective.cwd,
@@ -339,8 +359,12 @@ export class WorkflowJournal {
   }
 
   /** Persist the accepted objective and its exact frozen policy before dispatch. */
-  async startDurably(objective: WorkflowObjective, recoveryPolicy: RecoveryPolicyRecord): Promise<void> {
-    this.start(objective, recoveryPolicy)
+  async startDurably(
+    objective: WorkflowObjective,
+    recoveryPolicy: RecoveryPolicyRecord,
+    executionPlan?: ExecutionPlanRecord,
+  ): Promise<void> {
+    this.start(objective, recoveryPolicy, executionPlan)
     await this.#durable()
   }
 
@@ -1074,6 +1098,8 @@ function harnessPayload(event: SessionEvent): HarnessPayload | undefined {
 /** Mutable accumulator behind {@link projectWorkflow}. */
 interface Projected {
   hostRunId?: string
+  journalSchemaVersion?: number
+  executionPlan?: ExecutionPlanRecord
   recoveryPolicy?: RecoveryPolicyRecord
   recoveryDecisions: RecoveryDecisionRecord[]
   workspaceCheckpoints: WorkspaceCheckpointRecord[]
@@ -1105,8 +1131,25 @@ interface Projected {
 function fold(state: Projected, type: HarnessEventType, data: HarnessPayload): void {
   switch (type) {
     case 'harness/workflow-start': {
-      const payload = data as unknown as { hostRunId?: string; objectiveId: string; profileId: string; cwd: string; requirement: string; risk: WorkflowObjective['risk']; workload: WorkflowObjective['workload']; specPath: string; specSha256: string; planPath: string; planSha256: string; recoveryPolicy?: RecoveryPolicyRecord }
+      const payload = data as unknown as {
+        hostRunId?: string
+        journalSchemaVersion?: number
+        executionPlan?: ExecutionPlanRecord
+        objectiveId: string
+        profileId: string
+        cwd: string
+        requirement: string
+        risk: WorkflowObjective['risk']
+        workload: WorkflowObjective['workload']
+        specPath: string
+        specSha256: string
+        planPath: string
+        planSha256: string
+        recoveryPolicy?: RecoveryPolicyRecord
+      }
       if (payload.hostRunId !== undefined) state.hostRunId = payload.hostRunId
+      if (payload.journalSchemaVersion !== undefined) state.journalSchemaVersion = payload.journalSchemaVersion
+      if (payload.executionPlan !== undefined) state.executionPlan = copyExecutionPlan(payload.executionPlan)
       if (payload.recoveryPolicy !== undefined) state.recoveryPolicy = copyRecoveryPolicy(payload.recoveryPolicy)
       state.objective = {
         id: payload.objectiveId,
@@ -1432,6 +1475,8 @@ export function projectWorkflow(
   return Object.freeze({
     workflowId,
     ...state.hostRunId === undefined ? {} : { hostRunId: state.hostRunId },
+    ...state.journalSchemaVersion === undefined ? {} : { journalSchemaVersion: state.journalSchemaVersion },
+    ...state.executionPlan === undefined ? {} : { executionPlan: state.executionPlan },
     ...state.recoveryPolicy === undefined ? {} : { recoveryPolicy: state.recoveryPolicy },
     recoveryDecisions: Object.freeze(state.recoveryDecisions),
     workspaceCheckpoints: Object.freeze(state.workspaceCheckpoints),
