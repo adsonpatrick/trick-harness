@@ -1,43 +1,41 @@
 /**
- * The durable session the host journals workflow facts into.
+ * Durable host-owned session state.
  *
- * A harness whose journal lives in memory is a harness that answers "what did
- * this run already do to the world?" with nothing the moment the process ends —
- * and that question is the whole basis of a restart assessment. So the host
- * does not offer an in-memory mode: every deployment gets an append-only log on
- * disk, written by the fork's own session-persistence backend rather than by
- * anything written here.
- *
- * What this module owns is small on purpose: a plugin fiber holding the session
- * store and the JSONL backend together, the session those two produce, and the
- * checkpoint call the journal is handed. Everything about the log's format,
- * durability and recovery belongs to the backend.
+ * The project checkout is an executor workspace and may be replaced, deleted or
+ * written by a mutation-capable stage. A journal used for restart decisions
+ * therefore cannot live under that checkout. This module owns the external
+ * state root and keeps the session's project cwd only as metadata.
  *
  * @module apps/plurora-harness-host/session-store
  */
 
+import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import type { JournalFlush } from '@trick-harness/journal'
 
+/** Session directories below the host-owned durable state root. */
+export const SESSION_DIRECTORY = 'sessions'
+
 /**
- * Where session logs live, relative to the project root.
+ * Historical checkout-local path used before THV2-READINESS-002 Task 5.
  *
- * Under the checkout rather than in a system-wide location: the log is about
- * this deployment's runs, and a host pointed at a second checkout must not
- * append its history onto the first one's.
+ * Workspace observation still ignores it so an old checkout can be upgraded
+ * without legacy operational files becoming product mutations.
  */
-export const SESSION_REPOSITORY_PATH = '.plurora-harness/sessions'
-export const SESSION_DIRECTORY = join('.plurora-harness', 'sessions')
+export const LEGACY_SESSION_REPOSITORY_PATH = '.plurora-harness/sessions'
 
 /** What the durable session needs from the deployment. */
 export interface DurableSessionOptions {
-  /** The checkout the log is kept under. */
+  /** The checkout whose workflow the log describes. */
   readonly projectRoot: string
+  /** Host-owned durable root. Must be outside the project checkout. */
+  readonly stateRoot: string
   /** The session's id, which is also its directory in the log root. */
   readonly sessionId: string
 }
@@ -46,58 +44,72 @@ export interface DurableSessionOptions {
 export interface DurableSession {
   /** The session workflow events are journalled into. */
   readonly session: Session
-  /**
-   * Force a durable checkpoint.
-   *
-   * Resolves `false` when the backend refused, which the journal treats exactly
-   * as it treats a rejection — a checkpoint that did not happen is the same
-   * fact either way.
-   */
+  /** The validated host-owned root backing this session. */
+  readonly stateRoot: string
+  /** Force a durable checkpoint. */
   readonly flush: JournalFlush
   /** Close the log and wait for the backend to go quiet. */
   dispose(): Promise<void>
 }
 
 /**
- * Open the deployment's durable session.
+ * Stable default root for one checkout.
  *
- * @param options - the checkout and the session id.
- * @returns the session, its checkpoint call, and its disposer.
+ * The hash separates multiple checkouts without storing the checkout path in a
+ * directory name. The root lives under the host user's home rather than below
+ * the executor workspace, so deleting the checkout does not delete its journal.
  */
+export function defaultHarnessStateRoot(projectRoot: string): string {
+  const canonical = resolve(projectRoot)
+  const identity = createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 24)
+  return join(homedir(), '.trick-harness', 'plurora', identity)
+}
+
+/** Refuse a state root the executor workspace can contain or overwrite. */
+function externalStateRoot(projectRoot: string, stateRoot: string): string {
+  if (!isAbsolute(projectRoot) || !isAbsolute(stateRoot)) {
+    throw new Error('projectRoot and stateRoot must both be absolute paths')
+  }
+  const project = resolve(projectRoot)
+  const state = resolve(stateRoot)
+  const fromProject = relative(project, state)
+  const nested = fromProject === ''
+    || (fromProject !== '..' && !fromProject.startsWith(`..${sep}`) && !isAbsolute(fromProject))
+  if (nested) {
+    throw new Error('the Harness state root must live outside the project checkout')
+  }
+  return state
+}
+
+/** Open the deployment's durable session. */
 export async function openDurableSession(options: DurableSessionOptions): Promise<DurableSession> {
-  const root = join(options.projectRoot, SESSION_DIRECTORY)
-  // Created here rather than left to the first append: a host that reported
-  // itself ready and then discovered at its first durable write that the log
-  // root was unwritable would have accepted work it could not journal.
+  const stateRoot = externalStateRoot(options.projectRoot, options.stateRoot)
+  const root = join(stateRoot, SESSION_DIRECTORY)
+  // Created before the host reports ready: accepting work without a writable
+  // journal would make every later restart assessment untrustworthy.
   await mkdir(root, { recursive: true })
+
   const ctx = new Context()
-  // Ordered rather than concurrent: the backend declares `inject = ['sessions']`,
-  // so the store has to be a service before the backend can attach its
-  // write-path listeners to it.
   try {
     await ctx.plugin(SessionStore)
     await ctx.plugin(JsonlSessionPersistence, { root })
   }
   catch (error: unknown) {
-    // The fiber already holds whatever attached before the failure. Leaving it
-    // stranded would keep a session store alive for the life of the process
-    // with nobody holding a handle that could ever close it.
     await ctx.fiber.dispose()
     throw error
   }
-  // `cwd` is the checkout because the backend groups logs by the directory a
-  // session ran in; a session without one lands in a shared bucket.
+
+  // cwd remains project metadata. It does not decide where persistence lives.
   const session = ctx.sessions.create(SessionId(options.sessionId), { meta: { cwd: options.projectRoot } })
 
   let disposed = false
   return {
     session,
+    stateRoot,
     flush: async () => await ctx.sessions.flush(session),
     async dispose() {
       if (disposed) return
       disposed = true
-      // Disposing the fiber drains the backend before closing it, so this
-      // resolving means the last append is on disk rather than in a queue.
       await ctx.fiber.dispose()
     },
   }
