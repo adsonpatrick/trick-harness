@@ -13,9 +13,13 @@ import type {
 } from '@trick-harness/contracts'
 import type { CertificationRecord } from '../src/index.ts'
 import {
+  EXECUTION_PLAN_SCHEMA_VERSION,
   HARNESS_EVENT_TYPES,
+  JOURNAL_SCHEMA_VERSION,
+  JOURNAL_RUNTIME_VERSION,
   JournalError,
   WorkflowJournal,
+  createExecutionPlanRecord,
   isHarnessEventType,
   projectWorkflow,
 } from '../src/index.ts'
@@ -125,6 +129,57 @@ describe('writing and replaying one workflow', () => {
     session = Session.create(SessionId('s-1'))
     flush = vi.fn(async () => Promise.resolve(true))
     journal = new WorkflowJournal(session, 'wf-1', flush)
+  })
+
+  it('persists a versioned immutable execution plan before dispatch', async () => {
+    const plan = createExecutionPlanRecord({
+      planKind: 'default',
+      profileId: 'plurora',
+      routingPolicyVersion: 'plurora-v2.0.0',
+      runtimeVersion: JOURNAL_RUNTIME_VERSION,
+      stages: [
+        { stageId: 'implement-1', role: 'implement' },
+        { stageId: 'verify-1', role: 'verify' },
+      ],
+    })
+
+    await journal.startDurably(objective, {
+      version: 'fixture-recovery-v1',
+      attemptDeadlineMsByRole: Object.fromEntries([
+        'refine', 'plan', 'implement', 'debug', 'repair', 'verify',
+        'review', 'security', 'qa', 'conformance', 'delivery',
+      ].map(role => [role, 1_000])),
+      maxSameExecutorRetriesPerStage: 1,
+      maxReroutesPerStage: 1,
+      maxReprovisionsPerStage: 1,
+      maxReconciliationsPerStage: 1,
+      maxRecoveryTransitionsPerWorkflow: 8,
+      recoveryDeadlineMs: 10_000,
+      backoffInitialMs: 100,
+      backoffMultiplier: 2,
+      backoffMaxMs: 500,
+      quiescenceDeadlineMs: 1_000,
+      sha256: 'a'.repeat(64),
+    }, plan)
+
+    const projection = replay()
+    expect(projection.journalSchemaVersion).toBe(JOURNAL_SCHEMA_VERSION)
+    expect(projection.executionPlan).toEqual(plan)
+    expect(projection.executionPlan?.schemaVersion).toBe(EXECUTION_PLAN_SCHEMA_VERSION)
+    expect(flush).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a tampered execution-plan identity on replay', () => {
+    const plan = createExecutionPlanRecord({
+      planKind: 'explicit',
+      profileId: 'plurora',
+      routingPolicyVersion: 'plurora-v2.0.0',
+      runtimeVersion: JOURNAL_RUNTIME_VERSION,
+      stages: [{ stageId: 'verify-1', role: 'verify' }],
+    })
+    journal.start(objective, undefined, { ...plan, runtimeVersion: 'tampered-runtime' })
+
+    expect(() => replay()).toThrow(JournalError)
   })
 
   it('reconstructs the frozen recovery policy and hash from workflow admission', () => {
